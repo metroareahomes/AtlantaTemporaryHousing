@@ -25,6 +25,7 @@
       <td>{% if r.current_guest %}{{ r.current_guest }}<div class="sub">out {{ r.current_out }}</div>{% endif %}</td>
       <td>{% if r.next_in %}{{ r.next_guest }}<div class="sub">{{ r.next_in }}</div>{% endif %}</td>
       <td><span class="code code-{{ r.code }}">{{ r.code_label }}</span>
+        {% if r.door_code %}<div class="sub">{{ r.door_code }}</div>{% endif %}
         {% if r.lock_read %}<div class="sub">checked {{ r.lock_read }}</div>{% endif %}</td>
       <td>{% for l in r.locks %}<div class="sub">{{ l.name }} · {{ l.state }}</div>{% else %}<span class="sub">none</span>{% endfor %}</td>
       <td>{% if r.locks %}<form method="post" action="lock-refresh" class="inline">

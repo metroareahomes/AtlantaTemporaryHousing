@@ -76,15 +76,27 @@ class HAClient:
             timeout=SCHLAGE_TIMEOUT,
         )
 
-    async def notify(self, title: str, message: str, *, service: str = "", notification_id: str = "") -> None:
-        """Persistent notification in HA, plus an optional notify service (e.g. notify.mobile_app_x)."""
+    async def notify(self, title: str, message: str, *, service: str = "", services: list[str] | None = None,
+                     notification_id: str = "") -> None:
+        """Persistent notification in HA, plus optional notify services (e.g. notify.mobile_app_x)."""
         payload = {"title": title, "message": message}
         if notification_id:
             payload["notification_id"] = notification_id
         await self._post("/api/services/persistent_notification/create", payload)
-        if service.startswith("notify."):
-            await self._post(f"/api/services/notify/{service.removeprefix('notify.')}",
-                             {"title": title, "message": message})
+        targets = list(services or [])
+        if service and service not in targets:
+            targets.append(service)
+        failed = []
+        for target in targets:  # one broken recipient must not stop the others from being told
+            if not target.startswith("notify."):
+                continue
+            try:
+                await self._post(f"/api/services/notify/{target.removeprefix('notify.')}",
+                                 {"title": title, "message": message})
+            except Exception as exc:
+                failed.append(f"{target}: {exc}")
+        if failed:
+            raise HAError("notify failed for " + "; ".join(failed))
 
     async def webhook_automation_exists(self) -> bool:
         resp = await self._http.get(f"/api/config/automation/config/{WEBHOOK_AUTOMATION_ID}")

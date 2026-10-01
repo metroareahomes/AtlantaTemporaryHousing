@@ -1,6 +1,7 @@
 """Dashboard served through HA Ingress. All links are relative so they work under the ingress path."""
 import json
 import secrets
+import sqlite3
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from .hostaway import HostawayError
 from .locks import DEFAULT_GUEST_MESSAGE, DEFAULTS, LockManager
 from .reservations import code_status, property_state, within
 from .sync import Syncer
@@ -88,6 +90,7 @@ def dashboard_rows(syncer: Syncer, query: str = "") -> list[dict[str, Any]]:
             "next_guest": state.next["guest_name"] if state.next else "",
             "next_in": _fmt(state.next["check_in_at"], tz) if state.next else "",
             "next_in_sort": state.next["check_in_at"] if state.next else "9999",
+            "door_code": (state.next or {}).get("door_code") or "",
             "code": code,
             "code_label": CODE_LABELS[code],
             "locks": locks,
@@ -115,6 +118,14 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None) 
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None)
     app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
     db = syncer.db
+
+    @app.exception_handler(HostawayError)
+    async def hostaway_failed(request: Request, exc: HostawayError):
+        """Show what is wrong (usually the credentials) instead of a 500 stack trace."""
+        db.log("hostaway.error", str(exc), level="error")
+        return templates.TemplateResponse(
+            request, "error.html",
+            {"message": str(exc), "last_sync": "", "last_webhook": ""}, status_code=502)
 
     def page(request: Request, name: str, **ctx: Any) -> HTMLResponse:
         return templates.TemplateResponse(request, name, {
@@ -158,6 +169,120 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None) 
                    "(SELECT id FROM properties WHERE lock_automation = 1)")
         db.log("properties.saved", "Property settings saved")
         return RedirectResponse("properties", status_code=303)
+
+    @app.get("/staff", response_class=HTMLResponse)
+    async def staff(request: Request):
+        return page(
+            request, "staff.html",
+            staff=db.query("SELECT * FROM staff ORDER BY name"),
+            recipients=db.query("SELECT * FROM alert_recipients ORDER BY name"),
+        )
+
+    @app.post("/staff-save")
+    async def staff_save(request: Request):
+        form = await request.form()
+
+        def check(name: str, code: str) -> None:
+            if name.startswith("HA-"):
+                raise HTTPException(400, "Staff names cannot start with HA- (reserved for guest/backup codes)")
+            if not code.isdigit() or len(code) != 4:
+                raise HTTPException(400, f"{name}: code must be exactly 4 digits")
+
+        # Validate everything first so a typo can never half-save (or silently drop someone's lock code).
+        updates, seen, active_codes = [], set(), set()
+        for row in db.query("SELECT id, name, code FROM staff"):
+            sid = row["id"]
+            name = str(form.get(f"name_{sid}", "")).strip()
+            code = str(form.get(f"code_{sid}", "")).strip()
+            if not name:  # cleared name = remove this person: deactivate so the locks drop the code
+                updates.append(("UPDATE staff SET active = 0 WHERE id = ?", (sid,)))
+                continue
+            check(name, code)
+            if name in seen:
+                raise HTTPException(400, f"{name} is in the list twice")
+            seen.add(name)
+            active = 1 if form.get(f"active_{sid}") else 0
+            if active:
+                if code in active_codes:  # Schlage refuses two identical codes; one would silently never be added
+                    raise HTTPException(400, f"Code {code} is used by more than one active person")
+                active_codes.add(code)
+            updates.append(("UPDATE staff SET name = ?, code = ?, active = ? WHERE id = ?",
+                            (name, code, active, sid)))
+            if name != row["name"]:
+                # Renamed: the old name is still on the locks. Keep it as an inactive row (added after the
+                # rename frees the name) so the locks remove it; it disappears from this page once no lock
+                # holds it any more.
+                updates.append(("INSERT OR IGNORE INTO staff(name, code, active) VALUES(?, ?, 0)",
+                                (row["name"], row["code"])))
+        new_name = str(form.get("name_new", "")).strip()
+        new_code = str(form.get("code_new", "")).strip()
+        if new_name or new_code:
+            if not new_name:
+                raise HTTPException(400, "New staff needs a name")
+            check(new_name, new_code)
+            if new_name in seen or db.one("SELECT 1 FROM staff WHERE name = ?", (new_name,)):
+                raise HTTPException(400, f"{new_name} is already in the list (tick Active on that row to bring "
+                                         "them back)")
+            new_active = 1 if form.get("active_new") else 0
+            if new_active and new_code in active_codes:
+                raise HTTPException(400, f"Code {new_code} is used by more than one active person")
+            updates.append(("INSERT INTO staff(name, code, active) VALUES(?, ?, ?)",
+                            (new_name, new_code, new_active)))
+        try:
+            for sql, args in updates:
+                db.execute(sql, args)
+        except sqlite3.IntegrityError:  # e.g. two people swapped names in one save
+            raise HTTPException(400, "Two people ended up with the same name; change one name at a time")
+        # Drop deactivated/blank rows that no longer appear in any lock snapshot
+        # (Parse the stored JSON rather than LIKE-matching it: accents are stored escaped and % _ are wildcards.)
+        on_locks: set[str] = set()
+        for lock in db.query("SELECT code_names FROM locks WHERE code_names IS NOT NULL"):
+            try:
+                on_locks.update(json.loads(lock["code_names"]))
+            except (TypeError, ValueError):
+                pass
+        for row in db.query("SELECT id, name FROM staff WHERE active = 0"):
+            if row["name"] not in on_locks:
+                db.execute("DELETE FROM staff WHERE id = ?", (row["id"],))
+        db.execute("UPDATE locks SET next_check_at = NULL WHERE property_id IN "
+                   "(SELECT id FROM properties WHERE lock_automation = 1)")
+        db.log("staff.saved", "Staff codes saved")
+        return RedirectResponse("staff", status_code=303)
+
+    @app.post("/recipients-save")
+    async def recipients_save(request: Request):
+        form = await request.form()
+
+        def check(name: str, target: str) -> None:
+            # Anything else would be skipped silently when alerting, so refuse it up front.
+            if not target.startswith("notify.") or len(target) <= len("notify."):
+                raise HTTPException(400, f"{name}: the target must be a Home Assistant notify service, "
+                                         "like notify.mobile_app_kurts_iphone")
+
+        # Validate everything first so a typo cannot half-save.
+        updates = []
+        for row in db.query("SELECT id FROM alert_recipients"):
+            rid = row["id"]
+            name = str(form.get(f"rname_{rid}", "")).strip()
+            target = str(form.get(f"rtarget_{rid}", "")).strip()
+            if not name or not target:
+                updates.append(("DELETE FROM alert_recipients WHERE id = ?", (rid,)))
+                continue
+            check(name, target)
+            updates.append(("UPDATE alert_recipients SET name = ?, target = ?, active = ? WHERE id = ?",
+                            (name, target, 1 if form.get(f"ractive_{rid}") else 0, rid)))
+        new_name = str(form.get("rname_new", "")).strip()
+        new_target = str(form.get("rtarget_new", "")).strip()
+        if new_name or new_target:
+            if not new_name or not new_target:
+                raise HTTPException(400, "New recipient needs a name and a notify target")
+            check(new_name, new_target)
+            updates.append(("INSERT INTO alert_recipients(name, target, active) VALUES(?, ?, ?)",
+                            (new_name, new_target, 1 if form.get("ractive_new") else 0)))
+        for sql, args in updates:
+            db.execute(sql, args)
+        db.log("recipients.saved", "Alert recipients saved")
+        return RedirectResponse("staff", status_code=303)
 
     @app.get("/events", response_class=HTMLResponse)
     async def events(request: Request):

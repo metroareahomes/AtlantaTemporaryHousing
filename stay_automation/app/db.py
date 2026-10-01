@@ -73,6 +73,20 @@ CREATE TABLE IF NOT EXISTS alerts_sent (
     key TEXT PRIMARY KEY,
     at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS staff (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    code TEXT NOT NULL,
+    active INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE TABLE IF NOT EXISTS alert_recipients (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    target TEXT NOT NULL,
+    active INTEGER NOT NULL DEFAULT 1
+);
 """
 
 # Columns added after the first release; applied to existing databases on start.

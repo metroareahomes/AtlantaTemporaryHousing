@@ -31,6 +31,10 @@ class HostawayClient:
         await self._http.aclose()
 
     async def _fetch_token(self) -> str:
+        if not self._account_id.strip() or not self._api_key.strip():
+            raise HostawayError(
+                "Hostaway login failed: the account ID and/or API key are empty. "
+                "Enter them on the add-on's Configuration tab, save, then restart the add-on.")
         resp = await self._http.post(
             "/accessTokens",
             data={
@@ -40,6 +44,11 @@ class HostawayClient:
                 "scope": "general",
             },
         )
+        if resp.status_code in (400, 401, 403):
+            raise HostawayError(
+                f"Hostaway login failed: HTTP {resp.status_code}. Hostaway rejected the account ID / API key. "
+                "Check them on the add-on's Configuration tab (account ID = the numeric Client ID, "
+                "API key = the Client Secret from Hostaway Settings > Hostaway API), save, then restart the add-on.")
         if resp.status_code != 200:
             raise HostawayError(f"Hostaway login failed: HTTP {resp.status_code}")
         token = resp.json()["access_token"]

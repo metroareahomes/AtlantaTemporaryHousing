@@ -1,0 +1,56 @@
+{% extends "base.html" %}{% set active = 'staff' %}
+{% block body %}
+<form method="post" action="staff-save">
+<h2>Staff lock codes</h2>
+<p class="sub">Permanent 4-digit codes pushed to every home with lock automation on.
+  Uncheck Active (or clear the name) to remove a code from the locks; the row drops from this list once the locks no longer hold it.
+  Names must not start with HA-.</p>
+<div class="scroll">
+<table>
+  <thead><tr><th>Name</th><th>Code</th><th>Active</th></tr></thead>
+  <tbody>
+  {% for s in staff %}
+    <tr>
+      <td><input name="name_{{ s.id }}" value="{{ s.name }}"></td>
+      <td><input name="code_{{ s.id }}" value="{{ s.code }}" inputmode="numeric" maxlength="4" style="width:5rem"></td>
+      <td><input type="checkbox" name="active_{{ s.id }}" {{ 'checked' if s.active }}></td>
+    </tr>
+  {% endfor %}
+    <tr>
+      <td><input name="name_new" placeholder="Add staff…"></td>
+      <td><input name="code_new" placeholder="1234" inputmode="numeric" maxlength="4" style="width:5rem"></td>
+      <td><input type="checkbox" name="active_new" checked></td>
+    </tr>
+  </tbody>
+</table>
+</div>
+<p><button class="primary">Save staff</button></p>
+</form>
+
+<form method="post" action="recipients-save">
+<h2>Alert recipients</h2>
+<p class="sub">Extra Home Assistant notify targets for lock failures, missing guest codes and the daily arrivals report.
+  Use a full service id such as <code>notify.mobile_app_kurts_iphone</code> (an email recipient needs an email notify service
+  set up in Home Assistant first). The optional Setup “Alert also through” service is included too.</p>
+<div class="scroll">
+<table>
+  <thead><tr><th>Name</th><th>Notify target</th><th>Active</th></tr></thead>
+  <tbody>
+  {% for r in recipients %}
+    <tr>
+      <td><input name="rname_{{ r.id }}" value="{{ r.name }}"></td>
+      <td><input name="rtarget_{{ r.id }}" value="{{ r.target }}" placeholder="notify.…"></td>
+      <td><input type="checkbox" name="ractive_{{ r.id }}" {{ 'checked' if r.active }}></td>
+    </tr>
+  {% endfor %}
+    <tr>
+      <td><input name="rname_new" placeholder="Add recipient…"></td>
+      <td><input name="rtarget_new" placeholder="notify.…"></td>
+      <td><input type="checkbox" name="ractive_new" checked></td>
+    </tr>
+  </tbody>
+</table>
+</div>
+<p><button class="primary">Save recipients</button></p>
+</form>
+{% endblock %}

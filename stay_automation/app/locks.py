@@ -1,16 +1,19 @@
 """Phase 2: keep each automated lock holding exactly the guest codes it should, verified by reading back.
 
-Every few minutes, locks that are due get reconciled: work out which of our codes (named HA-<reservation id>)
+Every few minutes, locks that are due get reconciled: work out which of our codes (named HA-<guest>)
 should be in the lock right now, read the lock, add or remove the difference, then read it again. The read-back
 is the only thing trusted; Schlage calls often time out yet succeed, or return OK yet do nothing.
 
 Hostaway's own lock automation stays on: it creates the guest code and usually writes it to the lock itself.
 A code already in the lock under Hostaway's name counts as present, so we only add our copy when it is missing.
 Hostaway's codes are never touched; if one outlives its guest, staff are told.
+
+Staff access codes and HA-BACKUP are managed from the database and pushed to every automated lock.
 """
 import asyncio
 import json
 import logging
+import re
 import secrets
 from dataclasses import dataclass, field
 from datetime import datetime, time, timedelta, timezone
@@ -24,6 +27,7 @@ PREFIX = "HA-"
 BACKUP_NAME = "HA-BACKUP"
 VERIFY_DELAY_SECONDS = 15
 GAP_BETWEEN_LOCKS_SECONDS = 5
+NAME_MAX = 32  # a guess, NOT confirmed against Schlage's real limit; check on the CC2 test lock
 
 DEFAULTS = {
     "add_hour": 8,              # guest code goes in at 8 AM on arrival day
@@ -42,8 +46,26 @@ DEFAULT_GUEST_MESSAGE = (
 )
 
 
-def code_name(reservation_id: int) -> str:
-    return f"{PREFIX}{reservation_id}"
+def _sanitize_name(raw: str | None) -> str:
+    text = re.sub(r"\s+", " ", (raw or "").strip())
+    text = "".join(c for c in text if c.isalnum() or c in " -'")
+    return text.strip()
+
+
+def code_name(reservation: dict[str, Any], taken: set[str] | None = None) -> str:
+    """Lock slot staff can recognize by guest name; falls back to reservation id."""
+    guest = _sanitize_name(reservation.get("guest_name"))
+    if guest:
+        base = f"{PREFIX}{guest}"[:NAME_MAX].rstrip()
+    else:
+        base = f"{PREFIX}{reservation['id']}"
+    taken = taken or set()
+    if base not in taken and base != BACKUP_NAME:
+        return base
+    # Collision (two guests with the same name, or clashes with backup): keep it unique.
+    suffix = f" {reservation['id']}"
+    room = max(NAME_MAX - len(suffix), len(PREFIX) + 1)
+    return f"{(f'{PREFIX}{guest}' if guest else PREFIX)[:room].rstrip()}{suffix}"
 
 
 def _dt(iso: str) -> datetime:
@@ -56,15 +78,39 @@ def add_time(r: dict[str, Any], add_hour: int, lead_hours: int) -> datetime:
     return min(morning, check_in - timedelta(hours=lead_hours))
 
 
+def slot_names(reservations: list[dict[str, Any]], add_hour: int, lead_hours: int) -> dict[int, str]:
+    """Lock slot name for every booking with a code, stable for the whole stay.
+
+    The earlier booking keeps the plain HA-<guest> name; a later booking whose code window overlaps it (same
+    guest name, e.g. a repeat guest) gets the reservation id appended. Decided from the bookings alone, never
+    from "who is in the lock right now", so a slot is not renamed (deleted and re-added) mid-stay."""
+    live = sorted((r for r in reservations if r["active"] and r["door_code"]),
+                  key=lambda r: (_dt(r["check_in_at"]), r["id"]))
+    names: dict[int, str] = {}
+    windows: list[tuple[str, datetime, datetime]] = []
+    for r in live:
+        start, end = add_time(r, add_hour, lead_hours), _dt(r["check_out_at"])
+        taken = {n for n, s, e in windows if s < end and start < e}
+        names[r["id"]] = code_name(r, taken)
+        windows.append((names[r["id"]], start, end))
+    return names
+
+
 def desired_codes(reservations: list[dict[str, Any]], now: datetime, add_hour: int, lead_hours: int,
-                  backup_code: str | None = None) -> dict[str, str]:
+                  backup_code: str | None = None, staff: dict[str, str] | None = None) -> dict[str, str]:
     """Our codes that should be in the lock at `now`, as {name: code}."""
-    out = {}
+    out: dict[str, str] = {}
+    names = slot_names(reservations, add_hour, lead_hours)
     for r in reservations:
         if r["active"] and r["door_code"] and add_time(r, add_hour, lead_hours) <= now < _dt(r["check_out_at"]):
-            out[code_name(r["id"])] = r["door_code"]
+            out[names[r["id"]]] = r["door_code"]
     if backup_code:
         out[BACKUP_NAME] = backup_code
+    if staff:
+        for name, code in staff.items():
+            if name.startswith(PREFIX) or name == BACKUP_NAME:
+                continue  # never let a staff row steal guest/backup naming
+            out[name] = code
     return out
 
 
@@ -81,9 +127,15 @@ class Plan:
         return not self.add and not self.delete
 
 
-def plan(desired: dict[str, str], actual: dict[str, str]) -> Plan:
+def plan(desired: dict[str, str], actual: dict[str, str], managed: set[str] | None = None) -> Plan:
+    """Diff desired vs actual. Only delete names we manage (HA-* guest/backup, or staff names)."""
+    managed = managed or set()
+
+    def ours(name: str) -> bool:
+        return name.startswith(PREFIX) or name in managed
+
     p = Plan()
-    p.delete = [n for n in actual if n.startswith(PREFIX) and n not in desired]
+    p.delete = [n for n in actual if ours(n) and n not in desired]
     kept_values = {code for name, code in actual.items() if name not in p.delete}
     for name, code in desired.items():
         if actual.get(name) == code:
@@ -153,6 +205,16 @@ class LockManager:
     def cfg(self) -> dict[str, int]:
         return {k: self.db.get_int(k, v) for k, v in DEFAULTS.items()}
 
+    def staff_codes(self, *, active_only: bool = True) -> dict[str, str]:
+        sql = "SELECT name, code FROM staff"
+        if active_only:
+            sql += " WHERE active = 1"
+        return {row["name"]: row["code"] for row in self.db.query(sql)}
+
+    def managed_names(self) -> set[str]:
+        """Names we are allowed to delete: every staff row (active or not) so deactivated staff leave the lock."""
+        return {row["name"] for row in self.db.query("SELECT name FROM staff")}
+
     # ---- main loop ----------------------------------------------------------
 
     async def tick(self) -> int:
@@ -175,6 +237,7 @@ class LockManager:
 
     async def reconcile(self, lock: dict[str, Any], now: datetime) -> bool:
         cfg = self.cfg()
+        managed = self.managed_names()
         # Claim the lock until a retry would be due. A reservation change during the slow lock calls clears
         # next_check_at; the conditional write at the end then leaves it cleared, so the next tick looks again.
         claim = _utc(now + timedelta(minutes=cfg["retry_minutes"]))
@@ -186,7 +249,7 @@ class LockManager:
             return await self._failed(lock, now, reservations, claim, "could not read the lock", None)
         desired = self._desired(lock, reservations, now, actual, cfg)
 
-        first = plan(desired, actual)
+        first = plan(desired, actual, managed)
         if BACKUP_NAME in first.elsewhere:
             self._retire_backup(lock)
         if not first.ok:
@@ -200,7 +263,7 @@ class LockManager:
                 return await self._failed(lock, now, reservations, claim,
                                           "could not read the lock after changes", None)
 
-        final = plan(desired, actual)
+        final = plan(desired, actual, managed)
         for name in first.add:
             if name not in final.add:
                 self.db.log("code.added", f"{name} added to {lock['name']} (verified)",
@@ -209,7 +272,7 @@ class LockManager:
             if name not in final.delete and name not in final.add:
                 self.db.log("code.removed", f"{name} removed from {lock['name']} (verified)",
                             property_id=lock["property_id"])
-        self._log_present_elsewhere(lock, final.elsewhere)
+        self._log_present_elsewhere(lock, final.elsewhere, reservations, cfg)
 
         if not final.ok:
             problems = [f"missing {n}" for n in final.add] + [f"still has {n}" for n in final.delete]
@@ -223,11 +286,15 @@ class LockManager:
 
     def _desired(self, lock, reservations, now, actual, cfg) -> dict[str, str]:
         backup = lock["backup_code"] if self.db.get_bool("backup_codes_enabled") else None
+        staff = self.staff_codes() if lock["automated"] else None
         if lock["automated"]:
-            return desired_codes(reservations, now, cfg["add_hour"], cfg["early_lead_hours"], backup)
-        # Automation switched off: add nothing, but codes already handed out stay until that guest checks out.
+            return desired_codes(reservations, now, cfg["add_hour"], cfg["early_lead_hours"], backup, staff)
+        # Automation switched off: add nothing, but guest codes already handed out stay until checkout.
+        # Staff codes already in the lock stay (cleaners must not lose access); the backup goes unless
+        # a guest was given it and is still staying.
         keep = {n: c for n, c in desired_codes(reservations, now, cfg["add_hour"], cfg["early_lead_hours"]).items()
                 if n in actual}
+        keep.update({n: actual[n] for n in self.staff_codes() if n in actual})
         if backup and BACKUP_NAME in actual and self._backup_guest_staying(lock, now):
             keep[BACKUP_NAME] = backup
         return keep
@@ -238,13 +305,17 @@ class LockManager:
         r = self.db.one("SELECT check_out_at FROM reservations WHERE id = ?", (lock["backup_used_by"],))
         return r is not None and _dt(r["check_out_at"]) > now
 
-    def _log_present_elsewhere(self, lock, names: list[str]) -> None:
+    def _log_present_elsewhere(self, lock, names: list[str], reservations: list[dict[str, Any]],
+                               cfg: dict[str, int]) -> None:
         """Once per booking: the guest code was already in the lock (Hostaway wrote it), so we added nothing.
         Together with code.added this shows how often Hostaway alone would have left a guest without a code."""
+        by_name = {n: rid for rid, n in slot_names(reservations, cfg["add_hour"], cfg["early_lead_hours"]).items()}
         for name in names:
-            if name == BACKUP_NAME:
+            if name == BACKUP_NAME or name in self.managed_names():
                 continue
-            rid = int(name.removeprefix(PREFIX))
+            rid = by_name.get(name)
+            if rid is None:
+                continue
             if not self.db.one("SELECT 1 FROM events WHERE kind = 'code.present' AND reservation_id = ?", (rid,)):
                 self.db.log("code.present", f"Guest code for {rid} already in {lock['name']} (from Hostaway)",
                             property_id=lock["property_id"], reservation_id=rid)
@@ -397,12 +468,23 @@ class LockManager:
             self.db.log("backup.rotated" if prop["backup_code"] else "backup.created",
                         "New backup code set", property_id=prop["id"])
 
+    def alert_targets(self) -> list[str]:
+        """HA notify services to fan out to: Setup fallback plus every active recipient row."""
+        targets: list[str] = []
+        fallback = (self.db.get_setting("alert_service", "") or "").strip()
+        if fallback:
+            targets.append(fallback)
+        for row in self.db.query("SELECT target FROM alert_recipients WHERE active = 1 ORDER BY id"):
+            target = (row["target"] or "").strip()
+            if target and target not in targets:
+                targets.append(target)
+        return targets
+
     async def alert(self, title: str, message: str, key: str | None = None) -> None:
         if key and self.db.one("SELECT 1 FROM alerts_sent WHERE key = ?", (key,)):
             return
         try:
-            await self.ha.notify(title, message, service=self.db.get_setting("alert_service", "") or "",
-                                 notification_id=key or "")
+            await self.ha.notify(title, message, services=self.alert_targets(), notification_id=key or "")
         except Exception as exc:
             log.error("alert failed: %s", exc)
             self.db.log("alert.failed", f"Could not deliver alert '{title}': {exc}", level="error")

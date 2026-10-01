@@ -7,11 +7,12 @@ Home Assistant add-on that keeps Schlage lock codes and Honeywell thermostats in
 
 - Phase 1: Hostaway sync and webhooks, property and lock tables with automatic lock matching,
   dashboard (Status, Properties, Log, Setup).
-- Phase 2: for homes with "Lock automation" on, guest codes (named `HA-<reservation id>`) are added on the
+- Phase 2: for homes with "Lock automation" on, guest codes (named `HA-<guest name>`) are added on the
   morning of arrival and removed at checkout. Every change is verified by reading the lock back; failures
   retry every 15 minutes and alert staff. An hour before check-in, a guest whose code is not confirmed gets
   the home's backup code through Hostaway (when enabled), and staff are alerted. Daily arrivals report.
-  Codes this add-on did not write are never touched.
+  Codes this add-on did not write are never touched. Staff permanent codes and alert recipients live in
+  SQLite tables and are edited on the Staff dashboard page.
 - Hostaway's own lock automation stays on: Hostaway creates each guest code and usually writes it to the lock.
   A code Hostaway already wrote counts as present, so the add-on only adds its own copy when the code is missing.
   If Hostaway has not removed a guest's code two hours after checkout, staff are alerted.
