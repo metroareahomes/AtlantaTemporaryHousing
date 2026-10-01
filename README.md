@@ -1,5 +1,6 @@
-# Stay Automation
+# AtlantaTemporaryHousing
 
+Repository for Atlanta Temporary Housing
 Home Assistant add-on that keeps Schlage lock codes and Honeywell thermostats in step with Hostaway reservations.
 
 ## Status
