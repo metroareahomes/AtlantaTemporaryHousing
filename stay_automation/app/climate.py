@@ -32,7 +32,7 @@ DEFAULTS = {
     "vac_summer": 78,
     "vac_winter": 55,
     "summer_start_month": 5,
-    "summer_end_month": 9,
+    "summer_end_month": 10,  # winter starts in November, per the client
     "therm_lead_hours": 3,       # occupied this long before check-in
     "therm_lag_hours": 3,        # vacant this long after check-out
     "vacant_reset_hour": 11,     # vacant homes are set to vacant again daily after this hour
