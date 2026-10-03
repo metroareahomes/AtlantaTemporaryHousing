@@ -2,10 +2,9 @@
 {% block body %}
 <form method="post" action="properties-save">
 <h2>Properties</h2>
-<p class="sub">One row per home. Tick <strong>Lock automation</strong> on a home that shows a lock to start managing its codes,
-  and <strong>Thermostat automation</strong> on a home that shows a thermostat to schedule its temperature.
-  Each home keeps a permanent backup code (HA-BACKUP) on its lock; edit it here to change it. Only what you change
-  on this page is saved.</p>
+<p class="sub">Tick <strong>Lock automation</strong> to let the add-on manage a home's codes, and
+  <strong>Thermostat automation</strong> to schedule its temperature. The backup code (HA-BACKUP) stays on the lock
+  permanently; change it here. Only fields you change are saved.</p>
 <div class="scroll">
 <table>
   <thead><tr><th>Property</th><th>Lock</th><th>Lock automation</th><th>Backup code</th><th>Thermostat</th><th>Thermostat automation</th><th>Active</th></tr></thead>
@@ -37,7 +36,7 @@
 <p><button class="primary">Save</button></p>
 
 <h2>Locks</h2>
-<p class="sub">Locks are found in Home Assistant automatically and matched by name. Fix any that are wrong or unmatched; your choice is kept.</p>
+<p class="sub">Found in Home Assistant and matched to homes by name. Correct any that are wrong; your choice sticks.</p>
 <div class="scroll">
 <table>
   <thead><tr><th>Lock</th><th>State</th><th>Property</th><th>Matched</th></tr></thead>
@@ -59,7 +58,7 @@
 </div>
 
 <h2>Thermostats</h2>
-<p class="sub">Every climate device in Home Assistant is listed. Only thermostats assigned to a home with Thermostat automation ticked are ever changed.</p>
+<p class="sub">Every climate device in Home Assistant. Only those assigned to a home with Thermostat automation ticked are ever changed.</p>
 <div class="scroll">
 <table>
   <thead><tr><th>Thermostat</th><th>Mode</th><th>Property</th><th>Matched</th></tr></thead>

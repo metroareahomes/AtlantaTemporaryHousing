@@ -9,7 +9,7 @@
 <body>
   <header>
     <div class="bar-left">
-      <div class="brand"><span class="logo">S</span>Stays</div>
+      <div class="brand">Stays</div>
       <nav>
         <a href="." class="{{ 'on' if active == 'status' }}">Status</a>
         <a href="properties" class="{{ 'on' if active == 'properties' }}">Properties</a>
@@ -19,8 +19,8 @@
       </nav>
     </div>
     <div class="meta">
-      <span><span class="dot {{ '' if last_sync else 'off' }}"></span>Synced {{ last_sync or 'never' }}</span>
-      <span>Webhook {{ last_webhook or 'never' }}</span>
+      <span><span class="dot {{ '' if last_sync else 'off' }}"></span>synced {{ last_sync or 'never' }}</span>
+      <span>webhook {{ last_webhook or 'never' }}</span>
       <form method="post" action="sync" class="inline"><button>Sync now</button></form>
     </div>
   </header>

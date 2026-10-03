@@ -1,9 +1,6 @@
 {% extends "base.html" %}{% set active = 'status' %}
 {% block body %}
-<div class="page-head">
-  <h1>Command center</h1>
-  <p>Every home at a glance: guests, door codes, locks and climate.</p>
-</div>
+<div class="page-head"><h1>Homes</h1></div>
 
 <div class="kpis">
   <a class="kpi bad {{ 'zero' if not problems }} {{ 'on' if show == 'attention' }}" href="?show=attention&sort={{ sort }}">
@@ -17,14 +14,15 @@
   <a class="kpi {{ 'on' if show == 'vacant' }}" href="?show=vacant&sort={{ sort }}">
     <div class="n">{{ counts.vacant }}</div><div class="l">Vacant</div></a>
   <div class="kpi auto">
-    <div class="n">{{ automation.locks|int }} of {{ automation.homes }} locks<br>{{ automation.therms|int }} of {{ automation.homes }} thermostats</div>
-    <div class="l">Automated homes</div></div>
+    <div class="n">locks {{ automation.locks|int }}/{{ automation.homes }}<br>thermostats {{ automation.therms|int }}/{{ automation.homes }}</div>
+    <div class="l">Automated</div></div>
 </div>
 
 <div class="toolbar">
-  <a class="chip {{ 'on' if show == 'all' }}" href="?sort={{ sort }}">All homes</a>
+  <a class="chip {{ 'on' if show == 'all' }}" href="?sort={{ sort }}">All</a>
   <span class="spacer"></span>
-  <a class="chip {{ 'on' if sort == 'attention' }}" href="?show={{ show }}&sort=attention">Needs attention first</a>
+  <span class="sub">Sort</span>
+  <a class="chip {{ 'on' if sort == 'attention' }}" href="?show={{ show }}&sort=attention">Problems first</a>
   <a class="chip {{ 'on' if sort == 'name' }}" href="?show={{ show }}&sort=name">Street A–Z</a>
   <form method="get" action="." class="inline search">
     <input type="hidden" name="show" value="{{ show }}"><input type="hidden" name="sort" value="{{ sort }}">
