@@ -248,7 +248,9 @@ class Syncer:
 
     async def handle_webhook(self, payload: Any) -> list[str]:
         """Hostaway unified webhook. The payload only tells us which reservation; the API is the truth."""
-        self.db.set_setting("last_webhook_at", utcnow())  # something arrived, whatever it turns out to be
+        if _other_object(payload):
+            return []  # Hostaway also posts guest messages and the like; they are not ours and not worth a line
+        self.db.set_setting("last_webhook_at", utcnow())
         reservation_id = webhook_reservation_id(payload, self.settings.hostaway_account_id)
         if reservation_id is None:
             # Say what it was (field names only, no guest data) so a "never" can be told from "ignored".
@@ -258,6 +260,17 @@ class Syncer:
         raw = await self.hostaway.reservation(reservation_id)
         self.db.log("webhook.received", f"Webhook for reservation {reservation_id}")
         return self.upsert_reservation(raw)
+
+
+def _other_object(payload: Any) -> bool:
+    """True for a well-formed Hostaway webhook about something other than a reservation (e.g. a guest message)."""
+    for _ in range(2):
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except json.JSONDecodeError:
+                return False
+    return isinstance(payload, dict) and payload.get("object") not in (None, "reservation")
 
 
 def _shape(payload: Any) -> str:

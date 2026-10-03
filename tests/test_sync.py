@@ -116,11 +116,18 @@ def test_webhook_automation_is_pointed_at_the_real_addon_slug(syncer):
 
 
 def test_unusable_webhook_is_logged_without_guest_data(syncer):
-    body = {"object": "message", "event": "message.received", "guestName": "Secret Person"}
+    body = {"event": "something.odd", "guestName": "Secret Person"}
     assert run(syncer.handle_webhook(json.dumps(body))) == []
     note = syncer.db.one("SELECT message FROM events WHERE kind = 'webhook.ignored'")["message"]
-    assert "object=message" in note and "guestName" in note and "Secret Person" not in note
+    assert "event=something.odd" in note and "guestName" in note and "Secret Person" not in note
     assert syncer.db.get_setting("last_webhook_at")  # it did arrive
+
+
+def test_guest_message_webhooks_are_dropped_quietly(syncer):
+    body = {"object": "conversationMessage", "event": "message.received", "accountId": 12345, "data": {"id": 9}}
+    assert run(syncer.handle_webhook(json.dumps(body))) == []
+    assert syncer.db.one("SELECT 1 FROM events WHERE kind LIKE 'webhook.%'") is None
+    assert not syncer.db.get_setting("last_webhook_at")  # the top bar only moves for reservation news
 
 
 def test_sync_and_webhook_record_changes(syncer):
