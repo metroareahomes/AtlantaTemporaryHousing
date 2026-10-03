@@ -80,6 +80,10 @@ def build():
     discover = _then(syncer.import_listings, syncer.discover_locks)
 
     async def startup() -> None:
+        try:
+            await syncer.fix_addon_slug()
+        except Exception as exc:  # never block startup over the webhook wiring
+            db.log("setup.webhook", f"Could not check the add-on slug: {exc}", level="warning")
         await discover()
         await syncer.sync_reservations()
         await syncer.check_arrival_locks()

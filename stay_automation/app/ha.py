@@ -149,6 +149,14 @@ class HAClient:
         resp = await self._http.get(f"/api/config/automation/config/{WEBHOOK_AUTOMATION_ID}")
         return resp.status_code == 200
 
+    async def own_slug(self) -> str:
+        """This add-on's real Supervisor slug. Installed from a repository it is '<hash>_stay_automation', not
+        'local_...'; hassio.addon_stdin only works with the real one. Empty when it cannot be found."""
+        resp = await self._http.get("http://supervisor/addons/self/info")
+        if resp.status_code != 200:
+            return ""
+        return str(((resp.json() or {}).get("data") or {}).get("slug") or "")
+
     async def create_webhook_automation(self, webhook_id: str, addon_slug: str) -> None:
         """HA receives the Hostaway webhook publicly and hands the JSON to this add-on's stdin."""
         await self._post(

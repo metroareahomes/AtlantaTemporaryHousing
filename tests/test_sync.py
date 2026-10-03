@@ -90,6 +90,31 @@ def test_manual_assignment_survives_rediscovery(syncer):
     assert again["property_id"] == other and again["match_source"] == "manual"
 
 
+def test_webhook_automation_is_pointed_at_the_real_addon_slug(syncer):
+    class Ha(FakeHA):
+        made = []
+
+        async def own_slug(self):
+            return "a1b2c3d4_stay_automation"
+
+        async def create_webhook_automation(self, webhook_id, slug):
+            self.made.append((webhook_id, slug))
+
+    syncer.ha = Ha()
+    assert run(syncer.fix_addon_slug()) is False  # not running as an add-on (development mode)
+
+    object.__setattr__(syncer.settings, "is_addon", True)
+    try:
+        syncer.db.set_setting("webhook_id", "abc")
+        syncer.db.set_setting("addon_slug", "local_stay_automation")
+        assert run(syncer.fix_addon_slug()) is True
+        assert Ha.made == [("abc", "a1b2c3d4_stay_automation")]
+        assert syncer.db.get_setting("addon_slug") == "a1b2c3d4_stay_automation"
+        assert run(syncer.fix_addon_slug()) is False  # already right, nothing rewritten
+    finally:
+        object.__setattr__(syncer.settings, "is_addon", False)
+
+
 def test_unusable_webhook_is_logged_without_guest_data(syncer):
     body = {"object": "message", "event": "message.received", "guestName": "Secret Person"}
     assert run(syncer.handle_webhook(json.dumps(body))) == []

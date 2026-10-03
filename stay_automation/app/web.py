@@ -641,10 +641,16 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None) 
         if not public_url.startswith("https://"):
             raise HTTPException(400, "Public URL must start with https://")
         db.set_setting("public_url", public_url)
-        db.set_setting("addon_slug", addon_slug.strip())
+        slug = addon_slug.strip()
+        if syncer.settings.is_addon:  # the real slug beats whatever was typed or left over
+            try:
+                slug = await syncer.ha.own_slug() or slug
+            except Exception:
+                pass
+        db.set_setting("addon_slug", slug)
         webhook_id = db.get_setting("webhook_id") or secrets.token_urlsafe(32)
         db.set_setting("webhook_id", webhook_id)
-        await syncer.ha.create_webhook_automation(webhook_id, addon_slug.strip())
+        await syncer.ha.create_webhook_automation(webhook_id, slug)
         db.log("setup.webhook", "Home Assistant webhook automation saved")
         if register_hostaway:
             await syncer.hostaway.register_webhook(f"{public_url}/api/webhook/{webhook_id}")

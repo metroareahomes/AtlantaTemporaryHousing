@@ -231,6 +231,21 @@ class Syncer:
         self.db.set_setting("last_sync_at", utcnow())
         return changed
 
+    async def fix_addon_slug(self) -> bool:
+        """The webhook automation must name this add-on by its real Supervisor slug, or Home Assistant answers
+        'App ... does not exist' and every Hostaway webhook is lost. Set it right whenever it is wrong."""
+        if not self.settings.is_addon:
+            return False
+        slug = await self.ha.own_slug()
+        if not slug or slug == self.db.get_setting("addon_slug"):
+            return False
+        self.db.set_setting("addon_slug", slug)
+        webhook_id = self.db.get_setting("webhook_id")
+        if webhook_id:
+            await self.ha.create_webhook_automation(webhook_id, slug)
+        self.db.log("setup.webhook", f"Webhook automation now points at this add-on ({slug})")
+        return True
+
     async def handle_webhook(self, payload: Any) -> list[str]:
         """Hostaway unified webhook. The payload only tells us which reservation; the API is the truth."""
         self.db.set_setting("last_webhook_at", utcnow())  # something arrived, whatever it turns out to be
