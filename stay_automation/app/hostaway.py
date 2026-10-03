@@ -71,7 +71,8 @@ class HostawayClient:
                 await asyncio.sleep(2 ** attempt)
                 continue
             if resp.status_code != 200:
-                raise HostawayError(f"{method} {path}: HTTP {resp.status_code}")
+                detail = " ".join((resp.text or "").split())[:300]  # Hostaway says why it refused
+                raise HostawayError(f"{method} {path}: HTTP {resp.status_code}" + (f" - {detail}" if detail else ""))
             body = resp.json()
             if body.get("status") != "success":
                 raise HostawayError(f"{method} {path}: {body.get('message', 'failed')}")
@@ -119,7 +120,23 @@ class HostawayClient:
         return body.get("result") or []
 
     async def register_webhook(self, url: str) -> dict[str, Any]:
-        body = await self._request(
-            "POST", "/webhooks/unifiedWebhooks", json={"isEnabled": 1, "url": url}
-        )
+        """Point Hostaway's unified webhook at `url`. Already registered (same URL) is success, not an error."""
+        existing = await self.unified_webhooks()
+        for hook in existing:
+            if hook.get("url") == url:
+                if not hook.get("isEnabled"):
+                    body = await self._request("PUT", f"/webhooks/unifiedWebhooks/{hook['id']}",
+                                               json={"isEnabled": 1, "url": url})
+                    return body["result"]
+                return hook
+        try:
+            body = await self._request("POST", "/webhooks/unifiedWebhooks", json={"isEnabled": 1, "url": url})
+        except HostawayError as exc:
+            if existing:
+                hosts = ", ".join(sorted({(h.get("url") or "").split("/")[2] if "//" in (h.get("url") or "") else "?"
+                                          for h in existing}))
+                raise HostawayError(f"{exc}. This Hostaway account already has {len(existing)} unified webhook(s) "
+                                    f"(pointing to {hosts}). Remove or edit it in Hostaway under Settings > "
+                                    "Hostaway API > Webhooks, then try again.") from exc
+            raise
         return body["result"]

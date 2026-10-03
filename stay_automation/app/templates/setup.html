@@ -6,7 +6,9 @@
   <li>Last Hostaway sync: <strong>{{ last_sync or 'never' }}</strong></li>
   <li>Webhook automation in Home Assistant: <strong>{{ 'present' if automation else 'missing' }}</strong></li>
   <li>Webhook registered with Hostaway: <strong>{{ registered or 'no' }}</strong></li>
-  {% if webhook_url %}<li class="sub">Webhook URL: {{ webhook_url }}</li>{% endif %}
+  {% if webhook_url %}<li class="sub">Webhook URL: {{ webhook_url }}
+    {% if webhook_full %}<details class="edit"><summary>show the full URL (keep it private)</summary>
+      <code style="word-break: break-all">{{ webhook_full }}</code></details>{% endif %}</li>{% endif %}
 </ul>
 
 <h2>Real-time updates from Hostaway</h2>

@@ -574,6 +574,7 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None) 
             ha_ok=ha_ok, automation=automation, public_url=public_url,
             addon_slug=db.get_setting("addon_slug", "local_stay_automation"),
             webhook_url=f"{public_url}/api/webhook/{webhook_id[:6]}…" if webhook_id else "",
+            webhook_full=f"{public_url}/api/webhook/{webhook_id}" if webhook_id and public_url else "",
             registered=db.get_setting("hostaway_webhook_registered_at"),
             is_addon=syncer.settings.is_addon,
             numbers=[(k, SETTING_LABELS[k], db.get_int(k, v)) for k, v in DEFAULTS.items()],
