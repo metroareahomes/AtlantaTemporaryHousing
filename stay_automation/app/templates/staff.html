@@ -27,6 +27,35 @@
 <p><button class="primary">Save staff</button></p>
 </form>
 
+<h2>Visitor (preview) codes</h2>
+<p class="sub">A temporary 4-digit code for someone previewing a home. It goes onto the lock right away and is removed
+  automatically when the time is up. Leave the code blank to have one picked. Only homes with Lock automation ticked are listed.</p>
+<div class="scroll">
+<table>
+  <thead><tr><th>Home</th><th>Visitor</th><th>Code</th><th>Expires</th><th></th></tr></thead>
+  <tbody>
+  {% for v in previews %}
+    <tr>
+      <td>{{ v.property_name }}</td><td>{{ v.label or '—' }}</td>
+      <td><span class="doorcode">{{ v.code }}</span></td><td class="sub nowrap">{{ v.expires_local }}</td>
+      <td><form method="post" action="preview-delete" class="inline">
+        <input type="hidden" name="preview_id" value="{{ v.id }}"><button>End now</button></form></td>
+    </tr>
+  {% else %}
+    <tr><td colspan="5" class="empty">No active visitor codes.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+<form method="post" action="preview-add" class="stack" style="margin-top:12px">
+  <label>Home <select name="property_id" required>
+    {% for h in lock_homes %}<option value="{{ h.id }}">{{ h.name }}</option>{% endfor %}</select></label>
+  <label>Visitor name or note <input name="label" placeholder="e.g. Walkthrough, Bob"></label>
+  <label>Code (optional) <input name="code" inputmode="numeric" maxlength="4" placeholder="auto"></label>
+  <label>Valid for (hours, up to 168) <input name="hours" value="24" inputmode="numeric"></label>
+  <button class="primary">Add visitor code</button>
+</form>
+
 <form method="post" action="recipients-save">
 <h2>Alert recipients</h2>
 <p class="sub">Extra Home Assistant notify targets for lock failures, missing guest codes and the daily arrivals report.

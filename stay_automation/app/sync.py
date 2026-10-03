@@ -150,11 +150,18 @@ class Syncer:
     # ---- reservations -----------------------------------------------------
 
     def reservations_for(self, property_id: int) -> list[dict[str, Any]]:
-        return self.db.query(
+        """Bookings of a home. door_code is the code the guest should use: one staff typed in on the dashboard
+        wins over the one Hostaway generated (kept as hostaway_code)."""
+        rows = self.db.query(
             "SELECT r.* FROM reservations r JOIN properties p ON p.hostaway_listing_id = r.listing_id "
             "WHERE p.id = ? ORDER BY r.check_in_at",
             (property_id,),
         )
+        for r in rows:
+            r["hostaway_code"] = r["door_code"]
+            if r["override_code"]:
+                r["door_code"] = r["override_code"]
+        return rows
 
     def _note_missing_code(self, raw: dict[str, Any], new: dict[str, Any]) -> None:
         """A booking arriving soon has no doorCode in the Hostaway API. Record which other fields carry a value

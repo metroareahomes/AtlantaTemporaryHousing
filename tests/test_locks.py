@@ -642,3 +642,113 @@ def test_rejected_entry_shows_a_readable_page(lm):
     r = _client(lm).post("/properties-save", data=_form(lm, **{f"backup_{pid}": "12"}))
     assert r.status_code == 400
     assert "text/html" in r.headers["content-type"] and "exactly 4 digits" in r.text and "not saved" in r.text
+
+
+# ---- guest code override and visitor codes ---------------------------------------
+
+def test_staff_can_change_a_guest_code_and_it_survives_hostaway_syncs(lm):
+    c = _client(lm)
+    lm.s.upsert_reservation(res())
+    tick_at(lm, at("2030-01-10T08:01"))
+    assert lm.ha.codes["lock.a"]["HA-Ann Lee"] == "4821"
+
+    assert c.post("/code-override", data={"reservation_id": 1, "code": "6677"}).status_code == 303
+    lm.s.upsert_reservation(res())  # the next Hostaway sync still says 4821
+    tick_at(lm, at("2030-01-10T08:06"))
+    assert lm.ha.codes["lock.a"]["HA-Ann Lee"] == "6677"
+    page = c.get("/").text
+    assert "6677" in page and "custom" in page and "change code" in page
+    assert lm.db.one("SELECT 1 FROM events WHERE kind = 'code.override'")
+
+    assert c.post("/code-override", data={"reservation_id": 1, "code": ""}).status_code == 303  # back to Hostaway's
+    tick_at(lm, at("2030-01-10T08:12"))
+    assert lm.ha.codes["lock.a"]["HA-Ann Lee"] == "4821"
+
+    c.post("/code-override", data={"reservation_id": 1, "code": "4821"})  # typing Hostaway's own code = no override
+    assert lm.db.one("SELECT override_code FROM reservations")["override_code"] is None
+
+
+def test_guest_code_change_is_validated(lm):
+    c = _client(lm)
+    lm.s.upsert_reservation(res())
+    tick_at(lm, at("2030-01-10T08:01"))  # reads the lock, so Master's code is known
+    lm.db.execute("UPDATE properties SET backup_code = '5555'")
+    for bad in ("12", "12ab", "9999", "5555"):  # short, not digits, = Master, = backup
+        assert c.post("/code-override", data={"reservation_id": 1, "code": bad}).status_code == 400, bad
+    lm.db.execute("INSERT INTO staff(name, code, active) VALUES('Cleaner', '2468', 1)")
+    assert c.post("/code-override", data={"reservation_id": 1, "code": "2468"}).status_code == 400
+    assert c.post("/code-override", data={"reservation_id": 99, "code": "1357"}).status_code == 404
+    assert lm.db.one("SELECT override_code FROM reservations")["override_code"] is None
+
+
+def test_a_past_guests_code_does_not_block_a_new_one(lm):
+    c = _client(lm)
+    lm.s.upsert_reservation(res(id=1, arrival="2029-12-01", departure="2029-12-05", code="1357"))
+    lm.s.upsert_reservation(res(id=2, arrival="2030-01-10", departure="2030-01-15", code="4821"))
+    lm.s.now = lambda: at("2030-01-09T12:00")
+    assert c.post("/code-override", data={"reservation_id": 2, "code": "1357"}).status_code == 303
+
+
+def test_visitor_code_goes_on_the_lock_then_removes_itself(lm):
+    c = _client(lm)
+    tick_at(lm, at("2030-01-01T12:00"))
+    r = c.post("/preview-add", data={"property_id": _pid(lm), "label": "Walkthrough Bob", "code": "", "hours": "24"})
+    assert r.status_code == 303
+    code = lm.db.one("SELECT code FROM preview_codes")["code"]
+    assert len(code) == 4 and code.isdigit() and code != "9999"
+
+    tick_at(lm, at("2030-01-01T12:05"))
+    assert lm.ha.codes["lock.a"]["HA-Preview Walkthrough Bob"] == code
+    assert "Walkthrough Bob" in c.get("/staff").text
+
+    tick_at(lm, at("2030-01-02T11:59"))  # the daily 6 AM check: still valid, so it stays
+    assert "HA-Preview Walkthrough Bob" in lm.ha.codes["lock.a"]
+    # ...and the lock asked to be looked at again at the exact moment the code expires (12:00 ET = 17:00 UTC)
+    assert lm.db.one("SELECT next_check_at FROM locks")["next_check_at"] == "2030-01-02T17:00:00+00:00"
+    tick_at(lm, at("2030-01-02T12:06"))
+    assert lm.ha.codes["lock.a"] == {"Master": "9999"}
+    assert "Walkthrough Bob" not in c.get("/staff").text
+
+
+def test_visitor_code_can_be_ended_early_and_is_validated(lm):
+    c = _client(lm)
+    tick_at(lm, at("2030-01-01T12:00"))
+    pid = _pid(lm)
+    assert c.post("/preview-add", data={"property_id": pid, "label": "x", "code": "99", "hours": "24"}).status_code == 400
+    assert c.post("/preview-add", data={"property_id": pid, "label": "x", "code": "9999", "hours": "24"}).status_code == 400
+    assert c.post("/preview-add", data={"property_id": pid, "label": "x", "code": "", "hours": "0"}).status_code == 400
+    assert c.post("/preview-add", data={"property_id": pid, "label": "x", "code": "", "hours": "500"}).status_code == 400
+    lm.db.execute("UPDATE properties SET lock_automation = 0")
+    assert c.post("/preview-add", data={"property_id": pid, "label": "x", "code": "", "hours": "24"}).status_code == 400
+    lm.db.execute("UPDATE properties SET lock_automation = 1")
+
+    assert c.post("/preview-add", data={"property_id": pid, "label": "Amy", "code": "3141", "hours": "48"}).status_code == 303
+    tick_at(lm, at("2030-01-01T12:05"))
+    assert lm.ha.codes["lock.a"]["HA-Preview Amy"] == "3141"
+    assert c.post("/preview-add", data={"property_id": pid, "label": "Zed", "code": "3141", "hours": "24"}).status_code == 400
+    c.post("/preview-delete", data={"preview_id": lm.db.one("SELECT id FROM preview_codes")["id"]})
+    tick_at(lm, at("2030-01-01T12:10"))
+    assert lm.ha.codes["lock.a"] == {"Master": "9999"}
+
+
+def test_two_visitors_with_the_same_name_get_separate_slots(lm):
+    c = _client(lm)
+    tick_at(lm, at("2030-01-01T12:00"))
+    for code in ("1111", "2222"):
+        c.post("/preview-add", data={"property_id": _pid(lm), "label": "Sam", "code": code, "hours": "24"})
+    tick_at(lm, at("2030-01-01T12:05"))
+    visitors = {n: c_ for n, c_ in lm.ha.codes["lock.a"].items() if n.startswith("HA-Preview")}
+    assert sorted(visitors.values()) == ["1111", "2222"] and len(visitors) == 2
+
+
+def test_visitor_code_stays_while_automation_is_off_until_it_expires(lm):
+    c = _client(lm)
+    tick_at(lm, at("2030-01-01T12:00"))
+    c.post("/preview-add", data={"property_id": _pid(lm), "label": "Amy", "code": "3141", "hours": "24"})
+    tick_at(lm, at("2030-01-01T12:05"))
+    lm.db.execute("UPDATE properties SET lock_automation = 0")
+    lm.db.execute("UPDATE locks SET next_check_at = NULL")
+    tick_at(lm, at("2030-01-01T13:00"))
+    assert lm.ha.codes["lock.a"]["HA-Preview Amy"] == "3141"
+    tick_at(lm, at("2030-01-02T12:10"))
+    assert "HA-Preview Amy" not in lm.ha.codes["lock.a"]

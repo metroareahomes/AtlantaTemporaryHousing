@@ -50,8 +50,14 @@
         {% if not r.current_guest and not r.next_in %}<span class="none">No reservations</span>{% endif %}
       </div></td>
       <td>{% if r.code != 'none' %}<span class="code code-{{ r.code }}">{{ r.code_label }}</span>
-        {% if r.door_code %}<div class="doorcode">{{ r.door_code }}</div>{% endif %}
-        {% if r.lock_read %}<div class="sub">checked {{ r.lock_read }}</div>{% endif %}{% endif %}</td>
+        {% if r.door_code %}<div class="doorcode">{{ r.door_code }}{% if r.code_custom %} <span class="sub">custom</span>{% endif %}</div>{% endif %}
+        {% if r.lock_read %}<div class="sub">checked {{ r.lock_read }}</div>{% endif %}{% endif %}
+        {% if r.next_id and r.door_code %}<details class="edit"><summary>change code</summary>
+          <form method="post" action="code-override">
+            <input type="hidden" name="reservation_id" value="{{ r.next_id }}">
+            <input name="code" value="{{ r.door_code }}" inputmode="numeric" maxlength="4" aria-label="New guest code">
+            <button class="primary">Save</button></form>
+          <div class="sub">Blank, or Hostaway's own code, switches back to Hostaway's.</div></details>{% endif %}</td>
       <td>{% for l in r.locks %}<div>{{ l.name }} <span class="sub">· {{ l.state }}</span></div>{% else %}<span class="none">none</span>{% endfor %}
         {% if r.battery is not none %}<div class="battery">
           <span class="bar {{ 'low' if r.battery_low else ('mid' if r.battery < 30 else '') }}"><i style="width: {{ r.battery }}%"></i></span>
@@ -76,6 +82,7 @@
   // Keep the board fresh without touching what you are typing or have just filtered.
   setInterval(function () {
     if (document.activeElement && document.activeElement.tagName === "INPUT") return;
+    if (document.querySelector("details[open]")) return;
     location.reload();
   }, 60000);
 </script>

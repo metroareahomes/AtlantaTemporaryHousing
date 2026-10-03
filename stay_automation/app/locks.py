@@ -107,7 +107,8 @@ def slot_names(reservations: list[dict[str, Any]], add_hour: int, lead_hours: in
 
 def desired_codes(reservations: list[dict[str, Any]], now: datetime, add_hour: int, lead_hours: int,
                   backup_code: str | None = None, staff: dict[str, str] | None = None,
-                  actual: dict[str, str] | None = None) -> dict[str, str]:
+                  actual: dict[str, str] | None = None,
+                  previews: dict[str, str] | None = None) -> dict[str, str]:
     """Our codes that should be in the lock at `now`, as {name: code}."""
     out: dict[str, str] = {}
     names = slot_names(reservations, add_hour, lead_hours, actual)
@@ -116,6 +117,7 @@ def desired_codes(reservations: list[dict[str, Any]], now: datetime, add_hour: i
             out[names[r["id"]]] = r["door_code"]
     if backup_code:
         out[BACKUP_NAME] = backup_code
+    out.update(previews or {})  # temporary visitor codes, named HA-Preview <label>
     if staff:
         for name, code in staff.items():
             if name.startswith(PREFIX) or name == BACKUP_NAME:
@@ -165,8 +167,26 @@ def code_present(r: dict[str, Any], actual: dict[str, str]) -> bool:
     return bool(r["door_code"]) and r["door_code"] in actual.values()
 
 
-def next_check(reservations: list[dict[str, Any]], now: datetime, cfg: dict[str, int]) -> datetime:
-    """The next moment this lock needs attention: a code going in or out, a scheduled check, or tomorrow."""
+def preview_slot_names(rows: list[dict[str, Any]]) -> dict[int, str]:
+    """Lock slot names for preview codes: HA-Preview <label>, with the row id added if two share a label."""
+    names: dict[int, str] = {}
+    used: set[str] = set()
+    for row in sorted(rows, key=lambda r: r["id"]):
+        label = _sanitize_name(row["label"])
+        base = f"{PREFIX}Preview {label}"[:NAME_MAX].rstrip() if label else f"{PREFIX}Preview"
+        name = base
+        if name in used:
+            suffix = f" {row['id']}"
+            name = f"{base[:NAME_MAX - len(suffix)].rstrip()}{suffix}"
+        used.add(name)
+        names[row["id"]] = name
+    return names
+
+
+def next_check(reservations: list[dict[str, Any]], now: datetime, cfg: dict[str, int],
+               extra: list[datetime] | None = None) -> datetime:
+    """The next moment this lock needs attention: a code going in or out, a scheduled check, or tomorrow.
+    `extra` are other moments to wake at (preview codes expiring)."""
     tz = now.tzinfo
     daily = datetime.combine(now.date(), time(cfg["daily_check_hour"]), tz)
     candidates = [daily if daily > now else daily + timedelta(days=1)]
@@ -184,6 +204,7 @@ def next_check(reservations: list[dict[str, Any]], now: datetime, cfg: dict[str,
         if afternoon < check_in:
             times.append(afternoon)
         candidates += [t for t in times if t > now]
+    candidates += [t for t in extra or [] if t > now]
     return min(candidates)
 
 
@@ -230,6 +251,8 @@ class LockManager:
     async def tick(self) -> int:
         now = self.s.now()
         self._prepare_backup_codes(now)
+        # Expired visitor codes were removed from the locks long ago; forget the rows after a grace period.
+        self.db.execute("DELETE FROM preview_codes WHERE expires_at < ?", (_utc(now - timedelta(days=2)),))
         # Automated homes, plus homes switched off that still hold our codes (wound down, never added to).
         due = self.db.query(
             "SELECT l.*, p.name AS property_name, p.backup_code, p.backup_used_by, "
@@ -290,17 +313,30 @@ class LockManager:
             problems = [f"missing {n}" for n in final.add] + [f"still has {n}" for n in final.delete]
             return await self._failed(lock, now, reservations, claim, ", ".join(problems), actual)
 
-        self._finish(lock, claim, next_check(reservations, now, cfg), 0, None)
+        self._finish(lock, claim, self._next(lock, reservations, now, cfg), 0, None)
         await self._final_checks(lock, now, reservations, actual, "")
         return True
 
     # ---- helpers ------------------------------------------------------------
 
+    def preview_codes(self, property_id: int, now: datetime) -> dict[str, str]:
+        """Visitor codes valid right now for this home, as {slot name: code}."""
+        rows = self.db.query("SELECT * FROM preview_codes WHERE property_id = ? AND expires_at > ? ORDER BY id",
+                             (property_id, _utc(now)))
+        names = preview_slot_names(rows)
+        return {names[r["id"]]: r["code"] for r in rows}
+
+    def _next(self, lock, reservations: list[dict[str, Any]], now: datetime, cfg: dict[str, int]) -> datetime:
+        expiries = [_dt(r["expires_at"]) for r in self.db.query(
+            "SELECT expires_at FROM preview_codes WHERE property_id = ?", (lock["property_id"],))]
+        return next_check(reservations, now, cfg, expiries)
+
     def _desired(self, lock, reservations, now, actual, cfg) -> dict[str, str]:
         backup = lock["backup_code"] if self.db.get_bool("backup_codes_enabled") else None
         staff = self.staff_codes() if lock["automated"] else None
         if lock["automated"]:
-            return desired_codes(reservations, now, cfg["add_hour"], cfg["early_lead_hours"], backup, staff, actual)
+            return desired_codes(reservations, now, cfg["add_hour"], cfg["early_lead_hours"], backup, staff, actual,
+                                 self.preview_codes(lock["property_id"], now))
         # Automation switched off: add nothing, but guest codes already handed out stay until checkout.
         # Staff codes and HA-BACKUP already in the lock stay: the backup is permanent, and a box that gets
         # unticked by accident must never strip a home of its safety net.
@@ -309,6 +345,7 @@ class LockManager:
         keep.update({n: actual[n] for n in self.staff_codes() if n in actual})
         if BACKUP_NAME in actual:
             keep[BACKUP_NAME] = actual[BACKUP_NAME]
+        keep.update({n: c for n, c in self.preview_codes(lock["property_id"], now).items() if n in actual})
         return keep
 
     async def _note_backup_replaced(self, lock) -> None:
@@ -375,7 +412,7 @@ class LockManager:
     async def _failed(self, lock, now, reservations, claim: str, error: str, actual) -> bool:
         cfg = self.cfg()
         fail_count = (lock["fail_count"] or 0) + 1
-        retry_at = min(now + timedelta(minutes=cfg["retry_minutes"]), next_check(reservations, now, cfg))
+        retry_at = min(now + timedelta(minutes=cfg["retry_minutes"]), self._next(lock, reservations, now, cfg))
         self._finish(lock, claim, retry_at, fail_count, error)
         self.db.log("lock.failed", f"{lock['name']}: {error} (attempt {fail_count})",
                     level="warning", property_id=lock["property_id"])

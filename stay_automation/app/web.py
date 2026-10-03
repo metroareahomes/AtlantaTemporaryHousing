@@ -3,7 +3,7 @@ import json
 import re
 import secrets
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -16,7 +16,7 @@ from fastapi.templating import Jinja2Templates
 
 from .climate import DEFAULTS as CLIMATE_DEFAULTS, LABELS as CLIMATE_LABELS, RANGES as CLIMATE_RANGES
 from .hostaway import HostawayError
-from .locks import DEFAULT_GUEST_MESSAGE, DEFAULTS, LockManager
+from .locks import DEFAULT_GUEST_MESSAGE, DEFAULTS, LockManager, _utc, new_backup_code
 from .reservations import code_status, property_state, within
 from .sync import Syncer
 
@@ -131,6 +131,8 @@ def dashboard_rows(syncer: Syncer, query: str = "") -> list[dict[str, Any]]:
             "next_guest": state.next["guest_name"] if state.next else "",
             "next_in": _fmt(state.next["check_in_at"], tz) if state.next else "",
             "next_out": _fmt(state.next["check_out_at"], tz) if state.next else "",
+            "next_id": state.next["id"] if state.next else None,
+            "code_custom": bool(state.next and state.next.get("override_code")),
             "next_in_sort": state.next["check_in_at"] if state.next else "9999",
             "door_code": (state.next or {}).get("door_code") or "",
             "code": code,
@@ -329,7 +331,104 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None) 
             request, "staff.html",
             staff=db.query("SELECT * FROM staff ORDER BY name"),
             recipients=db.query("SELECT * FROM alert_recipients ORDER BY name"),
+            previews=[{**p, "expires_local": _fmt(p["expires_at"], syncer.tz)} for p in db.query(
+                "SELECT v.*, p.name AS property_name FROM preview_codes v JOIN properties p ON p.id = v.property_id "
+                "WHERE v.expires_at > ? ORDER BY v.expires_at", (_utc(syncer.now()),))],
+            lock_homes=db.query("SELECT id, name FROM properties WHERE lock_automation = 1 AND active = 1 "
+                                "ORDER BY name"),
         )
+
+    # ---- guest code override and visitor (preview) codes -----------------------
+
+    def codes_in_use(property_id: int, *, skip_reservation: int | None = None,
+                     skip_preview: int | None = None) -> set[str]:
+        """Every code this home already hands out, so a new one never collides with it."""
+        used = {r["code"] for r in db.query("SELECT code FROM staff WHERE active = 1")}
+        prop = db.one("SELECT backup_code FROM properties WHERE id = ?", (property_id,))
+        if prop and prop["backup_code"]:
+            used.add(prop["backup_code"])
+        now = syncer.now()
+        for r in syncer.reservations_for(property_id):  # stays that have not ended; past guests do not count
+            if (r["active"] and r["door_code"] and r["id"] != skip_reservation
+                    and datetime.fromisoformat(r["check_out_at"]) > now):
+                used.add(r["door_code"])
+        for v in db.query("SELECT id, code FROM preview_codes WHERE property_id = ? AND expires_at > ?",
+                          (property_id, _utc(syncer.now()))):
+            if v["id"] != skip_preview:
+                used.add(v["code"])
+        return used
+
+    def opens_lock_already(property_id: int, code: str) -> bool:
+        digest = syncer.code_hash(code)
+        for lock in db.query("SELECT code_hashes FROM locks WHERE property_id = ? AND code_hashes IS NOT NULL",
+                             (property_id,)):
+            if digest in json.loads(lock["code_hashes"]):
+                return True
+        return False
+
+    def recheck_locks(property_id: int) -> None:
+        db.execute("UPDATE locks SET next_check_at = NULL WHERE property_id = ?", (property_id,))
+
+    @app.post("/code-override")
+    async def code_override(reservation_id: int = Form(...), code: str = Form("")):
+        """Staff change the code a guest uses (the guest asked for a different one). Blank goes back to Hostaway's."""
+        row = db.one("SELECT r.*, p.id AS pid, p.name AS pname FROM reservations r "
+                     "JOIN properties p ON p.hostaway_listing_id = r.listing_id WHERE r.id = ?", (reservation_id,))
+        if row is None:
+            raise HTTPException(404, "That reservation is not in the list any more")
+        code = code.strip()
+        if code == (row["door_code"] or ""):
+            code = ""  # same as Hostaway's: nothing to override
+        if code:
+            if not code.isdigit() or len(code) != 4:
+                raise HTTPException(400, f"{row['pname']}: the code must be exactly 4 digits")
+            if code != (row["override_code"] or ""):
+                if code in codes_in_use(row["pid"], skip_reservation=reservation_id):
+                    raise HTTPException(400, f"{row['pname']}: {code} is already another guest's, a staff, backup "
+                                             "or visitor code at this home. Pick a different one")
+                if opens_lock_already(row["pid"], code):
+                    raise HTTPException(400, f"{row['pname']}: {code} already opens this lock under another name "
+                                             "(Master, a cleaner...). Pick a different one")
+        db.execute("UPDATE reservations SET override_code = ? WHERE id = ?", (code or None, reservation_id))
+        recheck_locks(row["pid"])
+        db.log("code.override" if code else "code.override_cleared",
+               f"Guest code for {row['guest_name'] or reservation_id} "
+               f"{'changed on the dashboard' if code else 'back to the Hostaway code'}",
+               property_id=row["pid"], reservation_id=reservation_id)
+        return RedirectResponse(".", status_code=303)
+
+    @app.post("/preview-add")
+    async def preview_add(property_id: int = Form(...), label: str = Form(""), code: str = Form(""),
+                          hours: str = Form("24")):
+        prop = db.one("SELECT * FROM properties WHERE id = ?", (property_id,))
+        if prop is None or not prop["lock_automation"] or not prop["active"]:
+            raise HTTPException(400, "Choose a home that has Lock automation ticked on the Properties page")
+        if not hours.strip().isdigit() or not 1 <= int(hours) <= 168:
+            raise HTTPException(400, "Hours must be a whole number from 1 to 168")
+        code = code.strip()
+        if code and (not code.isdigit() or len(code) != 4):
+            raise HTTPException(400, "The code must be exactly 4 digits (leave it blank to pick one)")
+        used = codes_in_use(property_id)
+        if code and (code in used or opens_lock_already(property_id, code)):
+            raise HTTPException(400, f"{code} is already used at this home. Pick a different one or leave it blank")
+        code = code or new_backup_code(lambda c: c in used or opens_lock_already(property_id, c))
+        now = syncer.now()
+        db.execute("INSERT INTO preview_codes(property_id, label, code, expires_at, created_at) VALUES(?, ?, ?, ?, ?)",
+                   (property_id, label.strip()[:60], code, _utc(now + timedelta(hours=int(hours))), _utc(now)))
+        recheck_locks(property_id)
+        db.log("preview.added", f"Visitor code for {label.strip() or 'a visitor'} added to {prop['name']} "
+                                f"for {int(hours)} hours", property_id=property_id)
+        return RedirectResponse("staff", status_code=303)
+
+    @app.post("/preview-delete")
+    async def preview_delete(preview_id: int = Form(...)):
+        row = db.one("SELECT * FROM preview_codes WHERE id = ?", (preview_id,))
+        if row:  # expire it now; the next lock pass removes it from the lock
+            db.execute("UPDATE preview_codes SET expires_at = ? WHERE id = ?", (_utc(syncer.now()), preview_id))
+            recheck_locks(row["property_id"])
+            db.log("preview.removed", f"Visitor code {row['label'] or preview_id} ended early",
+                   property_id=row["property_id"])
+        return RedirectResponse("staff", status_code=303)
 
     @app.post("/staff-save")
     async def staff_save(request: Request):

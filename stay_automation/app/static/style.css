@@ -102,6 +102,11 @@ td strong { font-weight: 700; }
 .code-unknown, .code-no_code { background: var(--warn-soft); color: var(--warn); }
 .doorcode { font: 700 15px/1 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .12em; margin-top: 6px; }
 
+/* ---- inline editors ---- */
+details.edit summary { cursor: pointer; color: var(--accent); font-size: 12px; font-weight: 600; margin-top: 6px; }
+details.edit form { display: flex; gap: 6px; margin-top: 6px; }
+details.edit input { width: 5.5rem; text-align: center; font: 700 14px ui-monospace, Menlo, monospace; letter-spacing: .15em; }
+
 /* ---- cells ---- */
 .stay { display: grid; gap: 6px; }
 .stay .who { font-weight: 600; }

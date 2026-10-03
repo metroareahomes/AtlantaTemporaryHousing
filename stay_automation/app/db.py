@@ -88,6 +88,15 @@ CREATE TABLE IF NOT EXISTS alert_recipients (
     active INTEGER NOT NULL DEFAULT 1
 );
 
+CREATE TABLE IF NOT EXISTS preview_codes (
+    id INTEGER PRIMARY KEY,
+    property_id INTEGER NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
+    label TEXT NOT NULL,
+    code TEXT NOT NULL,
+    expires_at TEXT NOT NULL,   -- UTC, same format as next_check_at; the lock logic removes the code after this
+    created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS thermostats (
     id INTEGER PRIMARY KEY,
     entity_id TEXT NOT NULL UNIQUE,
@@ -112,6 +121,9 @@ CREATE TABLE IF NOT EXISTS thermostats (
 
 # Columns added after the first release; applied to existing databases on start.
 MIGRATIONS = {
+    "reservations": {
+        "override_code": "TEXT",   # a code staff typed for the guest; replaces Hostaway's and survives syncs
+    },
     "properties": {
         "backup_code": "TEXT",
         "backup_used_by": "INTEGER",
