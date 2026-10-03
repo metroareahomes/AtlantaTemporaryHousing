@@ -27,6 +27,9 @@ PREFIX = "HA-"
 BACKUP_NAME = "HA-BACKUP"
 VERIFY_DELAY_SECONDS = 15
 GAP_BETWEEN_LOCKS_SECONDS = 5
+# One Schlage account with ~130 locks already times out when Home Assistant polls it, and a burst of reads
+# makes that worse (HTTP 500 on get_codes). The most overdue locks go first; the rest wait for the next tick.
+MAX_LOCKS_PER_TICK = 15
 NAME_MAX = 32  # a guess, NOT confirmed against Schlage's real limit; check on the CC2 test lock
 
 DEFAULTS = {
@@ -232,6 +235,7 @@ class LockManager:
         self.hostaway = syncer.hostaway
         self.verify_delay = VERIFY_DELAY_SECONDS
         self.gap = GAP_BETWEEN_LOCKS_SECONDS
+        self.max_per_tick = MAX_LOCKS_PER_TICK
         self.read_error = ""
 
     def cfg(self) -> dict[str, int]:
@@ -263,6 +267,7 @@ class LockManager:
             "AND (l.next_check_at IS NULL OR l.next_check_at <= ?) ORDER BY l.next_check_at",
             (_utc(now),),
         )
+        due = due[:self.max_per_tick]
         for lock in due:
             await self.reconcile(lock, self.s.now())
             await asyncio.sleep(self.gap)

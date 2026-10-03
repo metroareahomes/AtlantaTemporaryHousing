@@ -242,6 +242,18 @@ def test_unreadable_lock_at_final_check_triggers_fallback(lm):
     assert lm.db.one("SELECT * FROM guest_notices") is not None
 
 
+def test_a_tick_looks_at_a_limited_number_of_locks(lm):
+    lm.max_per_tick = 2
+    pid = lm.db.one("SELECT id FROM properties")["id"]
+    for n in ("b", "c", "d"):
+        lm.db.execute("INSERT INTO locks(entity_id, name, state, property_id, match_source) "
+                      "VALUES(?, ?, 'locked', ?, 'manual')", (f"lock.{n}", f"Lock {n}", pid))
+        lm.ha.codes[f"lock.{n}"] = {}
+    assert tick_at(lm, at("2030-01-10T08:01")) == 2
+    assert tick_at(lm, at("2030-01-10T08:06")) == 2  # the two left over, never the same ones twice
+    assert tick_at(lm, at("2030-01-10T08:11")) == 0
+
+
 def test_failed_read_says_why_in_the_log(lm):
     lm.s.upsert_reservation(res())
     lm.ha.read_fails = True
