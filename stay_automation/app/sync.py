@@ -233,12 +233,30 @@ class Syncer:
 
     async def handle_webhook(self, payload: Any) -> list[str]:
         """Hostaway unified webhook. The payload only tells us which reservation; the API is the truth."""
+        self.db.set_setting("last_webhook_at", utcnow())  # something arrived, whatever it turns out to be
         reservation_id = webhook_reservation_id(payload, self.settings.hostaway_account_id)
         if reservation_id is None:
+            # Say what it was (field names only, no guest data) so a "never" can be told from "ignored".
+            self.db.log("webhook.ignored", "Webhook received but not a reservation I can use: " + _shape(payload),
+                        level="warning")
             return []
         raw = await self.hostaway.reservation(reservation_id)
-        self.db.set_setting("last_webhook_at", utcnow())
+        self.db.log("webhook.received", f"Webhook for reservation {reservation_id}")
         return self.upsert_reservation(raw)
+
+
+def _shape(payload: Any) -> str:
+    """Top-level field names of a webhook body, plus its event and object labels. Never values like names."""
+    for _ in range(2):
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except json.JSONDecodeError:
+                return "not JSON"
+    if not isinstance(payload, dict):
+        return type(payload).__name__
+    labels = " ".join(f"{k}={str(payload[k])[:40]}" for k in ("object", "event") if k in payload)
+    return f"fields: {', '.join(sorted(payload)[:15])}" + (f"; {labels}" if labels else "")
 
 
 def webhook_reservation_id(payload: Any, account_id: str) -> int | None:

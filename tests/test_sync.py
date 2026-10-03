@@ -90,6 +90,14 @@ def test_manual_assignment_survives_rediscovery(syncer):
     assert again["property_id"] == other and again["match_source"] == "manual"
 
 
+def test_unusable_webhook_is_logged_without_guest_data(syncer):
+    body = {"object": "message", "event": "message.received", "guestName": "Secret Person"}
+    assert run(syncer.handle_webhook(json.dumps(body))) == []
+    note = syncer.db.one("SELECT message FROM events WHERE kind = 'webhook.ignored'")["message"]
+    assert "object=message" in note and "guestName" in note and "Secret Person" not in note
+    assert syncer.db.get_setting("last_webhook_at")  # it did arrive
+
+
 def test_sync_and_webhook_record_changes(syncer):
     run(syncer.import_listings())
     assert run(syncer.sync_reservations()) == 1
