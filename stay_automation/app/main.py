@@ -60,6 +60,10 @@ async def consume_webhooks(queue: asyncio.Queue, syncer: Syncer) -> None:
 def build():
     settings = load_settings()
     db = DB(settings.db_path)
+    if not db.one("SELECT 1 FROM events LIMIT 1"):
+        db.log("db.fresh", "Started with an EMPTY database: lock automation, backup codes and staff all start "
+                           "from scratch. If you expected existing settings, this is a new install or a second "
+                           "copy of the add-on (check Home Assistant for two 'Stays' add-ons).", level="warning")
     hostaway = HostawayClient(
         settings.hostaway_account_id, settings.hostaway_api_key,
         load_token=lambda: db.get_setting("hostaway_token"),

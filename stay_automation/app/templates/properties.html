@@ -1,6 +1,35 @@
 {% extends "base.html" %}{% set active = 'properties' %}
 {% block body %}
 <form method="post" action="properties-save">
+<h2>Properties</h2>
+<p class="sub">One row per home. Tick <strong>Lock automation</strong> on a home that shows a lock to start managing its codes.
+  Each home keeps a permanent backup code (HA-BACKUP) on its lock; edit it here to change it. Only what you change
+  on this page is saved.</p>
+<div class="scroll">
+<table>
+  <thead><tr><th>Property</th><th>Lock</th><th>Lock automation</th><th>Backup code</th><th>Active</th></tr></thead>
+  <tbody>
+  {% for p in properties %}
+    <tr class="{{ 'problem' if p.lock_automation and p.lock_list|selectattr('state', 'equalto', 'unavailable')|list }}">
+      <td><input name="name_{{ p.id }}" value="{{ p.name }}">
+        <div class="sub">{{ p.hostaway_name }} · #{{ p.hostaway_listing_id }}</div></td>
+      <td>{% for l in p.lock_list %}<div>{{ l.name }} <span class="sub">· {{ l.state }}</span></div>
+          {% else %}<span class="sub">no lock</span>{% endfor %}</td>
+      <td><input type="checkbox" name="auto_{{ p.id }}" {{ 'checked' if p.lock_automation }}>
+        <input type="hidden" name="was_auto_{{ p.id }}" value="{{ 1 if p.lock_automation else 0 }}">
+        {% if p.lock_list and not p.lock_automation %}<div class="sub">ready to activate</div>{% endif %}</td>
+      <td><input name="backup_{{ p.id }}" value="{{ p.backup_code or '' }}" inputmode="numeric" maxlength="4"
+                 style="width:5rem" placeholder="—">
+        <input type="hidden" name="was_backup_{{ p.id }}" value="{{ p.backup_code or '' }}"></td>
+      <td><input type="checkbox" name="active_{{ p.id }}" {{ 'checked' if p.active }}>
+        <input type="hidden" name="was_active_{{ p.id }}" value="{{ 1 if p.active else 0 }}"></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+<p><button class="primary">Save</button></p>
+
 <h2>Locks</h2>
 <p class="sub">Locks are found in Home Assistant automatically and matched by name. Fix any that are wrong or unmatched; your choice is kept.</p>
 <div class="scroll">
@@ -14,26 +43,9 @@
       <td><select name="lock_{{ l.id }}">
         <option value="">— not assigned —</option>
         {% for p in properties %}<option value="{{ p.id }}" {{ 'selected' if p.id == l.property_id }}>{{ p.name }}</option>{% endfor %}
-      </select></td>
+      </select>
+        <input type="hidden" name="was_lock_{{ l.id }}" value="{{ l.property_id or '' }}"></td>
       <td class="sub">{{ l.match_source or '' }}</td>
-    </tr>
-  {% endfor %}
-  </tbody>
-</table>
-</div>
-
-<h2>Properties</h2>
-<p class="sub">From Hostaway. "Lock automation" lets this system add and remove guest codes. Turn it on per home, starting with the pilot.</p>
-<div class="scroll">
-<table>
-  <thead><tr><th>Name</th><th>Hostaway name</th><th>Active</th><th>Lock automation</th></tr></thead>
-  <tbody>
-  {% for p in properties %}
-    <tr>
-      <td><input name="name_{{ p.id }}" value="{{ p.name }}"></td>
-      <td class="sub">{{ p.hostaway_name }} · #{{ p.hostaway_listing_id }}</td>
-      <td><input type="checkbox" name="active_{{ p.id }}" {{ 'checked' if p.active }}></td>
-      <td><input type="checkbox" name="auto_{{ p.id }}" {{ 'checked' if p.lock_automation }}></td>
     </tr>
   {% endfor %}
   </tbody>

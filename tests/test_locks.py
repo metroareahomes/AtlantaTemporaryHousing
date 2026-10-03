@@ -1,4 +1,5 @@
 import asyncio
+import json
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -286,12 +287,28 @@ def test_switched_off_home_keeps_current_guest_code_then_cleans_up(lm):
     lm.db.execute("UPDATE properties SET lock_automation = 0")
     lm.db.execute("UPDATE locks SET next_check_at = NULL")  # what saving the Properties page does
     tick_at(lm, at("2030-01-10T09:00"))
-    assert set(lm.ha.codes["lock.a"]) == {"Master", "HA-Ann Lee"}  # guest keeps their code, backup goes
+    # guest keeps their code, and the permanent backup stays: an unticked box must not strip the home
+    assert set(lm.ha.codes["lock.a"]) == {"Master", "HA-Ann Lee", BACKUP_NAME}
+    backup = lm.ha.codes["lock.a"][BACKUP_NAME]
     tick_at(lm, at("2030-01-15T10:01"))
-    assert lm.ha.codes["lock.a"] == {"Master": "9999"}  # removed at checkout
+    assert lm.ha.codes["lock.a"] == {"Master": "9999", BACKUP_NAME: backup}  # guest removed at checkout
     tick_at(lm, at("2030-01-16T08:01"))
-    assert lm.ha.codes["lock.a"] == {"Master": "9999"}  # nothing new is added
+    assert lm.ha.codes["lock.a"] == {"Master": "9999", BACKUP_NAME: backup}  # nothing new is added
     assert not [t for t, _ in lm.ha.notes if "NOT confirmed" in t]  # and no guest fallback
+
+
+def test_backup_that_keeps_getting_replaced_raises_one_alert(lm):
+    """Two copies of the add-on (or someone in the Schlage app) fighting over HA-BACKUP must be visible."""
+    lm.db.set_setting("backup_codes_enabled", "1")
+    tick_at(lm, at("2030-01-10T08:01"))
+    assert BACKUP_NAME in lm.ha.codes["lock.a"]
+    for minute in (10, 20, 30, 40):
+        lm.ha.codes["lock.a"][BACKUP_NAME] = f"12{minute}"  # someone else rewrites it
+        lm.db.execute("UPDATE locks SET next_check_at = NULL")
+        tick_at(lm, at(f"2030-01-10T08:{minute}"))
+    alerts = [t for t, _ in lm.ha.notes if t.startswith("HA-BACKUP keeps changing")]
+    assert len(alerts) == 1
+    assert lm.ha.codes["lock.a"][BACKUP_NAME] == lm.db.one("SELECT backup_code FROM properties")["backup_code"]
 
 
 def test_backup_code_never_equals_a_code_already_in_the_lock(lm, monkeypatch):
@@ -409,8 +426,25 @@ def test_staff_save_rejects_bad_input_without_dropping_anyone():
     assert {x["name"]: x["code"] for x in db.query("SELECT * FROM staff")} == {"Cleaner": "1357", "Handyman": "9753"}
 
 
-def test_legacy_id_named_slot_is_replaced_by_guest_name(lm):
-    lm.ha.codes["lock.a"]["HA-1"] = "4821"  # written by the previous version
+def test_legacy_id_named_slot_is_kept_until_checkout_not_swapped_mid_stay(lm):
+    lm.ha.codes["lock.a"]["HA-1"] = "4821"  # written by the previous version, right code
+    lm.s.upsert_reservation(res())
+    removed = []
+    real_delete = lm.ha.delete_code
+
+    async def spy(entity_id, name):
+        removed.append(name)
+        await real_delete(entity_id, name)
+
+    lm.ha.delete_code = spy
+    tick_at(lm, at("2030-01-10T08:01"))
+    assert lm.ha.codes["lock.a"] == {"Master": "9999", "HA-1": "4821"} and removed == []  # untouched
+    tick_at(lm, at("2030-01-15T10:01"))
+    assert lm.ha.codes["lock.a"] == {"Master": "9999"}  # still cleaned up at checkout
+
+
+def test_legacy_slot_with_a_stale_code_is_replaced(lm):
+    lm.ha.codes["lock.a"]["HA-1"] = "0000"  # Hostaway changed the code since
     lm.s.upsert_reservation(res())
     tick_at(lm, at("2030-01-10T08:01"))
     assert lm.ha.codes["lock.a"] == {"Master": "9999", "HA-Ann Lee": "4821"}
@@ -510,3 +544,101 @@ def test_staff_duplicate_codes_and_names_are_refused():
                                                  "name_new": "Old", "code_new": "9999", "active_new": "on"})
     assert same_name.status_code == 400 and "already in the list" in same_name.text
     assert db.one("SELECT COUNT(*) n FROM staff")["n"] == 2
+
+
+def _client(lm):
+    from fastapi.testclient import TestClient
+    from app.web import create_app
+    return TestClient(create_app(lm.s), follow_redirects=False)
+
+
+def _pid(lm):
+    return lm.db.one("SELECT id FROM properties")["id"]
+
+
+def _lock_id(lm):
+    return lm.db.one("SELECT id FROM locks")["id"]
+
+
+def _form(lm, **over):
+    """What the Properties page posts for the single test home when nothing was touched."""
+    pid, p = _pid(lm), lm.db.one("SELECT * FROM properties")
+    data = {f"name_{pid}": p["name"], f"was_auto_{pid}": str(p["lock_automation"]),
+            f"was_active_{pid}": str(p["active"]), f"was_backup_{pid}": p["backup_code"] or "",
+            f"backup_{pid}": p["backup_code"] or "",
+            f"was_lock_{_lock_id(lm)}": str(p["id"]), f"lock_{_lock_id(lm)}": str(p["id"])}
+    if p["lock_automation"]:
+        data[f"auto_{pid}"] = "on"
+    if p["active"]:
+        data[f"active_{pid}"] = "on"
+    data.update(over)
+    return data
+
+
+def test_properties_page_shows_lock_automation_and_backup_in_one_row(lm):
+    lm.db.execute("UPDATE properties SET backup_code = '4321'")
+    page = _client(lm).get("/properties")
+    assert page.status_code == 200
+    assert "Maple front" in page.text and 'value="4321"' in page.text and f'name="auto_{_pid(lm)}"' in page.text
+
+
+def test_saving_a_stale_page_does_not_flip_other_changes(lm):
+    """The page was loaded with automation OFF; meanwhile it was switched ON. Saving that old page (box untouched)
+    must not turn it back off."""
+    pid, c = _pid(lm), _client(lm)
+    stale = _form(lm)
+    stale.pop(f"auto_{pid}")
+    stale[f"was_auto_{pid}"] = "0"
+    assert c.post("/properties-save", data=stale).status_code == 303
+    assert lm.db.one("SELECT lock_automation FROM properties")["lock_automation"] == 1
+
+
+def test_unticking_automation_is_applied_and_logged(lm):
+    pid, c = _pid(lm), _client(lm)
+    data = _form(lm)
+    data.pop(f"auto_{pid}")  # user unticks the box
+    assert c.post("/properties-save", data=data).status_code == 303
+    assert lm.db.one("SELECT lock_automation FROM properties")["lock_automation"] == 0
+    assert lm.db.one("SELECT 1 FROM events WHERE kind = 'auto.off' AND property_id = ?", (pid,))
+
+
+def test_backup_code_can_be_edited_and_is_validated(lm):
+    pid, c = _pid(lm), _client(lm)
+    lm.db.execute("UPDATE properties SET backup_code = '4321', backup_used_by = 7")
+    assert c.post("/properties-save", data=_form(lm, **{f"backup_{pid}": "12a4"})).status_code == 400
+    assert c.post("/properties-save", data=_form(lm, **{f"backup_{pid}": "123"})).status_code == 400
+    assert c.post("/properties-save", data=_form(lm, **{f"backup_{pid}": "9999"})).status_code == 303  # no lock read yet
+    lm.db.execute("UPDATE properties SET backup_code = '4321'")
+    lm.db.execute("UPDATE locks SET code_hashes = ?", (json.dumps([lm.s.code_hash("9999")]),))
+    assert c.post("/properties-save", data=_form(lm, **{f"backup_{pid}": "9999"})).status_code == 400  # = Master
+    assert c.post("/properties-save", data=_form(lm, **{f"backup_{pid}": "2468"})).status_code == 303
+    row = lm.db.one("SELECT backup_code, backup_used_by FROM properties")
+    assert row["backup_code"] == "2468" and row["backup_used_by"] is None
+
+
+def test_edited_backup_code_reaches_the_lock(lm):
+    lm.db.set_setting("backup_codes_enabled", "1")
+    tick_at(lm, at("2030-01-10T08:01"))
+    pid = _pid(lm)
+    assert _client(lm).post("/properties-save", data=_form(lm, **{f"backup_{pid}": "2468"})).status_code == 303
+    tick_at(lm, at("2030-01-10T08:10"))
+    assert lm.ha.codes["lock.a"][BACKUP_NAME] == "2468"
+
+
+def test_booking_without_door_code_logs_which_fields_exist_without_values(lm):
+    raw = {**res(code=None), "arrivalDate": "2030-01-10", "customFieldValues": [
+        {"customField": {"name": "Guest door code"}, "value": "7788"}], "keyCode": "5566"}
+    lm.s.now = lambda: at("2030-01-09T12:00")
+    lm.s.upsert_reservation(raw)
+    lm.s.upsert_reservation(raw)
+    events = lm.db.query("SELECT message FROM events WHERE kind = 'hostaway.nocode'")
+    assert len(events) == 1  # once per reservation
+    assert "keyCode" in events[0]["message"] and "Guest door code" in events[0]["message"]
+    assert "5566" not in events[0]["message"] and "7788" not in events[0]["message"]
+
+
+def test_rejected_entry_shows_a_readable_page(lm):
+    pid = _pid(lm)
+    r = _client(lm).post("/properties-save", data=_form(lm, **{f"backup_{pid}": "12"}))
+    assert r.status_code == 400
+    assert "text/html" in r.headers["content-type"] and "exactly 4 digits" in r.text and "not saved" in r.text

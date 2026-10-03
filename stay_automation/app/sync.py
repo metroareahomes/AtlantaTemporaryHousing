@@ -156,9 +156,31 @@ class Syncer:
             (property_id,),
         )
 
+    def _note_missing_code(self, raw: dict[str, Any], new: dict[str, Any]) -> None:
+        """A booking arriving soon has no doorCode in the Hostaway API. Record which other fields carry a value
+        (names only, never the values) so we can tell whether Hostaway keeps the code somewhere else."""
+        if not new["active"] or new["door_code"]:
+            return
+        if new["arrival_date"] > (self.now().date() + timedelta(days=2)).isoformat():
+            return
+        if self.db.one("SELECT 1 FROM events WHERE kind = 'hostaway.nocode' AND reservation_id = ?", (new["id"],)):
+            return
+        words = ("code", "lock", "access", "pin")
+        hints = [k for k, v in raw.items() if k != "doorCode" and v not in (None, "", [], {}, 0)
+                 and any(w in k.lower() for w in words)]
+        for field in raw.get("customFieldValues") or []:
+            name = ((field or {}).get("customField") or {}).get("name") or ""
+            if (field or {}).get("value") and any(w in name.lower() for w in words):
+                hints.append(f"custom field '{name}'")
+        self.db.log("hostaway.nocode",
+                    f"Reservation {new['id']} has no doorCode in the Hostaway API. "
+                    f"Other code-like fields with a value: {', '.join(hints) if hints else 'none'}",
+                    level="warning", reservation_id=new["id"])
+
     def upsert_reservation(self, raw: dict[str, Any]) -> list[str]:
         new = normalize(raw, self.tz, self.settings.default_checkin_hour,
                         self.settings.default_checkout_hour)
+        self._note_missing_code(raw, new)
         old = self.db.one("SELECT * FROM reservations WHERE id = ?", (new["id"],))
         what = changes(old, new)
         if old is None:

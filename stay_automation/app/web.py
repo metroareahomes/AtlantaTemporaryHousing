@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Form, HTTPException, Request
+from fastapi.exception_handlers import http_exception_handler
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -127,6 +129,17 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None) 
             request, "error.html",
             {"message": str(exc), "last_sync": "", "last_webhook": ""}, status_code=502)
 
+    @app.exception_handler(StarletteHTTPException)
+    async def bad_input(request: Request, exc: StarletteHTTPException):
+        """A rejected form entry (wrong code length, duplicate name...) gets a readable page, not bare JSON.
+        Webhooks and other machine callers keep the normal response."""
+        if exc.status_code != 400 or "webhook" in request.url.path:
+            return await http_exception_handler(request, exc)
+        return templates.TemplateResponse(
+            request, "error.html",
+            {"title": "That was not saved", "message": exc.detail, "last_sync": "", "last_webhook": ""},
+            status_code=400)
+
     def page(request: Request, name: str, **ctx: Any) -> HTMLResponse:
         return templates.TemplateResponse(request, name, {
             "last_sync": _fmt(db.get_setting("last_sync_at"), syncer.tz),
@@ -145,28 +158,86 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None) 
     async def properties(request: Request):
         props = db.query("SELECT * FROM properties ORDER BY name")
         locks = db.query("SELECT * FROM locks ORDER BY name")
+        by_property: dict[int, list[dict]] = {}
+        for lock in locks:
+            if lock["property_id"]:
+                by_property.setdefault(lock["property_id"], []).append(lock)
+        for prop in props:
+            prop["lock_list"] = by_property.get(prop["id"], [])
         return page(request, "properties.html", properties=props, locks=locks)
 
     @app.post("/properties-save")
     async def properties_save(request: Request):
+        """Apply only what was changed on this page (each field is posted next to the value it was shown with),
+        so saving a stale tab, or a page that loaded before someone else's change, cannot flip other homes."""
         form = await request.form()
-        for prop in db.query("SELECT id FROM properties"):
-            pid = prop["id"]
+        props = db.query("SELECT * FROM properties")
+        taken = {p["backup_code"] for p in props if p["backup_code"]}
+        updates: list[tuple[str, tuple]] = []
+        toggles: list[tuple[str, str, int]] = []  # (event kind, message, property id)
+        touched: set[int] = set()
+
+        # Work out and validate everything first, so a bad entry saves nothing.
+        for p in props:
+            pid = p["id"]
+            if f"was_auto_{pid}" not in form:
+                continue  # this row was not on the page that was submitted
+            sets: list[str] = []
+            args: list[Any] = []
             name = str(form.get(f"name_{pid}", "")).strip()
-            if name:
-                db.execute(
-                    "UPDATE properties SET name = ?, active = ?, lock_automation = ? WHERE id = ?",
-                    (name, 1 if form.get(f"active_{pid}") else 0,
-                     1 if form.get(f"auto_{pid}") else 0, pid),
-                )
+            if name and name != p["name"]:
+                sets.append("name = ?")
+                args.append(name)
+            for field, column, label in (("auto", "lock_automation", "Lock automation"), ("active", "active", "Active")):
+                now_on = 1 if form.get(f"{field}_{pid}") else 0
+                was_on = 1 if form.get(f"was_{field}_{pid}") == "1" else 0
+                if now_on != was_on and now_on != p[column]:
+                    sets.append(f"{column} = ?")
+                    args.append(now_on)
+                    toggles.append((f"{field}.{'on' if now_on else 'off'}",
+                                    f"{label} turned {'ON' if now_on else 'OFF'} for {p['name']} (Properties page)",
+                                    pid))
+                    touched.add(pid)
+            backup = str(form.get(f"backup_{pid}", "")).strip()
+            if backup and backup != str(form.get(f"was_backup_{pid}", "")).strip() and backup != (p["backup_code"] or ""):
+                if not backup.isdigit() or len(backup) != 4:
+                    raise HTTPException(400, f"{p['name']}: the backup code must be exactly 4 digits")
+                if backup in taken:
+                    raise HTTPException(400, f"{p['name']}: backup code {backup} is already used by another home")
+                in_lock: set[str] = set()
+                for lock in db.query("SELECT code_hashes FROM locks WHERE property_id = ? AND code_hashes IS NOT NULL",
+                                     (pid,)):
+                    in_lock |= set(json.loads(lock["code_hashes"]))
+                if syncer.code_hash(backup) in in_lock:
+                    raise HTTPException(400, f"{p['name']}: backup code {backup} already opens this lock under "
+                                             "another name (Master, a cleaner, a guest). Pick a different one")
+                sets += ["backup_code = ?", "backup_used_by = NULL"]
+                args.append(backup)
+                taken.add(backup)
+                toggles.append(("backup.edited", f"Backup code changed for {p['name']} (Properties page)", pid))
+                touched.add(pid)
+            if sets:
+                updates.append((f"UPDATE properties SET {', '.join(sets)} WHERE id = ?", (*args, pid)))
+
+        for sql, args in updates:
+            db.execute(sql, args)
+        for kind, message, pid in toggles:
+            db.log(kind, message, level="warning" if kind == "auto.off" else "info", property_id=pid)
+
         for lock in db.query("SELECT id, property_id FROM locks"):
-            value = str(form.get(f"lock_{lock['id']}", ""))
-            new_pid = int(value) if value.isdigit() else None
-            if new_pid != lock["property_id"]:
-                syncer.assign_lock(lock["id"], new_pid)
-        # Homes switched on (or edited) get their locks looked at on the next pass.
-        db.execute("UPDATE locks SET next_check_at = NULL WHERE property_id IN "
-                   "(SELECT id FROM properties WHERE lock_automation = 1)")
+            if f"was_lock_{lock['id']}" not in form:
+                continue
+            value, was = str(form.get(f"lock_{lock['id']}", "")), str(form.get(f"was_lock_{lock['id']}", ""))
+            if value != was:
+                new_pid = int(value) if value.isdigit() else None
+                if new_pid != lock["property_id"]:
+                    syncer.assign_lock(lock["id"], new_pid)
+                    touched |= {x for x in (new_pid, lock["property_id"]) if x}
+
+        # Only the homes that changed get their locks looked at again (each look is a slow Schlage call).
+        if touched:
+            db.execute(f"UPDATE locks SET next_check_at = NULL WHERE property_id IN ({', '.join('?' for _ in touched)})",
+                       tuple(touched))
         db.log("properties.saved", "Property settings saved")
         return RedirectResponse("properties", status_code=303)
 

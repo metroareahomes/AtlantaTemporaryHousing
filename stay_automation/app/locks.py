@@ -78,29 +78,39 @@ def add_time(r: dict[str, Any], add_hour: int, lead_hours: int) -> datetime:
     return min(morning, check_in - timedelta(hours=lead_hours))
 
 
-def slot_names(reservations: list[dict[str, Any]], add_hour: int, lead_hours: int) -> dict[int, str]:
+def slot_names(reservations: list[dict[str, Any]], add_hour: int, lead_hours: int,
+               actual: dict[str, str] | None = None) -> dict[int, str]:
     """Lock slot name for every booking with a code, stable for the whole stay.
 
     The earlier booking keeps the plain HA-<guest> name; a later booking whose code window overlaps it (same
     guest name, e.g. a repeat guest) gets the reservation id appended. Decided from the bookings alone, never
-    from "who is in the lock right now", so a slot is not renamed (deleted and re-added) mid-stay."""
+    from "who is in the lock right now", so a slot is not renamed (deleted and re-added) mid-stay.
+
+    One exception, for upgrades: a slot the previous version wrote (HA-<reservation id>) that already holds the
+    right code is kept as is until checkout, so a guest in the house is never left without a code while it is
+    swapped for the new name."""
     live = sorted((r for r in reservations if r["active"] and r["door_code"]),
                   key=lambda r: (_dt(r["check_in_at"]), r["id"]))
     names: dict[int, str] = {}
     windows: list[tuple[str, datetime, datetime]] = []
     for r in live:
         start, end = add_time(r, add_hour, lead_hours), _dt(r["check_out_at"])
-        taken = {n for n, s, e in windows if s < end and start < e}
-        names[r["id"]] = code_name(r, taken)
+        legacy = f"{PREFIX}{r['id']}"
+        if actual is not None and actual.get(legacy) == r["door_code"]:
+            names[r["id"]] = legacy
+        else:
+            taken = {n for n, s, e in windows if s < end and start < e}
+            names[r["id"]] = code_name(r, taken)
         windows.append((names[r["id"]], start, end))
     return names
 
 
 def desired_codes(reservations: list[dict[str, Any]], now: datetime, add_hour: int, lead_hours: int,
-                  backup_code: str | None = None, staff: dict[str, str] | None = None) -> dict[str, str]:
+                  backup_code: str | None = None, staff: dict[str, str] | None = None,
+                  actual: dict[str, str] | None = None) -> dict[str, str]:
     """Our codes that should be in the lock at `now`, as {name: code}."""
     out: dict[str, str] = {}
-    names = slot_names(reservations, add_hour, lead_hours)
+    names = slot_names(reservations, add_hour, lead_hours, actual)
     for r in reservations:
         if r["active"] and r["door_code"] and add_time(r, add_hour, lead_hours) <= now < _dt(r["check_out_at"]):
             out[names[r["id"]]] = r["door_code"]
@@ -252,6 +262,8 @@ class LockManager:
         first = plan(desired, actual, managed)
         if BACKUP_NAME in first.elsewhere:
             self._retire_backup(lock)
+        if BACKUP_NAME in first.delete and BACKUP_NAME in first.add:
+            await self._note_backup_replaced(lock)
         if not first.ok:
             for name in first.delete:
                 await self._try(lock, "remove", name, self.ha.delete_code(lock["entity_id"], name))
@@ -288,22 +300,33 @@ class LockManager:
         backup = lock["backup_code"] if self.db.get_bool("backup_codes_enabled") else None
         staff = self.staff_codes() if lock["automated"] else None
         if lock["automated"]:
-            return desired_codes(reservations, now, cfg["add_hour"], cfg["early_lead_hours"], backup, staff)
+            return desired_codes(reservations, now, cfg["add_hour"], cfg["early_lead_hours"], backup, staff, actual)
         # Automation switched off: add nothing, but guest codes already handed out stay until checkout.
-        # Staff codes already in the lock stay (cleaners must not lose access); the backup goes unless
-        # a guest was given it and is still staying.
-        keep = {n: c for n, c in desired_codes(reservations, now, cfg["add_hour"], cfg["early_lead_hours"]).items()
-                if n in actual}
+        # Staff codes and HA-BACKUP already in the lock stay: the backup is permanent, and a box that gets
+        # unticked by accident must never strip a home of its safety net.
+        keep = {n: c for n, c in desired_codes(reservations, now, cfg["add_hour"], cfg["early_lead_hours"],
+                                               actual=actual).items() if n in actual}
         keep.update({n: actual[n] for n in self.staff_codes() if n in actual})
-        if backup and BACKUP_NAME in actual and self._backup_guest_staying(lock, now):
-            keep[BACKUP_NAME] = backup
+        if BACKUP_NAME in actual:
+            keep[BACKUP_NAME] = actual[BACKUP_NAME]
         return keep
 
-    def _backup_guest_staying(self, lock, now: datetime) -> bool:
-        if not lock["backup_used_by"]:
-            return False
-        r = self.db.one("SELECT check_out_at FROM reservations WHERE id = ?", (lock["backup_used_by"],))
-        return r is not None and _dt(r["check_out_at"]) > now
+    async def _note_backup_replaced(self, lock) -> None:
+        """The lock held an HA-BACKUP with a different code than ours, so we are overwriting it. Once is normal
+        (an older version's code); again and again means something else is changing it: a second copy of this
+        add-on with its own database, or someone editing the code in the Schlage app."""
+        self.db.log("backup.replaced", f"HA-BACKUP on {lock['name']} had a different code; replaced it",
+                    level="warning", property_id=lock["property_id"])
+        since = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat(timespec="seconds")
+        n = self.db.one("SELECT COUNT(*) AS n FROM events WHERE kind = 'backup.replaced' AND property_id = ? "
+                        "AND at >= ?", (lock["property_id"], since))["n"]
+        if n >= 3:
+            await self.alert(
+                f"HA-BACKUP keeps changing: {lock['property_name']}",
+                f"The backup code on {lock['name']} was replaced {n} times in 24 hours. Something else is "
+                "changing it: check Home Assistant for a second 'Stays' / Stay Automation add-on (only one "
+                "should run), or whether someone is editing the code in the Schlage app.",
+                key=f"backupflap:{lock['id']}:{self.s.now().date()}")
 
     def _log_present_elsewhere(self, lock, names: list[str], reservations: list[dict[str, Any]],
                                cfg: dict[str, int]) -> None:

@@ -12,3 +12,7 @@ __pycache__/
 *.log
 docs/
 .gh_token
+
+# client conversation / debugging notes (may contain secrets)
+chat_history.txt
+gpt_work.txt

@@ -1,7 +1,7 @@
 {% extends "base.html" %}{% set active = '' %}
 {% block body %}
-<h2>Could not reach Hostaway</h2>
+<h2>{{ title or "Could not reach Hostaway" }}</h2>
 <p class="warn">{{ message }}</p>
 <p class="sub">Nothing was changed. Fix the problem above, then go back and try again.</p>
-<p><a href=".">Back to Status</a></p>
+<p><a href="javascript:history.back()">Back to the form</a> · <a href=".">Status</a></p>
 {% endblock %}
