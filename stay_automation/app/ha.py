@@ -52,6 +52,53 @@ class HAClient:
             if s["entity_id"] in wanted
         ]
 
+    async def climate_states(self) -> list[dict[str, Any]]:
+        """Every climate.* entity with its readings. state is the HVAC mode, or 'unavailable' when offline."""
+        resp = await self._http.get("/api/states")
+        resp.raise_for_status()
+        out = []
+        for s in resp.json():
+            if not s["entity_id"].startswith("climate."):
+                continue
+            a = s.get("attributes") or {}
+            out.append({
+                "entity_id": s["entity_id"],
+                "name": a.get("friendly_name", s["entity_id"]),
+                "state": s["state"],
+                "current_temp": a.get("current_temperature"),
+                "target_temp": a.get("temperature"),
+                "target_low": a.get("target_temp_low"),
+                "target_high": a.get("target_temp_high"),
+                "hvac_action": a.get("hvac_action"),
+                "fan_mode": a.get("fan_mode"),
+            })
+        return out
+
+    async def set_temperature(self, entity_id: str, *, temperature: float | None = None,
+                              low: float | None = None, high: float | None = None) -> None:
+        payload: dict[str, Any] = {"entity_id": entity_id}
+        if temperature is not None:
+            payload["temperature"] = temperature
+        if low is not None:
+            payload["target_temp_low"] = low
+        if high is not None:
+            payload["target_temp_high"] = high
+        await self._post("/api/services/climate/set_temperature", payload)
+
+    async def lock_batteries(self) -> dict[str, int]:
+        """Battery percent per Schlage lock, from the battery sensor on the same device. Empty if unavailable."""
+        template = (
+            "{% set ns = namespace(items=[]) %}"
+            "{% for l in integration_entities('schlage') | select('match', 'lock[.]') %}"
+            "{% for s in device_entities(device_id(l)) | select('match', 'sensor[.]') %}"
+            "{% if state_attr(s, 'device_class') == 'battery' and states(s) | is_number %}"
+            "{% set ns.items = ns.items + [[l, states(s) | float | round(0) | int]] %}"
+            "{% endif %}{% endfor %}{% endfor %}{{ ns.items | tojson }}"
+        )
+        body = await self._post("/api/template", {"template": template})
+        return {item[0]: int(item[1]) for item in body if isinstance(item, list) and len(item) == 2} \
+            if isinstance(body, list) else {}
+
     async def get_codes(self, entity_id: str) -> dict[str, str]:
         """Access codes in the lock as {name: code}."""
         body = await self._post(

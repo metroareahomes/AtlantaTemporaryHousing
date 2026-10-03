@@ -1,5 +1,5 @@
 name: Stay Automation
-version: "0.3.0"
+version: "0.4.0"
 slug: stay_automation
 description: Hostaway reservations drive Schlage lock codes and Honeywell thermostats
 arch:

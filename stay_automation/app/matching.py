@@ -5,6 +5,8 @@ import re
 NOISE = {
     "new", "encode", "lock", "schlage", "front", "side", "back", "door", "main",
     "pkwy", "parkway", "rd", "road", "st", "street", "dr", "drive", "ln", "lane",
+    # thermostat names
+    "thermostat", "hvac", "climate", "upstairs", "downstairs", "ecobee", "honeywell", "t5", "t6", "t9",
 }
 MONTH_TAG = re.compile(r"^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\d{0,4}$")
 

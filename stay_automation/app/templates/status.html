@@ -1,19 +1,41 @@
 {% extends "base.html" %}{% set active = 'status' %}
 {% block body %}
-<div class="summary">
-  <span class="pill bad">{{ problems }} need attention</span>
-  <span class="pill">{{ counts.arriving_today + counts.turnover_today }} arriving today</span>
-  <span class="pill">{{ counts.departing_today + counts.turnover_today }} departing today</span>
-  <span class="pill">{{ counts.occupied }} occupied</span>
-  <span class="pill">{{ counts.vacant }} vacant</span>
+<div class="page-head">
+  <h1>Command center</h1>
+  <p>Every home at a glance: guests, door codes, locks and climate.</p>
+</div>
+
+<div class="kpis">
+  <a class="kpi bad {{ 'zero' if not problems }} {{ 'on' if show == 'attention' }}" href="?show=attention&sort={{ sort }}">
+    <div class="n">{{ problems }}</div><div class="l">Need attention</div></a>
+  <a class="kpi {{ 'on' if show == 'arriving' }}" href="?show=arriving&sort={{ sort }}">
+    <div class="n">{{ counts.arriving_today + counts.turnover_today }}</div><div class="l">Arriving today</div></a>
+  <a class="kpi {{ 'on' if show == 'departing' }}" href="?show=departing&sort={{ sort }}">
+    <div class="n">{{ counts.departing_today + counts.turnover_today }}</div><div class="l">Departing today</div></a>
+  <a class="kpi {{ 'on' if show == 'occupied' }}" href="?show=occupied&sort={{ sort }}">
+    <div class="n">{{ counts.occupied }}</div><div class="l">Occupied</div></a>
+  <a class="kpi {{ 'on' if show == 'vacant' }}" href="?show=vacant&sort={{ sort }}">
+    <div class="n">{{ counts.vacant }}</div><div class="l">Vacant</div></a>
+  <div class="kpi auto">
+    <div class="n">{{ automation.locks|int }} of {{ automation.homes }} locks<br>{{ automation.therms|int }} of {{ automation.homes }} thermostats</div>
+    <div class="l">Automated homes</div></div>
+</div>
+
+<div class="toolbar">
+  <a class="chip {{ 'on' if show == 'all' }}" href="?sort={{ sort }}">All homes</a>
+  <span class="spacer"></span>
+  <a class="chip {{ 'on' if sort == 'attention' }}" href="?show={{ show }}&sort=attention">Needs attention first</a>
+  <a class="chip {{ 'on' if sort == 'name' }}" href="?show={{ show }}&sort=name">Street A–Z</a>
   <form method="get" action="." class="inline search">
-    <input name="q" value="{{ q }}" placeholder="Search property">
+    <input type="hidden" name="show" value="{{ show }}"><input type="hidden" name="sort" value="{{ sort }}">
+    <input name="q" value="{{ q }}" placeholder="Search property" type="search">
   </form>
 </div>
+
 <div class="scroll">
 <table>
   <thead>
-    <tr><th>Property</th><th>Status</th><th>Current guest</th><th>Next arrival</th><th>Guest code</th><th>Locks</th><th></th></tr>
+    <tr><th>Property</th><th>Status</th><th>Stay</th><th>Door code</th><th>Lock</th><th>Climate</th><th></th></tr>
   </thead>
   <tbody>
   {% for r in rows %}
@@ -22,19 +44,39 @@
         {% for p in r.problems %}<div class="warn">{{ p }}</div>{% endfor %}
       </td>
       <td><span class="st st-{{ r.status }}">{{ r.status_label }}</span></td>
-      <td>{% if r.current_guest %}{{ r.current_guest }}<div class="sub">out {{ r.current_out }}</div>{% endif %}</td>
-      <td>{% if r.next_in %}{{ r.next_guest }}<div class="sub">{{ r.next_in }}</div>{% endif %}</td>
-      <td><span class="code code-{{ r.code }}">{{ r.code_label }}</span>
-        {% if r.door_code %}<div class="sub">{{ r.door_code }}</div>{% endif %}
-        {% if r.lock_read %}<div class="sub">checked {{ r.lock_read }}</div>{% endif %}</td>
-      <td>{% for l in r.locks %}<div class="sub">{{ l.name }} · {{ l.state }}</div>{% else %}<span class="sub">none</span>{% endfor %}</td>
+      <td><div class="stay">
+        {% if r.current_guest %}<div><span class="who">{{ r.current_guest }}</span><div class="sub">staying, out {{ r.current_out }}</div></div>{% endif %}
+        {% if r.next_in %}<div><span class="who">{{ r.next_guest }}</span><div class="sub">next: {{ r.next_in }} <span class="arrow">→</span> {{ r.next_out }}</div></div>{% endif %}
+        {% if not r.current_guest and not r.next_in %}<span class="none">No reservations</span>{% endif %}
+      </div></td>
+      <td>{% if r.code != 'none' %}<span class="code code-{{ r.code }}">{{ r.code_label }}</span>
+        {% if r.door_code %}<div class="doorcode">{{ r.door_code }}</div>{% endif %}
+        {% if r.lock_read %}<div class="sub">checked {{ r.lock_read }}</div>{% endif %}{% endif %}</td>
+      <td>{% for l in r.locks %}<div>{{ l.name }} <span class="sub">· {{ l.state }}</span></div>{% else %}<span class="none">none</span>{% endfor %}
+        {% if r.battery is not none %}<div class="battery">
+          <span class="bar {{ 'low' if r.battery_low else ('mid' if r.battery < 30 else '') }}"><i style="width: {{ r.battery }}%"></i></span>
+          <span class="{{ 'warn' if r.battery_low else 'sub' }}">{{ r.battery }}%</span></div>{% endif %}</td>
+      <td><div class="climate">
+        {% for c in r.climate %}<div>
+          {% if c.inside == 'offline' %}<span class="off">{{ c.name }} offline</span>
+          {% else %}<div class="big">{{ c.inside }}{% if c.set %}<small>set {{ c.set }}</small>{% endif %}</div>
+            <div class="sub">{{ c.hvac }}</div>{% endif %}</div>
+        {% else %}<span class="none">none</span>{% endfor %}
+      </div></td>
       <td>{% if r.locks %}<form method="post" action="lock-refresh" class="inline">
         <input type="hidden" name="property_id" value="{{ r.id }}"><button title="Read codes from the lock now">Check lock</button></form>{% endif %}</td>
     </tr>
   {% else %}
-    <tr><td colspan="7" class="sub">No properties yet. Press "Sync now".</td></tr>
+    <tr><td colspan="7" class="empty">{% if show != 'all' or q %}No homes match this filter.{% else %}No properties yet. Press "Sync now".{% endif %}</td></tr>
   {% endfor %}
   </tbody>
 </table>
 </div>
+<script>
+  // Keep the board fresh without touching what you are typing or have just filtered.
+  setInterval(function () {
+    if (document.activeElement && document.activeElement.tagName === "INPUT") return;
+    location.reload();
+  }, 60000);
+</script>
 {% endblock %}

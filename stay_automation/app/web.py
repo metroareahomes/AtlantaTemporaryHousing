@@ -1,5 +1,6 @@
 """Dashboard served through HA Ingress. All links are relative so they work under the ingress path."""
 import json
+import re
 import secrets
 import sqlite3
 from datetime import datetime
@@ -13,6 +14,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from .climate import DEFAULTS as CLIMATE_DEFAULTS, LABELS as CLIMATE_LABELS, RANGES as CLIMATE_RANGES
 from .hostaway import HostawayError
 from .locks import DEFAULT_GUEST_MESSAGE, DEFAULTS, LockManager
 from .reservations import code_status, property_state, within
@@ -44,12 +46,41 @@ def _fmt(iso: str | None, tz) -> str:
     return datetime.fromisoformat(iso).astimezone(tz).strftime("%a %b %d, %I:%M %p").replace(" 0", " ")
 
 
+def _deg(value: float | None) -> str:
+    return "" if value is None else f"{value:g}°"
+
+
+def climate_label(t: dict[str, Any]) -> dict[str, str]:
+    """One thermostat as the dashboard shows it: inside temperature, set temperature, HVAC mode and fan."""
+    if t["offline_since"]:
+        return {"name": t["name"], "inside": "offline", "set": "", "hvac": ""}
+    if t["target_low"] is not None and t["target_high"] is not None:
+        target = f"{_deg(t['target_low'])}–{_deg(t['target_high'])}"
+    else:
+        target = _deg(t["target_temp"])
+    hvac = " · ".join(x for x in (t["state"], t["hvac_action"], f"fan {t['fan_mode']}" if t["fan_mode"] else "") if x)
+    return {"name": t["name"], "inside": _deg(t["current_temp"]), "set": target, "hvac": hvac,
+            "action": t["hvac_action"] or ""}
+
+
+def street_key(name: str) -> tuple[str, int, str]:
+    """Alphabetical by street name, then street number: "Maple 124b" and "124 Maple" both sort under Maple, by 124."""
+    words = " ".join(re.findall(r"(?<!\d)[a-z]+", name.lower()))
+    number = re.search(r"\d+", name)
+    return words, int(number.group()) if number else 0, name.lower()
+
+
 def dashboard_rows(syncer: Syncer, query: str = "") -> list[dict[str, Any]]:
     now = syncer.now()
     tz = syncer.tz
     locks_by_property: dict[int, list[dict]] = {}
     for lock in syncer.db.query("SELECT * FROM locks WHERE property_id IS NOT NULL ORDER BY name"):
         locks_by_property.setdefault(lock["property_id"], []).append(lock)
+
+    therms_by_property: dict[int, list[dict]] = {}
+    for t in syncer.db.query("SELECT * FROM thermostats WHERE property_id IS NOT NULL ORDER BY name"):
+        therms_by_property.setdefault(t["property_id"], []).append(t)
+    battery_limit = syncer.db.get_int("battery_alert_percent", CLIMATE_DEFAULTS["battery_alert_percent"])
 
     rows = []
     for prop in syncer.db.query("SELECT * FROM properties WHERE active = 1 ORDER BY name"):
@@ -81,6 +112,14 @@ def dashboard_rows(syncer: Syncer, query: str = "") -> list[dict[str, Any]]:
                 problems.append(f"{lock['name']}: read failed")
             if prop["lock_automation"] and lock["fail_count"]:
                 problems.append(f"{lock['name']}: {lock['last_error']} (tries: {lock['fail_count']})")
+            if lock["battery"] is not None and lock["battery"] < battery_limit:
+                problems.append(f"{lock['name']}: battery {lock['battery']}%")
+        therms = therms_by_property.get(prop["id"], [])
+        for t in therms:
+            if t["offline_since"]:
+                problems.append(f"{t['name']} offline")
+            elif prop["thermostat_automation"] and t["fail_count"]:
+                problems.append(f"{t['name']}: {t['last_error']} (tries: {t['fail_count']})")
 
         rows.append({
             "id": prop["id"],
@@ -91,6 +130,7 @@ def dashboard_rows(syncer: Syncer, query: str = "") -> list[dict[str, Any]]:
             "current_out": _fmt(state.current["check_out_at"], tz) if state.current else "",
             "next_guest": state.next["guest_name"] if state.next else "",
             "next_in": _fmt(state.next["check_in_at"], tz) if state.next else "",
+            "next_out": _fmt(state.next["check_out_at"], tz) if state.next else "",
             "next_in_sort": state.next["check_in_at"] if state.next else "9999",
             "door_code": (state.next or {}).get("door_code") or "",
             "code": code,
@@ -99,6 +139,9 @@ def dashboard_rows(syncer: Syncer, query: str = "") -> list[dict[str, Any]]:
             "lock_read": _fmt(max((l["codes_read_at"] for l in locks if l["codes_read_at"]), default=None), tz),
             "problems": problems,
             "lock_automation": prop["lock_automation"],
+            "climate": [climate_label(t) for t in therms],
+            "battery": min((l["battery"] for l in locks if l["battery"] is not None), default=None),
+            "battery_low": any(l["battery"] is not None and l["battery"] < battery_limit for l in locks),
         })
     rows.sort(key=lambda r: (not r["problems"], r["next_in_sort"]))
     return rows
@@ -148,11 +191,28 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None) 
         })
 
     @app.get("/", response_class=HTMLResponse)
-    async def status(request: Request, q: str = ""):
+    async def status(request: Request, q: str = "", show: str = "all", sort: str = "attention"):
         rows = dashboard_rows(syncer, q)
         counts = {k: sum(1 for r in rows if r["status"] == k) for k in STATUS_LABELS}
-        return page(request, "status.html", rows=rows, q=q, counts=counts,
-                    problems=sum(1 for r in rows if r["problems"]))
+        problems = sum(1 for r in rows if r["problems"])
+        filters = {
+            "attention": lambda r: bool(r["problems"]),
+            "arriving": lambda r: r["status"] in ("arriving_today", "turnover_today"),
+            "departing": lambda r: r["status"] in ("departing_today", "turnover_today"),
+            "occupied": lambda r: r["status"] == "occupied",
+            "vacant": lambda r: r["status"] == "vacant",
+        }
+        show = show if show in filters else "all"
+        if show != "all":
+            rows = [r for r in rows if filters[show](r)]
+        sort = sort if sort == "name" else "attention"
+        if sort == "name":
+            rows.sort(key=lambda r: street_key(r["name"]))
+        automation = db.one(
+            "SELECT COUNT(*) AS homes, COALESCE(SUM(lock_automation), 0) AS locks, "
+            "COALESCE(SUM(thermostat_automation), 0) AS therms FROM properties WHERE active = 1")
+        return page(request, "status.html", rows=rows, q=q, counts=counts, problems=problems, show=show,
+                    sort=sort, automation=automation)
 
     @app.get("/properties", response_class=HTMLResponse)
     async def properties(request: Request):
@@ -162,9 +222,15 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None) 
         for lock in locks:
             if lock["property_id"]:
                 by_property.setdefault(lock["property_id"], []).append(lock)
+        thermostats = db.query("SELECT * FROM thermostats ORDER BY name")
+        therm_by_property: dict[int, list[dict]] = {}
+        for t in thermostats:
+            if t["property_id"]:
+                therm_by_property.setdefault(t["property_id"], []).append(t)
         for prop in props:
             prop["lock_list"] = by_property.get(prop["id"], [])
-        return page(request, "properties.html", properties=props, locks=locks)
+            prop["therm_list"] = therm_by_property.get(prop["id"], [])
+        return page(request, "properties.html", properties=props, locks=locks, thermostats=thermostats)
 
     @app.post("/properties-save")
     async def properties_save(request: Request):
@@ -188,7 +254,9 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None) 
             if name and name != p["name"]:
                 sets.append("name = ?")
                 args.append(name)
-            for field, column, label in (("auto", "lock_automation", "Lock automation"), ("active", "active", "Active")):
+            for field, column, label in (("auto", "lock_automation", "Lock automation"),
+                                         ("tauto", "thermostat_automation", "Thermostat automation"),
+                                         ("active", "active", "Active")):
                 now_on = 1 if form.get(f"{field}_{pid}") else 0
                 was_on = 1 if form.get(f"was_{field}_{pid}") == "1" else 0
                 if now_on != was_on and now_on != p[column]:
@@ -197,7 +265,8 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None) 
                     toggles.append((f"{field}.{'on' if now_on else 'off'}",
                                     f"{label} turned {'ON' if now_on else 'OFF'} for {p['name']} (Properties page)",
                                     pid))
-                    touched.add(pid)
+                    if field != "tauto":
+                        touched.add(pid)
             backup = str(form.get(f"backup_{pid}", "")).strip()
             if backup and backup != str(form.get(f"was_backup_{pid}", "")).strip() and backup != (p["backup_code"] or ""):
                 if not backup.isdigit() or len(backup) != 4:
@@ -223,6 +292,9 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None) 
             db.execute(sql, args)
         for kind, message, pid in toggles:
             db.log(kind, message, level="warning" if kind == "auto.off" else "info", property_id=pid)
+            if kind == "tauto.on":  # start from what the stay looks like now, not from an old setting
+                db.execute("UPDATE thermostats SET last_mode = NULL, last_applied_at = NULL WHERE property_id = ?",
+                           (pid,))
 
         for lock in db.query("SELECT id, property_id FROM locks"):
             if f"was_lock_{lock['id']}" not in form:
@@ -233,6 +305,16 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None) 
                 if new_pid != lock["property_id"]:
                     syncer.assign_lock(lock["id"], new_pid)
                     touched |= {x for x in (new_pid, lock["property_id"]) if x}
+
+        for t in db.query("SELECT id, property_id FROM thermostats"):
+            if f"was_thermo_{t['id']}" not in form:
+                continue
+            value, was = str(form.get(f"thermo_{t['id']}", "")), str(form.get(f"was_thermo_{t['id']}", ""))
+            if value != was:
+                new_pid = int(value) if value.isdigit() else None
+                if new_pid != t["property_id"]:
+                    db.execute("UPDATE thermostats SET property_id = ?, match_source = 'manual', last_mode = NULL, "
+                               "last_applied_at = NULL WHERE id = ?", (new_pid, t["id"]))
 
         # Only the homes that changed get their locks looked at again (each look is a slow Schlage call).
         if touched:
@@ -396,6 +478,8 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None) 
             registered=db.get_setting("hostaway_webhook_registered_at"),
             is_addon=syncer.settings.is_addon,
             numbers=[(k, SETTING_LABELS[k], db.get_int(k, v)) for k, v in DEFAULTS.items()],
+            climate_numbers=[(k, CLIMATE_LABELS[k], db.get_int(k, v)) for k, v in CLIMATE_DEFAULTS.items()],
+            thermostat_homes=db.one("SELECT COUNT(*) AS n FROM properties WHERE thermostat_automation = 1")["n"],
             alert_service=db.get_setting("alert_service", "") or "",
             backup_codes_enabled=db.get_bool("backup_codes_enabled"),
             guest_messages_enabled=db.get_bool("guest_messages_enabled"),
@@ -421,6 +505,25 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None) 
         db.set_setting("guest_message", message)
         db.execute("UPDATE locks SET next_check_at = NULL")
         db.log("settings.saved", "Lock automation settings saved")
+        return RedirectResponse("setup", status_code=303)
+
+    @app.post("/thermostat-settings-save")
+    async def thermostat_settings_save(request: Request):
+        form = await request.form()
+        values: dict[str, int] = {}
+        for key, (low, high) in CLIMATE_RANGES.items():  # check everything before saving anything
+            raw = str(form.get(key, "")).strip()
+            if not raw.isdigit() or not low <= int(raw) <= high:
+                raise HTTPException(400, f"{CLIMATE_LABELS[key]}: enter a whole number from {low} to {high}")
+            values[key] = int(raw)
+        if values["vac_winter"] > values["occ_winter"]:
+            raise HTTPException(400, "Winter vacant must not be warmer than winter occupied")
+        if values["vac_summer"] < values["occ_summer"]:
+            raise HTTPException(400, "Summer vacant must not be cooler than summer occupied")
+        for key, value in values.items():
+            db.set_setting(key, str(value))
+        db.execute("UPDATE thermostats SET last_mode = NULL, last_applied_at = NULL")  # re-apply with the new numbers
+        db.log("settings.saved", "Thermostat settings saved")
         return RedirectResponse("setup", status_code=303)
 
     @app.post("/test-alert")

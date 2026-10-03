@@ -2,18 +2,19 @@
 {% block body %}
 <form method="post" action="properties-save">
 <h2>Properties</h2>
-<p class="sub">One row per home. Tick <strong>Lock automation</strong> on a home that shows a lock to start managing its codes.
+<p class="sub">One row per home. Tick <strong>Lock automation</strong> on a home that shows a lock to start managing its codes,
+  and <strong>Thermostat automation</strong> on a home that shows a thermostat to schedule its temperature.
   Each home keeps a permanent backup code (HA-BACKUP) on its lock; edit it here to change it. Only what you change
   on this page is saved.</p>
 <div class="scroll">
 <table>
-  <thead><tr><th>Property</th><th>Lock</th><th>Lock automation</th><th>Backup code</th><th>Active</th></tr></thead>
+  <thead><tr><th>Property</th><th>Lock</th><th>Lock automation</th><th>Backup code</th><th>Thermostat</th><th>Thermostat automation</th><th>Active</th></tr></thead>
   <tbody>
   {% for p in properties %}
     <tr class="{{ 'problem' if p.lock_automation and p.lock_list|selectattr('state', 'equalto', 'unavailable')|list }}">
       <td><input name="name_{{ p.id }}" value="{{ p.name }}">
         <div class="sub">{{ p.hostaway_name }} · #{{ p.hostaway_listing_id }}</div></td>
-      <td>{% for l in p.lock_list %}<div>{{ l.name }} <span class="sub">· {{ l.state }}</span></div>
+      <td>{% for l in p.lock_list %}<div>{{ l.name }} <span class="sub">· {{ l.state }}{% if l.battery is not none %} · {{ l.battery }}%{% endif %}</span></div>
           {% else %}<span class="sub">no lock</span>{% endfor %}</td>
       <td><input type="checkbox" name="auto_{{ p.id }}" {{ 'checked' if p.lock_automation }}>
         <input type="hidden" name="was_auto_{{ p.id }}" value="{{ 1 if p.lock_automation else 0 }}">
@@ -21,6 +22,11 @@
       <td><input name="backup_{{ p.id }}" value="{{ p.backup_code or '' }}" inputmode="numeric" maxlength="4"
                  style="width:5rem" placeholder="—">
         <input type="hidden" name="was_backup_{{ p.id }}" value="{{ p.backup_code or '' }}"></td>
+      <td>{% for t in p.therm_list %}<div>{{ t.name }} <span class="sub">· {{ 'offline' if t.offline_since else t.state }}</span></div>
+          {% else %}<span class="sub">no thermostat</span>{% endfor %}</td>
+      <td><input type="checkbox" name="tauto_{{ p.id }}" {{ 'checked' if p.thermostat_automation }}>
+        <input type="hidden" name="was_tauto_{{ p.id }}" value="{{ 1 if p.thermostat_automation else 0 }}">
+        {% if p.therm_list and not p.thermostat_automation %}<div class="sub">ready to activate</div>{% endif %}</td>
       <td><input type="checkbox" name="active_{{ p.id }}" {{ 'checked' if p.active }}>
         <input type="hidden" name="was_active_{{ p.id }}" value="{{ 1 if p.active else 0 }}"></td>
     </tr>
@@ -47,6 +53,30 @@
         <input type="hidden" name="was_lock_{{ l.id }}" value="{{ l.property_id or '' }}"></td>
       <td class="sub">{{ l.match_source or '' }}</td>
     </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+
+<h2>Thermostats</h2>
+<p class="sub">Every climate device in Home Assistant is listed. Only thermostats assigned to a home with Thermostat automation ticked are ever changed.</p>
+<div class="scroll">
+<table>
+  <thead><tr><th>Thermostat</th><th>Mode</th><th>Property</th><th>Matched</th></tr></thead>
+  <tbody>
+  {% for t in thermostats %}
+    <tr class="{{ 'problem' if t.offline_since }}">
+      <td>{{ t.name }}<div class="sub">{{ t.entity_id }}</div></td>
+      <td>{{ 'offline' if t.offline_since else t.state }}</td>
+      <td><select name="thermo_{{ t.id }}">
+        <option value="">— not assigned —</option>
+        {% for p in properties %}<option value="{{ p.id }}" {{ 'selected' if p.id == t.property_id }}>{{ p.name }}</option>{% endfor %}
+      </select>
+        <input type="hidden" name="was_thermo_{{ t.id }}" value="{{ t.property_id or '' }}"></td>
+      <td class="sub">{{ t.match_source or '' }}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="4" class="sub">No thermostats found yet. They appear a few minutes after the add-on starts.</td></tr>
   {% endfor %}
   </tbody>
 </table>

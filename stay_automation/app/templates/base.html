@@ -8,15 +8,19 @@
 </head>
 <body>
   <header>
-    <nav>
-      <a href="." class="{{ 'on' if active == 'status' }}">Status</a>
-      <a href="properties" class="{{ 'on' if active == 'properties' }}">Properties</a>
-      <a href="staff" class="{{ 'on' if active == 'staff' }}">Staff</a>
-      <a href="events" class="{{ 'on' if active == 'events' }}">Log</a>
-      <a href="setup" class="{{ 'on' if active == 'setup' }}">Setup</a>
-    </nav>
+    <div class="bar-left">
+      <div class="brand"><span class="logo">S</span>Stays</div>
+      <nav>
+        <a href="." class="{{ 'on' if active == 'status' }}">Status</a>
+        <a href="properties" class="{{ 'on' if active == 'properties' }}">Properties</a>
+        <a href="staff" class="{{ 'on' if active == 'staff' }}">Staff</a>
+        <a href="events" class="{{ 'on' if active == 'events' }}">Log</a>
+        <a href="setup" class="{{ 'on' if active == 'setup' }}">Setup</a>
+      </nav>
+    </div>
     <div class="meta">
-      Last sync: {{ last_sync or 'never' }} · Last webhook: {{ last_webhook or 'never' }}
+      <span><span class="dot {{ '' if last_sync else 'off' }}"></span>Synced {{ last_sync or 'never' }}</span>
+      <span>Webhook {{ last_webhook or 'never' }}</span>
       <form method="post" action="sync" class="inline"><button>Sync now</button></form>
     </div>
   </header>

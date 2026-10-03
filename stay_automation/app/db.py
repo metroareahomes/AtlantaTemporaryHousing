@@ -87,6 +87,27 @@ CREATE TABLE IF NOT EXISTS alert_recipients (
     target TEXT NOT NULL,
     active INTEGER NOT NULL DEFAULT 1
 );
+
+CREATE TABLE IF NOT EXISTS thermostats (
+    id INTEGER PRIMARY KEY,
+    entity_id TEXT NOT NULL UNIQUE,
+    name TEXT,
+    state TEXT,              -- HVAC mode (heat, cool, heat_cool, auto, off) or unavailable
+    property_id INTEGER REFERENCES properties(id) ON DELETE SET NULL,
+    match_source TEXT,
+    current_temp REAL,
+    target_temp REAL,
+    target_low REAL,
+    target_high REAL,
+    hvac_action TEXT,
+    fan_mode TEXT,
+    offline_since TEXT,
+    last_mode TEXT,          -- occupied | vacant: what we last set successfully
+    last_applied_at TEXT,
+    fail_count INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT,
+    seen_at TEXT
+);
 """
 
 # Columns added after the first release; applied to existing databases on start.
@@ -95,8 +116,10 @@ MIGRATIONS = {
         "backup_code": "TEXT",
         "backup_used_by": "INTEGER",
         "address": "TEXT",
+        "thermostat_automation": "INTEGER NOT NULL DEFAULT 0",
     },
     "locks": {
+        "battery": "INTEGER",
         "next_check_at": "TEXT",
         "fail_count": "INTEGER NOT NULL DEFAULT 0",
         "last_error": "TEXT",

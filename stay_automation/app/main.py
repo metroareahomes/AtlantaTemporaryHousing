@@ -8,6 +8,7 @@ from typing import Awaitable, Callable
 
 import uvicorn
 
+from .climate import ClimateManager
 from .config import load_settings
 from .db import DB
 from .ha import HAClient
@@ -20,6 +21,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 log = logging.getLogger("stay")
 
 LOCK_TICK_MINUTES = 5
+CLIMATE_TICK_MINUTES = 5
+BATTERY_CHECK_MINUTES = 60
 
 
 async def run_logged(name: str, job: Callable[[], Awaitable[object]], db: DB) -> None:
@@ -72,6 +75,7 @@ def build():
     ha = HAClient(settings.ha_url, settings.ha_token)
     syncer = Syncer(db, settings, hostaway, ha)
     locks = LockManager(syncer)
+    climate = ClimateManager(syncer, locks.alert)
 
     discover = _then(syncer.import_listings, syncer.discover_locks)
 
@@ -79,6 +83,8 @@ def build():
         await discover()
         await syncer.sync_reservations()
         await syncer.check_arrival_locks()
+        await climate.refresh()
+        await climate.check_batteries()
 
     async def scheduler() -> None:
         # One chain so the startup sync finishes before the periodic loops begin.
@@ -88,6 +94,8 @@ def build():
             every(settings.lock_discovery_minutes, "lock_discovery", discover, db),
             every(settings.lock_check_minutes, "lock_check", syncer.check_arrival_locks, db),
             every(LOCK_TICK_MINUTES, "lock_automation", locks.tick, db),
+            every(CLIMATE_TICK_MINUTES, "thermostats", climate.tick, db),
+            every(BATTERY_CHECK_MINUTES, "batteries", climate.check_batteries, db),
         )
 
     @asynccontextmanager

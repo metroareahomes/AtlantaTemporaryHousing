@@ -38,6 +38,17 @@
     <textarea name="guest_message" rows="3">{{ guest_message }}</textarea></label>
   <button class="primary">Save settings</button>
 </form>
+<h2>Thermostat automation</h2>
+<p class="sub">Runs only for homes with "Thermostat automation" ticked on the Properties page ({{ thermostat_homes }} now).
+  Homes go to the occupied temperature before check-in and the vacant temperature after check-out; vacant homes are
+  set again every day. A stay that is already under way when a home is switched on is left alone.
+  Temperatures are in the units Home Assistant uses (°F for a US setup).</p>
+<form method="post" action="thermostat-settings-save" class="stack">
+  {% for key, label, value in climate_numbers %}
+  <label>{{ label }} <input name="{{ key }}" value="{{ value }}" inputmode="numeric"></label>
+  {% endfor %}
+  <button class="primary">Save thermostat settings</button>
+</form>
 <form method="post" action="test-alert" class="inline"><button>Send test alert</button></form>
 
 {% if not is_addon %}<p class="sub">Running outside Home Assistant (development mode).</p>{% endif %}
