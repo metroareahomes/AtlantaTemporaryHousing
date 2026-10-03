@@ -110,8 +110,10 @@ def dashboard_rows(syncer: Syncer, query: str = "") -> list[dict[str, Any]]:
                 problems.append(f"{lock['name']} offline")
             elif lock["codes_error"]:
                 problems.append(f"{lock['name']}: read failed")
-            if prop["lock_automation"] and lock["fail_count"]:
-                problems.append(f"{lock['name']}: {lock['last_error']} (tries: {lock['fail_count']})")
+            if prop["lock_automation"] and lock["fail_count"] and lock["state"] != "unavailable":
+                # Hostaway/HA wording stays in the Log; the board gets a short line.
+                error = (lock["last_error"] or "").split(" (")[0]
+                problems.append(f"{lock['name']}: {error or 'check failed'}, tried {lock['fail_count']}x")
             if lock["battery"] is not None and lock["battery"] < battery_limit:
                 problems.append(f"{lock['name']}: battery {lock['battery']}%")
         therms = therms_by_property.get(prop["id"], [])
