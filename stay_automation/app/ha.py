@@ -71,6 +71,8 @@ class HAClient:
                 "target_high": a.get("target_temp_high"),
                 "hvac_action": a.get("hvac_action"),
                 "fan_mode": a.get("fan_mode"),
+                "min_temp": a.get("min_temp"),
+                "max_temp": a.get("max_temp"),
             })
         return out
 

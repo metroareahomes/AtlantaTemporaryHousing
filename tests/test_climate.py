@@ -189,6 +189,15 @@ def test_edited_numbers_are_used(cm):
     assert cm.ha.sets[-1][1] == 80.0
 
 
+def test_target_outside_the_thermostats_own_limits_is_clamped_and_logged(cm):
+    cm.ha.climate["climate.maple"].update(min_temp=68, max_temp=74)
+    tick(cm, at("2030-06-10T12:00"))  # vacant in summer wants 78, the device stops at 74
+    assert cm.ha.sets == [("climate.maple", 74.0, None, None)]
+    assert row(cm)["last_mode"] == "vacant" and row(cm)["fail_count"] == 0
+    note = cm.db.one("SELECT message FROM events WHERE kind = 'thermostat.limited'")["message"]
+    assert "wanted 78" in note and "68-74" in note
+
+
 def test_range_thermostat_in_summer_moves_cooling_bound_only(cm):
     cm.ha.climate["climate.maple"].update(state="heat_cool", target_temp=None, target_low=66, target_high=74)
     tick(cm, at("2030-06-10T12:00"))

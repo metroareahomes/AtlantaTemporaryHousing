@@ -150,9 +150,11 @@ class ClimateManager:
                             level="warning", property_id=row["property_id"])
             self.db.execute(
                 "UPDATE thermostats SET name = ?, state = ?, current_temp = ?, target_temp = ?, target_low = ?, "
-                "target_high = ?, hvac_action = ?, fan_mode = ?, offline_since = ?, seen_at = ? WHERE id = ?",
+                "target_high = ?, hvac_action = ?, fan_mode = ?, offline_since = ?, seen_at = ?, "
+                "min_temp = ?, max_temp = ? WHERE id = ?",
                 (c["name"], c["state"], c["current_temp"], c["target_temp"], c["target_low"], c["target_high"],
-                 c["hvac_action"], c["fan_mode"], since, self._stamp(), row["id"]),
+                 c["hvac_action"], c["fan_mode"], since, self._stamp(), c.get("min_temp"), c.get("max_temp"),
+                 row["id"]),
             )
             if row["match_source"] is None:
                 property_id = match_lock(c["name"], properties)
@@ -204,6 +206,14 @@ class ClimateManager:
 
         summer = is_summer(now.date(), cfg["summer_start_month"], cfg["summer_end_month"])
         target = setpoint(mode, summer, cfg)
+        low, high = t.get("min_temp"), t.get("max_temp")
+        if low is not None and high is not None and not low <= target <= high:
+            # Some thermostats are limited at the device (a rental often is). Ask for the nearest allowed value
+            # instead of failing every five minutes, and say so.
+            wanted, target = target, int(min(max(target, low), high))
+            self.db.log("thermostat.limited",
+                        f"{t['name']}: wanted {wanted}° but the thermostat only allows {low:g}-{high:g}°; using {target}°",
+                        level="warning", property_id=t["property_id"])
         call = target_call(t, target, summer)
         try:
             await self.ha.set_temperature(t["entity_id"], **call)

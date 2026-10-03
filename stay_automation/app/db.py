@@ -121,6 +121,10 @@ CREATE TABLE IF NOT EXISTS thermostats (
 
 # Columns added after the first release; applied to existing databases on start.
 MIGRATIONS = {
+    "thermostats": {
+        "min_temp": "REAL",        # the range Home Assistant says the device accepts
+        "max_temp": "REAL",
+    },
     "reservations": {
         "override_code": "TEXT",   # a code staff typed for the guest; replaces Hostaway's and survives syncs
     },
