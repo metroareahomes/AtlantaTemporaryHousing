@@ -21,7 +21,7 @@
       <td><input name="backup_{{ p.id }}" value="{{ p.backup_code or '' }}" inputmode="numeric" maxlength="4"
                  style="width:5rem" placeholder="—">
         <input type="hidden" name="was_backup_{{ p.id }}" value="{{ p.backup_code or '' }}"></td>
-      <td>{% for t in p.therm_list %}<div>{{ t.name }} <span class="sub">· {{ 'offline' if t.offline_since else t.state }}</span></div>
+      <td>{% for t in p.therm_list %}<div>{{ t.name }} <span class="sub">· {{ ('offline, HA says ' ~ t.state) if t.offline_since else t.state }}</span></div>
           {% else %}<span class="sub">no thermostat</span>{% endfor %}</td>
       <td><input type="checkbox" name="tauto_{{ p.id }}" {{ 'checked' if p.thermostat_automation }}>
         <input type="hidden" name="was_tauto_{{ p.id }}" value="{{ 1 if p.thermostat_automation else 0 }}">

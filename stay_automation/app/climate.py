@@ -145,6 +145,9 @@ class ClimateManager:
             since = row["offline_since"] if offline else None
             if offline and not since:
                 since = self._stamp()
+                self.db.log("thermostat.offline",
+                            f"{c['name']} reported as '{c['state']}' by Home Assistant (current temp {c['current_temp']})",
+                            level="warning", property_id=row["property_id"])
             self.db.execute(
                 "UPDATE thermostats SET name = ?, state = ?, current_temp = ?, target_temp = ?, target_low = ?, "
                 "target_high = ?, hvac_action = ?, fan_mode = ?, offline_since = ?, seen_at = ? WHERE id = ?",

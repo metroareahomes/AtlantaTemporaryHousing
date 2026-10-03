@@ -119,7 +119,7 @@ def dashboard_rows(syncer: Syncer, query: str = "") -> list[dict[str, Any]]:
         therms = therms_by_property.get(prop["id"], [])
         for t in therms:
             if t["offline_since"]:
-                problems.append(f"{t['name']} offline")
+                problems.append(f"{t['name']} offline (Home Assistant says {t['state'] or 'nothing'})")
             elif prop["thermostat_automation"] and t["fail_count"]:
                 problems.append(f"{t['name']}: {t['last_error']} (tries: {t['fail_count']})")
 
