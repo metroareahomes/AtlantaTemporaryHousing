@@ -242,6 +242,17 @@ def test_unreadable_lock_at_final_check_triggers_fallback(lm):
     assert lm.db.one("SELECT * FROM guest_notices") is not None
 
 
+def test_failed_read_says_why_in_the_log(lm):
+    lm.s.upsert_reservation(res())
+    lm.ha.read_fails = True
+    tick_at(lm, at("2030-01-10T08:01"))
+    failed = lm.db.one("SELECT message FROM events WHERE kind = 'lock.failed'")["message"]
+    assert "could not read the lock (schlage timeout)" in failed and "attempt 1" in failed
+    lm.ha.read_fails = False
+    tick_at(lm, at("2030-01-10T08:20"))
+    assert lock_row(lm)["fail_count"] == 0
+
+
 def test_homes_without_automation_are_left_alone(lm):
     lm.db.execute("UPDATE properties SET lock_automation = 0")
     lm.s.upsert_reservation(res())

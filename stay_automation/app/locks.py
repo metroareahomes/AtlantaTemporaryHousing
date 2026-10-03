@@ -232,6 +232,7 @@ class LockManager:
         self.hostaway = syncer.hostaway
         self.verify_delay = VERIFY_DELAY_SECONDS
         self.gap = GAP_BETWEEN_LOCKS_SECONDS
+        self.read_error = ""
 
     def cfg(self) -> dict[str, int]:
         return {k: self.db.get_int(k, v) for k, v in DEFAULTS.items()}
@@ -279,7 +280,7 @@ class LockManager:
 
         actual = await self._read(lock)
         if actual is None:
-            return await self._failed(lock, now, reservations, claim, "could not read the lock", None)
+            return await self._failed(lock, now, reservations, claim, self._why("could not read the lock"), None)
         desired = self._desired(lock, reservations, now, actual, cfg)
 
         first = plan(desired, actual, managed)
@@ -296,7 +297,7 @@ class LockManager:
             actual = await self._read(lock)
             if actual is None:
                 return await self._failed(lock, now, reservations, claim,
-                                          "could not read the lock after changes", None)
+                                          self._why("could not read the lock after changes"), None)
 
         final = plan(desired, actual, managed)
         for name in first.add:
@@ -395,13 +396,19 @@ class LockManager:
         )
 
     async def _read(self, lock: dict[str, Any]) -> dict[str, str] | None:
+        self.read_error = ""
         try:
             actual = await self.ha.get_codes(lock["entity_id"])
         except Exception as exc:
-            log.warning("read %s failed: %s", lock["entity_id"], exc)
+            reason = " ".join((str(exc) or type(exc).__name__).split())[:200]
+            log.warning("read %s failed: %s", lock["entity_id"], reason)
+            self.read_error = reason  # the failure line in the Log says why, not just that it failed
             return None
         self.s.store_lock_snapshot(lock["id"], actual)
         return actual
+
+    def _why(self, what: str) -> str:
+        return f"{what} ({self.read_error})" if self.read_error else what
 
     async def _try(self, lock: dict[str, Any], verb: str, name: str, call) -> None:
         try:
