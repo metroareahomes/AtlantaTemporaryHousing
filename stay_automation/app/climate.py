@@ -98,12 +98,26 @@ def should_apply(mode: str, last_mode: str | None, last_applied: datetime | None
     return mode == "vacant" and last_applied.date() < now.date() and now.hour >= reset_hour
 
 
+def _bound(value: Any, fallback: Any, last_resort: float) -> float:
+    if value is not None:
+        return float(value)
+    if fallback is not None:
+        return float(fallback)
+    return last_resort
+
+
 def target_call(t: dict[str, Any], target: int, summer: bool) -> dict[str, float]:
     """Arguments for climate.set_temperature. Auto/heat_cool thermostats have two setpoints: in summer we move
-    the cooling one, in winter the heating one, and leave the other as it was."""
-    low, high = t.get("target_low"), t.get("target_high")
-    if t.get("state") in ("heat_cool", "auto") and low is not None and high is not None:
-        return {"high": float(target), "low": float(low)} if summer else {"low": float(target), "high": float(high)}
+    the cooling one, in winter the heating one, and leave the other as it was. Honeywell Lyric rejects a
+    single `temperature` while the device is in Auto."""
+    if t.get("state") in ("heat_cool", "auto"):
+        if summer:
+            high, low = float(target), _bound(t.get("target_low"), t.get("min_temp"), target - 10)
+        else:
+            low, high = float(target), _bound(t.get("target_high"), t.get("max_temp"), target + 10)
+        if low >= high:
+            low, high = (high - 1, high) if summer else (low, low + 1)
+        return {"high": high, "low": low}
     return {"temperature": float(target)}
 
 
@@ -184,8 +198,6 @@ class ClimateManager:
         for t in due:
             if t["state"] in OFFLINE_STATES:
                 continue  # cannot be reached; the offline alert covers it
-            if t["retry_after"] and datetime.fromisoformat(t["retry_after"]) > now:
-                continue  # Honeywell is limited per day; a failed change waits instead of retrying every tick
             if await self._apply(t, now, cfg):
                 changed += 1
         await self._offline_alerts(now, cfg)
@@ -210,7 +222,11 @@ class ClimateManager:
 
         summer = is_summer(now.date(), cfg["summer_start_month"], cfg["summer_end_month"])
         target = setpoint(mode, summer, cfg)
-        t = await self._set_season_mode(t, "cool" if summer else "heat")
+        want_mode = "cool" if summer else "heat"
+        waiting = bool(t["retry_after"] and datetime.fromisoformat(t["retry_after"]) > now)
+        if waiting and t["state"] != want_mode:
+            return False  # mode switch is also a Honeywell write
+        t = await self._set_season_mode(t, want_mode)
         low, high = t.get("min_temp"), t.get("max_temp")
         if low is not None and high is not None and not low <= target <= high:
             # Some thermostats are limited at the device (a rental often is). Ask for the nearest allowed value
@@ -220,6 +236,13 @@ class ClimateManager:
                         f"{t['name']}: wanted {wanted}° but the thermostat only allows {low:g}-{high:g}°; using {target}°",
                         level="warning", property_id=t["property_id"])
         call = target_call(t, target, summer)
+        if took_effect(call, t):
+            # Already showing the number we would send. Writing it again is what Honeywell 429/500'd on
+            # Edward Court (vacant 74°, already 74° cool).
+            self._recorded(t, mode, target, summer, already=True)
+            return True
+        if waiting:
+            return False  # would write, but Honeywell is cooling down
         try:
             await self.ha.set_temperature(t["entity_id"], **call)
             await asyncio.sleep(self.verify_delay)
@@ -229,11 +252,16 @@ class ClimateManager:
         except Exception as exc:
             await self._failed(t, now, str(exc) or type(exc).__name__)
             return False
+        self._recorded(t, mode, target, summer, already=False)
+        return True
+
+    def _recorded(self, t: dict[str, Any], mode: str, target: int, summer: bool, *, already: bool) -> None:
         self.db.execute("UPDATE thermostats SET last_mode = ?, last_applied_at = ?, fail_count = 0, last_error = NULL, "
                         "retry_after = NULL WHERE id = ?", (mode, self._stamp(), t["id"]))
-        self.db.log("thermostat.set", f"{t['property_name']}: {mode} {'summer' if summer else 'winter'}, set to {target}°",
+        how = "already at" if already else "set to"
+        self.db.log("thermostat.set",
+                    f"{t['property_name']}: {mode} {'summer' if summer else 'winter'}, {how} {target}°",
                     property_id=t["property_id"])
-        return True
 
     async def _set_season_mode(self, t: dict[str, Any], want: str) -> dict[str, Any]:
         """Cool in summer, heat in winter. A thermostat left in Auto applies its heating limit (74°) even when we ask

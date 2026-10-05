@@ -85,6 +85,9 @@ def test_range_thermostats_move_the_right_bound():
     assert target_call(heat_cool, 78, True) == {"high": 78.0, "low": 66.0}
     assert target_call(heat_cool, 55, False) == {"low": 55.0, "high": 74.0}
     assert target_call({"state": "cool", "target_temp": 72}, 78, True) == {"temperature": 78.0}
+    empty_auto = {"state": "heat_cool", "target_low": None, "target_high": None, "min_temp": 55, "max_temp": 90}
+    assert target_call(empty_auto, 78, True) == {"high": 78.0, "low": 55.0}
+    assert target_call(empty_auto, 55, False) == {"low": 55.0, "high": 90.0}
     assert took_effect({"temperature": 78.0}, {"target_temp": 78})
     assert took_effect({"temperature": 78.0}, {"target_temp": 77.5})
     assert not took_effect({"temperature": 78.0}, {"target_temp": 72})
@@ -171,19 +174,26 @@ def test_full_stay_cycle_in_summer(cm):
     tick(cm, at("2030-06-11T10:00"))
     assert len(cm.ha.sets) == 1  # next day but before the reset hour
     tick(cm, at("2030-06-11T11:05"))
-    assert len(cm.ha.sets) == 2  # day two: set to vacant again
+    assert len(cm.ha.sets) == 1  # still 78°; do not spend a Honeywell write
 
     tick(cm, at("2030-06-12T13:00"))
     assert cm.ha.sets[-1] == ("climate.maple", 72.0, None, None)  # occupied three hours before check-in
     tick(cm, at("2030-06-13T12:00"))
     tick(cm, at("2030-06-14T12:00"))
-    assert len(cm.ha.sets) == 3  # guest's own tweaks are left alone during the stay
+    assert len(cm.ha.sets) == 2  # guest's own tweaks are left alone during the stay
 
     tick(cm, at("2030-06-15T12:00"))
-    assert len(cm.ha.sets) == 3  # still within three hours after check-out
+    assert len(cm.ha.sets) == 2  # still within three hours after check-out
     tick(cm, at("2030-06-15T13:00"))
     assert cm.ha.sets[-1] == ("climate.maple", 78.0, None, None)
     assert [e["kind"] for e in cm.db.query("SELECT kind FROM events")].count("thermostat.set") == 4
+
+
+def test_daily_vacant_reset_writes_only_if_the_setpoint_moved(cm):
+    tick(cm, at("2030-06-10T12:00"))
+    cm.ha.climate["climate.maple"]["target_temp"] = 70  # cleaner changed it
+    tick(cm, at("2030-06-11T11:05"))
+    assert cm.ha.sets == [("climate.maple", 78.0, None, None), ("climate.maple", 78.0, None, None)]
 
 
 def test_winter_numbers(cm):
@@ -218,6 +228,14 @@ def test_range_thermostat_in_summer_moves_cooling_bound_only(cm):
     assert cm.db.one("SELECT 1 FROM events WHERE kind = 'thermostat.mode_failed'")
 
 
+def test_auto_without_bounds_still_sends_both_setpoints(cm):
+    cm.ha.mode_fails = True
+    cm.ha.climate["climate.maple"].update(state="heat_cool", target_temp=None, target_low=None, target_high=None,
+                                          min_temp=55, max_temp=90)
+    tick(cm, at("2030-06-10T12:00"))
+    assert cm.ha.sets == [("climate.maple", None, 55.0, 78.0)]
+
+
 def test_summer_switches_to_cool_first_and_uses_the_cooling_range(cm):
     cm.ha.climate["climate.maple"].update(state="heat_cool", target_temp=None, target_low=66, target_high=74,
                                           min_temp=69, max_temp=74)
@@ -238,6 +256,25 @@ def test_winter_switches_to_heat(cm):
 def test_a_thermostat_already_in_the_right_mode_is_not_switched(cm):
     tick(cm, at("2030-06-10T12:00"))  # it is already in cool
     assert cm.ha.modes == []
+
+
+def test_already_at_target_is_not_written_to_honeywell(cm):
+    cm.db.execute("UPDATE thermostats SET fail_count = 115, last_error = 'HTTP 500'")
+    cm.ha.climate["climate.maple"].update(target_temp=78)
+    assert tick(cm, at("2030-06-10T12:00")) == 1
+    assert cm.ha.sets == []
+    r = row(cm)
+    assert r["last_mode"] == "vacant" and r["fail_count"] == 0 and r["last_error"] is None
+    note = cm.db.one("SELECT message FROM events WHERE kind = 'thermostat.set'")["message"]
+    assert "already at 78°" in note
+
+
+def test_already_at_clamped_limit_is_not_written(cm):
+    cm.ha.climate["climate.maple"].update(target_temp=74, min_temp=68, max_temp=74)
+    tick(cm, at("2030-06-10T12:00"))  # vacant summer wants 78, device already at its 74 ceiling
+    assert cm.ha.sets == []
+    assert row(cm)["last_mode"] == "vacant"
+    assert cm.db.one("SELECT 1 FROM events WHERE kind = 'thermostat.limited'")
 
 
 def test_switching_on_mid_stay_leaves_the_guest_alone(cm):
@@ -265,6 +302,16 @@ def test_a_failed_change_waits_before_it_is_tried_again(cm):
     assert len(cm.ha.sets) == 1  # one try, then it waits (default: an hour)
     tick(cm, at("2030-06-10T13:01"))
     assert len(cm.ha.sets) == 2
+
+
+def test_retry_wait_clears_when_the_thermostat_is_already_right(cm):
+    cm.ha.ignore_sets = True
+    tick(cm, at("2030-06-10T12:00"))
+    assert row(cm)["fail_count"] == 1
+    cm.ha.climate["climate.maple"]["target_temp"] = 78
+    tick(cm, at("2030-06-10T12:05"))  # still inside the hour wait
+    assert len(cm.ha.sets) == 1
+    assert row(cm)["last_mode"] == "vacant" and row(cm)["fail_count"] == 0
 
 
 def test_a_thermostat_that_ignores_the_command_is_retried_and_then_alerts(cm):
