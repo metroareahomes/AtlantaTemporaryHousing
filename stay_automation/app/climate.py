@@ -37,6 +37,7 @@ DEFAULTS = {
     "therm_lag_hours": 3,        # vacant this long after check-out
     "vacant_reset_hour": 11,     # vacant homes are set to vacant again daily after this hour
     "therm_offline_minutes": 30,
+    "therm_retry_minutes": 60,   # a failed change is tried again after this long, not every tick
     "battery_alert_percent": 15,
 }
 
@@ -51,6 +52,7 @@ LABELS = {
     "therm_lag_hours": "Vacant this many hours after check-out",
     "vacant_reset_hour": "Re-set vacant homes daily after (hour, 0-23)",
     "therm_offline_minutes": "Alert when a thermostat has been offline this many minutes",
+    "therm_retry_minutes": "Try a failed thermostat change again after (minutes)",
     "battery_alert_percent": "Alert when a lock battery is below (%)",
 }
 
@@ -58,7 +60,7 @@ RANGES = {  # (min, max) accepted on the Setup page
     "occ_summer": (50, 90), "occ_winter": (50, 90), "vac_summer": (50, 95), "vac_winter": (40, 90),
     "summer_start_month": (1, 12), "summer_end_month": (1, 12),
     "therm_lead_hours": (0, 24), "therm_lag_hours": (0, 24), "vacant_reset_hour": (0, 23),
-    "therm_offline_minutes": (5, 1440), "battery_alert_percent": (1, 100),
+    "therm_offline_minutes": (5, 1440), "therm_retry_minutes": (5, 1440), "battery_alert_percent": (1, 100),
 }
 
 
@@ -182,6 +184,8 @@ class ClimateManager:
         for t in due:
             if t["state"] in OFFLINE_STATES:
                 continue  # cannot be reached; the offline alert covers it
+            if t["retry_after"] and datetime.fromisoformat(t["retry_after"]) > now:
+                continue  # Honeywell is limited per day; a failed change waits instead of retrying every tick
             if await self._apply(t, now, cfg):
                 changed += 1
         await self._offline_alerts(now, cfg)
@@ -206,6 +210,7 @@ class ClimateManager:
 
         summer = is_summer(now.date(), cfg["summer_start_month"], cfg["summer_end_month"])
         target = setpoint(mode, summer, cfg)
+        t = await self._set_season_mode(t, "cool" if summer else "heat")
         low, high = t.get("min_temp"), t.get("max_temp")
         if low is not None and high is not None and not low <= target <= high:
             # Some thermostats are limited at the device (a rental often is). Ask for the nearest allowed value
@@ -224,16 +229,37 @@ class ClimateManager:
         except Exception as exc:
             await self._failed(t, now, str(exc) or type(exc).__name__)
             return False
-        self.db.execute("UPDATE thermostats SET last_mode = ?, last_applied_at = ?, fail_count = 0, last_error = NULL "
-                        "WHERE id = ?", (mode, self._stamp(), t["id"]))
+        self.db.execute("UPDATE thermostats SET last_mode = ?, last_applied_at = ?, fail_count = 0, last_error = NULL, "
+                        "retry_after = NULL WHERE id = ?", (mode, self._stamp(), t["id"]))
         self.db.log("thermostat.set", f"{t['property_name']}: {mode} {'summer' if summer else 'winter'}, set to {target}°",
                     property_id=t["property_id"])
         return True
 
+    async def _set_season_mode(self, t: dict[str, Any], want: str) -> dict[str, Any]:
+        """Cool in summer, heat in winter. A thermostat left in Auto applies its heating limit (74°) even when we ask
+        for a cooling temperature, so a vacant home could never reach 78°. Returns the thermostat as it is now,
+        because switching mode changes the temperature range it accepts."""
+        if t["state"] == want:
+            return t
+        try:
+            await self.ha.set_hvac_mode(t["entity_id"], want)
+            await asyncio.sleep(self.verify_delay)
+            fresh = next((c for c in await self.ha.climate_states() if c["entity_id"] == t["entity_id"]), None)
+        except Exception as exc:  # the temperature is still attempted; a failure there is judged on its own
+            self.db.log("thermostat.mode_failed", f"{t['name']}: could not switch to {want} ({exc or type(exc).__name__})",
+                        level="warning", property_id=t["property_id"])
+            return t
+        self.db.log("thermostat.mode", f"{t['name']}: switched {t['state']} to {want}", property_id=t["property_id"])
+        if fresh is None:
+            return t
+        keep = ("state", "current_temp", "target_temp", "target_low", "target_high", "min_temp", "max_temp")
+        return {**t, **{k: fresh.get(k) for k in keep}}
+
     async def _failed(self, t: dict[str, Any], now: datetime, error: str) -> None:
         fails = t["fail_count"] + 1
-        self.db.execute("UPDATE thermostats SET fail_count = ?, last_error = ? WHERE id = ?",
-                        (fails, error[:300], t["id"]))
+        retry = (now + timedelta(minutes=self.cfg()["therm_retry_minutes"])).astimezone(timezone.utc)
+        self.db.execute("UPDATE thermostats SET fail_count = ?, last_error = ?, retry_after = ? WHERE id = ?",
+                        (fails, error[:300], retry.isoformat(timespec="seconds"), t["id"]))
         self.db.log("thermostat.failed", f"{t['name']}: {error}", level="warning", property_id=t["property_id"])
         if fails >= 3:  # retried every few minutes; three misses in a row is worth a person's attention
             await self.alert(f"Thermostat not responding: {t['property_name']}",

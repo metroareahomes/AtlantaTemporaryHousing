@@ -99,6 +99,9 @@ class FakeHA:
                                           "current_temp": 74, "target_temp": 72, "target_low": None,
                                           "target_high": None, "hvac_action": "cooling", "fan_mode": "auto"}}
         self.sets = []
+        self.modes = []
+        self.mode_fails = False
+        self.mode_ranges = {}  # mode -> (min, max) the thermostat accepts once it is in that mode
         self.ignore_sets = False
         self.batteries = {}
         self.notes = []
@@ -117,6 +120,15 @@ class FakeHA:
             state["target_low"] = low
         if high is not None:
             state["target_high"] = high
+
+    async def set_hvac_mode(self, entity_id, mode):
+        self.modes.append((entity_id, mode))
+        if self.mode_fails:
+            raise RuntimeError("mode refused")
+        state = self.climate[entity_id]
+        state["state"] = mode
+        if mode in self.mode_ranges:
+            state["min_temp"], state["max_temp"] = self.mode_ranges[mode]
 
     async def lock_batteries(self):
         return dict(self.batteries)
@@ -199,9 +211,33 @@ def test_target_outside_the_thermostats_own_limits_is_clamped_and_logged(cm):
 
 
 def test_range_thermostat_in_summer_moves_cooling_bound_only(cm):
+    cm.ha.mode_fails = True  # cannot be switched to cool, so the two-setpoint path is what is left
     cm.ha.climate["climate.maple"].update(state="heat_cool", target_temp=None, target_low=66, target_high=74)
     tick(cm, at("2030-06-10T12:00"))
     assert cm.ha.sets == [("climate.maple", None, 66.0, 78.0)]
+    assert cm.db.one("SELECT 1 FROM events WHERE kind = 'thermostat.mode_failed'")
+
+
+def test_summer_switches_to_cool_first_and_uses_the_cooling_range(cm):
+    cm.ha.climate["climate.maple"].update(state="heat_cool", target_temp=None, target_low=66, target_high=74,
+                                          min_temp=69, max_temp=74)
+    cm.ha.mode_ranges["cool"] = (68, 90)  # in cool the thermostat accepts up to 90
+    tick(cm, at("2030-06-10T12:00"))  # vacant, summer: 78
+    assert cm.ha.modes == [("climate.maple", "cool")]
+    assert cm.ha.sets == [("climate.maple", 78.0, None, None)]  # not cut to 74
+    assert cm.db.one("SELECT 1 FROM events WHERE kind = 'thermostat.mode'")
+    assert not cm.db.one("SELECT 1 FROM events WHERE kind = 'thermostat.limited'")
+
+
+def test_winter_switches_to_heat(cm):
+    cm.db.execute("DELETE FROM reservations")
+    tick(cm, at("2030-12-10T12:00"))
+    assert cm.ha.modes == [("climate.maple", "heat")]
+
+
+def test_a_thermostat_already_in_the_right_mode_is_not_switched(cm):
+    tick(cm, at("2030-06-10T12:00"))  # it is already in cool
+    assert cm.ha.modes == []
 
 
 def test_switching_on_mid_stay_leaves_the_guest_alone(cm):
@@ -222,7 +258,17 @@ def test_homes_without_automation_or_pairing_are_never_touched(cm):
     assert cm.ha.sets == []
 
 
+def test_a_failed_change_waits_before_it_is_tried_again(cm):
+    cm.ha.ignore_sets = True
+    for minute in (0, 5, 10, 55):
+        tick(cm, at(f"2030-06-10T12:{minute:02d}"))
+    assert len(cm.ha.sets) == 1  # one try, then it waits (default: an hour)
+    tick(cm, at("2030-06-10T13:01"))
+    assert len(cm.ha.sets) == 2
+
+
 def test_a_thermostat_that_ignores_the_command_is_retried_and_then_alerts(cm):
+    cm.db.set_setting("therm_retry_minutes", "5")
     cm.ha.ignore_sets = True
     for minute in (0, 5, 10, 15):
         tick(cm, at(f"2030-06-10T12:{minute:02d}"))

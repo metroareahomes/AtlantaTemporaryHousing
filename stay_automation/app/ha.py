@@ -87,6 +87,9 @@ class HAClient:
             payload["target_temp_high"] = high
         await self._post("/api/services/climate/set_temperature", payload)
 
+    async def set_hvac_mode(self, entity_id: str, mode: str) -> None:
+        await self._post("/api/services/climate/set_hvac_mode", {"entity_id": entity_id, "hvac_mode": mode})
+
     async def lock_batteries(self) -> dict[str, int]:
         """Battery percent per Schlage lock, from the battery sensor on the same device. Empty if unavailable."""
         template = (
