@@ -90,10 +90,6 @@ class HAClient:
     async def set_hvac_mode(self, entity_id: str, mode: str) -> None:
         await self._post("/api/services/climate/set_hvac_mode", {"entity_id": entity_id, "hvac_mode": mode})
 
-    async def update_entity(self, entity_id: str) -> None:
-        """Ask Home Assistant to refresh one entity from Honeywell. Used instead of Lyric's background poll."""
-        await self._post("/api/services/homeassistant/update_entity", {"entity_id": entity_id})
-
     async def lock_batteries(self) -> dict[str, int]:
         """Battery percent per Schlage lock, from the battery sensor on the same device. Empty if unavailable."""
         template = (

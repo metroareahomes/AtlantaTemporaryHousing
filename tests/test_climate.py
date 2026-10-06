@@ -103,18 +103,15 @@ class FakeHA:
                                           "target_high": None, "hvac_action": "cooling", "fan_mode": "auto"}}
         self.sets = []
         self.modes = []
-        self.updates = []
         self.mode_fails = False
         self.mode_ranges = {}  # mode -> (min, max) the thermostat accepts once it is in that mode
         self.ignore_sets = False
+        self.unavailable_after_set = False
         self.batteries = {}
         self.notes = []
 
     async def climate_states(self):
         return [dict(v) for v in self.climate.values()]
-
-    async def update_entity(self, entity_id):
-        self.updates.append(entity_id)
 
     async def set_temperature(self, entity_id, *, temperature=None, low=None, high=None):
         self.sets.append((entity_id, temperature, low, high))
@@ -127,6 +124,9 @@ class FakeHA:
             state["target_low"] = low
         if high is not None:
             state["target_high"] = high
+        if self.unavailable_after_set:
+            state["state"] = "unavailable"
+            state["target_temp"] = None
 
     async def set_hvac_mode(self, entity_id, mode):
         self.modes.append((entity_id, mode))
@@ -266,7 +266,7 @@ def test_already_at_target_is_not_written_to_honeywell(cm):
     cm.db.execute("UPDATE thermostats SET fail_count = 115, last_error = 'HTTP 500'")
     cm.ha.climate["climate.maple"].update(target_temp=78)
     assert tick(cm, at("2030-06-10T12:00")) == 1
-    assert cm.ha.sets == [] and cm.ha.updates == []
+    assert cm.ha.sets == []
     r = row(cm)
     assert r["last_mode"] == "vacant" and r["fail_count"] == 0 and r["last_error"] is None
     note = cm.db.one("SELECT message FROM events WHERE kind = 'thermostat.set'")["message"]
@@ -330,6 +330,13 @@ def test_retry_wait_clears_when_the_thermostat_is_already_right(cm):
     tick(cm, at("2030-06-10T12:05"))  # still inside the hour wait
     assert len(cm.ha.sets) == 1
     assert row(cm)["last_mode"] == "vacant" and row(cm)["fail_count"] == 0
+
+
+def test_unavailable_after_a_write_is_not_logged_as_a_failed_set(cm):
+    cm.ha.unavailable_after_set = True
+    tick(cm, at("2030-06-10T12:00"))
+    assert row(cm)["last_mode"] == "vacant" and row(cm)["fail_count"] == 0
+    assert not cm.db.one("SELECT 1 FROM events WHERE kind = 'thermostat.failed'")
 
 
 def test_a_thermostat_that_ignores_the_command_is_retried_and_then_alerts(cm):

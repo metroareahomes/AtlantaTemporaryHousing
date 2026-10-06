@@ -167,9 +167,13 @@ class ClimateManager:
             since = row["offline_since"] if offline else None
             if offline and not since:
                 since = self._stamp()
-                self.db.log("thermostat.offline",
-                            f"{c['name']} reported as '{c['state']}' by Home Assistant (current temp {c['current_temp']})",
-                            level="warning", property_id=row["property_id"])
+                auto = row["property_id"] and self.db.one(
+                    "SELECT thermostat_automation FROM properties WHERE id = ?", (row["property_id"],))
+                if auto and auto["thermostat_automation"]:
+                    self.db.log("thermostat.offline",
+                                f"{c['name']} reported as '{c['state']}' by Home Assistant "
+                                f"(current temp {c['current_temp']})",
+                                level="warning", property_id=row["property_id"])
             self.db.execute(
                 "UPDATE thermostats SET name = ?, state = ?, current_temp = ?, target_temp = ?, target_low = ?, "
                 "target_high = ?, hvac_action = ?, fan_mode = ?, offline_since = ?, seen_at = ?, "
@@ -218,26 +222,6 @@ class ClimateManager:
                     await asyncio.sleep(cfg["therm_gap_seconds"])
         await self._offline_alerts(now, cfg)
         return changed
-
-    async def _merge_state(self, t: dict[str, Any]) -> dict[str, Any]:
-        fresh = next((c for c in await self.ha.climate_states() if c["entity_id"] == t["entity_id"]), None)
-        if fresh is None:
-            return t
-        keep = ("state", "current_temp", "target_temp", "target_low", "target_high",
-                "min_temp", "max_temp", "hvac_action", "fan_mode")
-        return {**t, **{k: fresh.get(k) for k in keep}}
-
-    async def _pull(self, t: dict[str, Any]) -> dict[str, Any]:
-        """Refresh this one entity from Honeywell. Do not call for homes that are already at target."""
-        try:
-            await self.ha.update_entity(t["entity_id"])
-            await asyncio.sleep(2 if self.verify_delay else 0)
-        except Exception as exc:
-            self.db.log("thermostat.refresh_failed",
-                        f"{t['name']}: could not refresh from Honeywell ({exc or type(exc).__name__})",
-                        level="warning", property_id=t["property_id"])
-            return t
-        return await self._merge_state(t)
 
     async def _apply(self, t: dict[str, Any], now: datetime, cfg: dict[str, int],
                      allow_write: bool = True) -> str:
@@ -288,14 +272,6 @@ class ClimateManager:
         if not allow_write:
             return "skip"
 
-        t = await self._pull(t)
-        if t["state"] == want_mode:
-            target = _clamp(t, wanted)
-            call = target_call(t, target, summer)
-            if took_effect(call, t):
-                self._recorded(t, mode, target, summer, already=True)
-                return "record"
-
         t = await self._set_season_mode(t, want_mode)
         target = _clamp(t, wanted)
         call = target_call(t, target, summer)
@@ -306,7 +282,12 @@ class ClimateManager:
             await self.ha.set_temperature(t["entity_id"], **call)
             await asyncio.sleep(self.verify_delay)
             fresh = next((c for c in await self.ha.climate_states() if c["entity_id"] == t["entity_id"]), None)
-            if fresh is None or not took_effect(call, fresh):
+            # Lyric refreshes the whole account after a set. A 429 makes every climate.* go
+            # unavailable; that is not proof this write failed.
+            if fresh is None or fresh.get("state") in OFFLINE_STATES:
+                self._recorded(t, mode, target, summer, already=False)
+                return "write"
+            if not took_effect(call, fresh):
                 raise RuntimeError("the thermostat did not take the new temperature")
         except Exception as exc:
             await self._failed(t, now, str(exc) or type(exc).__name__)
@@ -356,7 +337,7 @@ class ClimateManager:
     async def _offline_alerts(self, now: datetime, cfg: dict[str, int]) -> None:
         for t in self.db.query(
                 "SELECT t.*, p.name AS property_name FROM thermostats t JOIN properties p ON p.id = t.property_id "
-                "WHERE p.active = 1 AND t.offline_since IS NOT NULL"):
+                "WHERE p.active = 1 AND p.thermostat_automation = 1 AND t.offline_since IS NOT NULL"):
             down = datetime.fromisoformat(t["offline_since"])
             if now - down >= timedelta(minutes=cfg["therm_offline_minutes"]):
                 await self.alert(
