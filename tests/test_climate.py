@@ -103,6 +103,7 @@ class FakeHA:
                                           "target_high": None, "hvac_action": "cooling", "fan_mode": "auto"}}
         self.sets = []
         self.modes = []
+        self.updates = []
         self.mode_fails = False
         self.mode_ranges = {}  # mode -> (min, max) the thermostat accepts once it is in that mode
         self.ignore_sets = False
@@ -111,6 +112,9 @@ class FakeHA:
 
     async def climate_states(self):
         return [dict(v) for v in self.climate.values()]
+
+    async def update_entity(self, entity_id):
+        self.updates.append(entity_id)
 
     async def set_temperature(self, entity_id, *, temperature=None, low=None, high=None):
         self.sets.append((entity_id, temperature, low, high))
@@ -262,7 +266,7 @@ def test_already_at_target_is_not_written_to_honeywell(cm):
     cm.db.execute("UPDATE thermostats SET fail_count = 115, last_error = 'HTTP 500'")
     cm.ha.climate["climate.maple"].update(target_temp=78)
     assert tick(cm, at("2030-06-10T12:00")) == 1
-    assert cm.ha.sets == []
+    assert cm.ha.sets == [] and cm.ha.updates == []
     r = row(cm)
     assert r["last_mode"] == "vacant" and r["fail_count"] == 0 and r["last_error"] is None
     note = cm.db.one("SELECT message FROM events WHERE kind = 'thermostat.set'")["message"]
@@ -284,6 +288,20 @@ def test_switching_on_mid_stay_leaves_the_guest_alone(cm):
     assert cm.db.one("SELECT 1 FROM events WHERE kind = 'thermostat.adopted'")
     tick(cm, at("2030-06-15T13:00"))  # but checkout still sets it vacant
     assert cm.ha.sets[-1][1] == 78.0
+
+
+def test_one_honeywell_write_per_pass_when_several_homes_are_due(cm):
+    pid2 = cm.db.execute("INSERT INTO properties(hostaway_listing_id, hostaway_name, name, thermostat_automation) "
+                         "VALUES(101, 'Cedar 1', 'Cedar 1', 1)")
+    cm.db.execute("INSERT INTO thermostats(entity_id, name, property_id, match_source) "
+                  "VALUES('climate.cedar', 'Cedar thermostat', ?, 'manual')", (pid2,))
+    cm.ha.climate["climate.cedar"] = {**cm.ha.climate["climate.maple"], "entity_id": "climate.cedar",
+                                      "name": "Cedar thermostat"}
+    tick(cm, at("2030-06-10T12:00"))
+    assert len(cm.ha.sets) == 1
+    tick(cm, at("2030-06-10T12:05"))
+    assert len(cm.ha.sets) == 2
+    assert {e for e, *_ in cm.ha.sets} == {"climate.maple", "climate.cedar"}
 
 
 def test_homes_without_automation_or_pairing_are_never_touched(cm):

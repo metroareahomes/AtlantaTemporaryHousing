@@ -38,6 +38,8 @@ DEFAULTS = {
     "vacant_reset_hour": 11,     # vacant homes are set to vacant again daily after this hour
     "therm_offline_minutes": 30,
     "therm_retry_minutes": 60,   # a failed change is tried again after this long, not every tick
+    "therm_max_per_tick": 1,    # Honeywell's coordinator refreshes the whole account per write
+    "therm_gap_seconds": 30,    # pause between writes in the same tick (unused when max is 1)
     "battery_alert_percent": 15,
 }
 
@@ -53,6 +55,8 @@ LABELS = {
     "vacant_reset_hour": "Re-set vacant homes daily after (hour, 0-23)",
     "therm_offline_minutes": "Alert when a thermostat has been offline this many minutes",
     "therm_retry_minutes": "Try a failed thermostat change again after (minutes)",
+    "therm_max_per_tick": "Honeywell writes per 5-minute pass (keep at 1 while rate-limited)",
+    "therm_gap_seconds": "Seconds to wait between Honeywell writes in the same pass",
     "battery_alert_percent": "Alert when a lock battery is below (%)",
 }
 
@@ -60,7 +64,9 @@ RANGES = {  # (min, max) accepted on the Setup page
     "occ_summer": (50, 90), "occ_winter": (50, 90), "vac_summer": (50, 95), "vac_winter": (40, 90),
     "summer_start_month": (1, 12), "summer_end_month": (1, 12),
     "therm_lead_hours": (0, 24), "therm_lag_hours": (0, 24), "vacant_reset_hour": (0, 23),
-    "therm_offline_minutes": (5, 1440), "therm_retry_minutes": (5, 1440), "battery_alert_percent": (1, 100),
+    "therm_offline_minutes": (5, 1440), "therm_retry_minutes": (5, 1440),
+    "therm_max_per_tick": (1, 20), "therm_gap_seconds": (0, 300),
+    "battery_alert_percent": (1, 100),
 }
 
 
@@ -186,11 +192,15 @@ class ClimateManager:
                         "last_applied_at = NULL WHERE id = ?", (property_id, thermostat_id))
 
     async def tick(self) -> int:
-        """Refresh readings, apply occupied/vacant where due, then check health. Returns thermostats changed."""
+        """Refresh HA's cached readings, apply occupied/vacant where due. Honeywell is only contacted for
+        homes that actually need a change, and only a few per pass (Lyric refreshes the whole account
+        on every write)."""
         await self.refresh()
         now = self.s.now()
         cfg = self.cfg()
         changed = 0
+        writes = 0
+        cap = cfg["therm_max_per_tick"]
         due = self.db.query(
             "SELECT t.*, p.name AS property_name, p.hostaway_listing_id FROM thermostats t "
             "JOIN properties p ON p.id = t.property_id "
@@ -198,12 +208,39 @@ class ClimateManager:
         for t in due:
             if t["state"] in OFFLINE_STATES:
                 continue  # cannot be reached; the offline alert covers it
-            if await self._apply(t, now, cfg):
-                changed += 1
+            result = await self._apply(t, now, cfg, allow_write=writes < cap)
+            if result == "skip":
+                continue
+            changed += 1
+            if result == "write":
+                writes += 1
+                if writes < cap and cfg["therm_gap_seconds"]:
+                    await asyncio.sleep(cfg["therm_gap_seconds"])
         await self._offline_alerts(now, cfg)
         return changed
 
-    async def _apply(self, t: dict[str, Any], now: datetime, cfg: dict[str, int]) -> bool:
+    async def _merge_state(self, t: dict[str, Any]) -> dict[str, Any]:
+        fresh = next((c for c in await self.ha.climate_states() if c["entity_id"] == t["entity_id"]), None)
+        if fresh is None:
+            return t
+        keep = ("state", "current_temp", "target_temp", "target_low", "target_high",
+                "min_temp", "max_temp", "hvac_action", "fan_mode")
+        return {**t, **{k: fresh.get(k) for k in keep}}
+
+    async def _pull(self, t: dict[str, Any]) -> dict[str, Any]:
+        """Refresh this one entity from Honeywell. Do not call for homes that are already at target."""
+        try:
+            await self.ha.update_entity(t["entity_id"])
+            await asyncio.sleep(2 if self.verify_delay else 0)
+        except Exception as exc:
+            self.db.log("thermostat.refresh_failed",
+                        f"{t['name']}: could not refresh from Honeywell ({exc or type(exc).__name__})",
+                        level="warning", property_id=t["property_id"])
+            return t
+        return await self._merge_state(t)
+
+    async def _apply(self, t: dict[str, Any], now: datetime, cfg: dict[str, int],
+                     allow_write: bool = True) -> str:
         reservations = self.s.reservations_for(t["property_id"])
         mode = occupancy(reservations, now, cfg["therm_lead_hours"], cfg["therm_lag_hours"])
         last_applied = None
@@ -216,33 +253,55 @@ class ClimateManager:
                             (self._stamp(), t["id"]))
             self.db.log("thermostat.adopted", f"{t['name']}: stay already under way, left as it is",
                         property_id=t["property_id"])
-            return False
+            return "skip"
         if not should_apply(mode, t["last_mode"], last_applied, now, cfg["vacant_reset_hour"]):
-            return False
+            return "skip"
 
         summer = is_summer(now.date(), cfg["summer_start_month"], cfg["summer_end_month"])
-        target = setpoint(mode, summer, cfg)
+        wanted = setpoint(mode, summer, cfg)
         want_mode = "cool" if summer else "heat"
         waiting = bool(t["retry_after"] and datetime.fromisoformat(t["retry_after"]) > now)
-        if waiting and t["state"] != want_mode:
-            return False  # mode switch is also a Honeywell write
+
+        logged_limit = False
+
+        def _clamp(current: dict[str, Any], raw: int) -> int:
+            nonlocal logged_limit
+            low, high = current.get("min_temp"), current.get("max_temp")
+            if low is not None and high is not None and not low <= raw <= high:
+                limited = int(min(max(raw, low), high))
+                if not logged_limit:
+                    self.db.log("thermostat.limited",
+                                f"{current['name']}: wanted {raw}° but the thermostat only allows "
+                                f"{low:g}-{high:g}°; using {limited}°",
+                                level="warning", property_id=current["property_id"])
+                    logged_limit = True
+                return limited
+            return raw
+
+        if t["state"] == want_mode:
+            target = _clamp(t, wanted)
+            if took_effect(target_call(t, target, summer), t):
+                self._recorded(t, mode, target, summer, already=True)
+                return "record"
+        if waiting:
+            return "skip"
+        if not allow_write:
+            return "skip"
+
+        t = await self._pull(t)
+        if t["state"] == want_mode:
+            target = _clamp(t, wanted)
+            call = target_call(t, target, summer)
+            if took_effect(call, t):
+                self._recorded(t, mode, target, summer, already=True)
+                return "record"
+
         t = await self._set_season_mode(t, want_mode)
-        low, high = t.get("min_temp"), t.get("max_temp")
-        if low is not None and high is not None and not low <= target <= high:
-            # Some thermostats are limited at the device (a rental often is). Ask for the nearest allowed value
-            # instead of failing every five minutes, and say so.
-            wanted, target = target, int(min(max(target, low), high))
-            self.db.log("thermostat.limited",
-                        f"{t['name']}: wanted {wanted}° but the thermostat only allows {low:g}-{high:g}°; using {target}°",
-                        level="warning", property_id=t["property_id"])
+        target = _clamp(t, wanted)
         call = target_call(t, target, summer)
         if took_effect(call, t):
-            # Already showing the number we would send. Writing it again is what Honeywell 429/500'd on
-            # Edward Court (vacant 74°, already 74° cool).
             self._recorded(t, mode, target, summer, already=True)
-            return True
-        if waiting:
-            return False  # would write, but Honeywell is cooling down
+            return "record"
         try:
             await self.ha.set_temperature(t["entity_id"], **call)
             await asyncio.sleep(self.verify_delay)
@@ -251,9 +310,9 @@ class ClimateManager:
                 raise RuntimeError("the thermostat did not take the new temperature")
         except Exception as exc:
             await self._failed(t, now, str(exc) or type(exc).__name__)
-            return False
+            return "skip"
         self._recorded(t, mode, target, summer, already=False)
-        return True
+        return "write"
 
     def _recorded(self, t: dict[str, Any], mode: str, target: int, summer: bool, *, already: bool) -> None:
         self.db.execute("UPDATE thermostats SET last_mode = ?, last_applied_at = ?, fail_count = 0, last_error = NULL, "
