@@ -75,14 +75,19 @@ def _dt(iso: str) -> datetime:
     return datetime.fromisoformat(iso)
 
 
-def add_time(r: dict[str, Any], add_hour: int, lead_hours: int) -> datetime:
+def add_time(r: dict[str, Any], add_hour: int, lead_hours: int, final_minutes: int = 60) -> datetime:
+    """When the guest code should first go in: 8 AM arrival day, or earlier for morning check-ins.
+    Never later than the final check (1 hour before check-in). A same-day booking made after 3 PM
+    lands in that window; waiting until add_hour would only look at the lock and text the guest."""
     check_in = _dt(r["check_in_at"])
     morning = datetime.combine(check_in.date(), time(add_hour), check_in.tzinfo)
-    return min(morning, check_in - timedelta(hours=lead_hours))
+    by_lead = check_in - timedelta(hours=lead_hours)
+    by_final = check_in - timedelta(minutes=final_minutes)
+    return min(morning, by_lead, by_final)
 
 
 def slot_names(reservations: list[dict[str, Any]], add_hour: int, lead_hours: int,
-               actual: dict[str, str] | None = None) -> dict[int, str]:
+               actual: dict[str, str] | None = None, final_minutes: int = 60) -> dict[int, str]:
     """Lock slot name for every booking with a code, stable for the whole stay.
 
     The earlier booking keeps the plain HA-<guest> name; a later booking whose code window overlaps it (same
@@ -97,7 +102,7 @@ def slot_names(reservations: list[dict[str, Any]], add_hour: int, lead_hours: in
     names: dict[int, str] = {}
     windows: list[tuple[str, datetime, datetime]] = []
     for r in live:
-        start, end = add_time(r, add_hour, lead_hours), _dt(r["check_out_at"])
+        start, end = add_time(r, add_hour, lead_hours, final_minutes), _dt(r["check_out_at"])
         legacy = f"{PREFIX}{r['id']}"
         if actual is not None and actual.get(legacy) == r["door_code"]:
             names[r["id"]] = legacy
@@ -111,12 +116,13 @@ def slot_names(reservations: list[dict[str, Any]], add_hour: int, lead_hours: in
 def desired_codes(reservations: list[dict[str, Any]], now: datetime, add_hour: int, lead_hours: int,
                   backup_code: str | None = None, staff: dict[str, str] | None = None,
                   actual: dict[str, str] | None = None,
-                  previews: dict[str, str] | None = None) -> dict[str, str]:
+                  previews: dict[str, str] | None = None, final_minutes: int = 60) -> dict[str, str]:
     """Our codes that should be in the lock at `now`, as {name: code}."""
     out: dict[str, str] = {}
-    names = slot_names(reservations, add_hour, lead_hours, actual)
+    names = slot_names(reservations, add_hour, lead_hours, actual, final_minutes)
     for r in reservations:
-        if r["active"] and r["door_code"] and add_time(r, add_hour, lead_hours) <= now < _dt(r["check_out_at"]):
+        if (r["active"] and r["door_code"]
+                and add_time(r, add_hour, lead_hours, final_minutes) <= now < _dt(r["check_out_at"])):
             out[names[r["id"]]] = r["door_code"]
     if backup_code:
         out[BACKUP_NAME] = backup_code
@@ -199,7 +205,7 @@ def next_check(reservations: list[dict[str, Any]], now: datetime, cfg: dict[str,
         check_in = _dt(r["check_in_at"])
         afternoon = datetime.combine(check_in.date(), time(cfg["afternoon_check_hour"]), check_in.tzinfo)
         times = [
-            add_time(r, cfg["add_hour"], cfg["early_lead_hours"]),
+            add_time(r, cfg["add_hour"], cfg["early_lead_hours"], cfg["final_check_minutes"]),
             check_in - timedelta(minutes=cfg["final_check_minutes"]),
             _dt(r["check_out_at"]),
             _dt(r["check_out_at"]) + timedelta(minutes=cfg["stale_check_minutes"]),
@@ -342,12 +348,13 @@ class LockManager:
         staff = self.staff_codes() if lock["automated"] else None
         if lock["automated"]:
             return desired_codes(reservations, now, cfg["add_hour"], cfg["early_lead_hours"], backup, staff, actual,
-                                 self.preview_codes(lock["property_id"], now))
+                                 self.preview_codes(lock["property_id"], now), cfg["final_check_minutes"])
         # Automation switched off: add nothing, but guest codes already handed out stay until checkout.
         # Staff codes and HA-BACKUP already in the lock stay: the backup is permanent, and a box that gets
         # unticked by accident must never strip a home of its safety net.
         keep = {n: c for n, c in desired_codes(reservations, now, cfg["add_hour"], cfg["early_lead_hours"],
-                                               actual=actual).items() if n in actual}
+                                               actual=actual, final_minutes=cfg["final_check_minutes"]).items()
+                if n in actual}
         keep.update({n: actual[n] for n in self.staff_codes() if n in actual})
         if BACKUP_NAME in actual:
             keep[BACKUP_NAME] = actual[BACKUP_NAME]
@@ -375,7 +382,8 @@ class LockManager:
                                cfg: dict[str, int]) -> None:
         """Once per booking: the guest code was already in the lock (Hostaway wrote it), so we added nothing.
         Together with code.added this shows how often Hostaway alone would have left a guest without a code."""
-        by_name = {n: rid for rid, n in slot_names(reservations, cfg["add_hour"], cfg["early_lead_hours"]).items()}
+        by_name = {n: rid for rid, n in slot_names(reservations, cfg["add_hour"], cfg["early_lead_hours"],
+                                                   final_minutes=cfg["final_check_minutes"]).items()}
         for name in names:
             if name == BACKUP_NAME or name in self.managed_names():
                 continue

@@ -40,6 +40,12 @@ def test_desired_codes_window():
     assert desired_codes(r, at("2030-01-15T10:00"), 8, 3) == {}
     early = [norm(check_in=9)]  # 9 AM check-in: code goes in at 6 AM
     assert desired_codes(early, at("2030-01-10T06:00"), 8, 3) == {"HA-Ann Lee": "4821"}
+    # Add-at-3pm with a 3pm check-in: the final check (2pm) must already want the code, or a
+    # same-day booking after 3pm only reads the lock and texts the guest.
+    three = [norm(check_in=15)]
+    assert desired_codes(three, at("2030-01-10T13:59"), 15, 0) == {}
+    assert desired_codes(three, at("2030-01-10T14:00"), 15, 0) == {"HA-Ann Lee": "4821"}
+    assert desired_codes(three, at("2030-01-10T15:30"), 15, 0) == {"HA-Ann Lee": "4821"}
     assert desired_codes([norm(status="cancelled")], at("2030-01-12T12:00"), 8, 3) == {}
     assert desired_codes([norm(code=None)], at("2030-01-12T12:00"), 8, 3) == {}
     assert desired_codes([], at("2030-01-12T12:00"), 8, 3, backup_code="5555") == {BACKUP_NAME: "5555"}
@@ -240,6 +246,29 @@ def test_unreadable_lock_at_final_check_triggers_fallback(lm):
     tick_at(lm, at("2030-01-10T15:00"))
     assert lock_row(lm)["fail_count"] == 1
     assert lm.db.one("SELECT * FROM guest_notices") is not None
+
+
+def test_same_day_booking_after_3pm_puts_the_code_in_before_messaging(lm):
+    lm.db.set_setting("guest_messages_enabled", "1")
+    lm.db.set_setting("backup_codes_enabled", "1")
+    lm.s.upsert_reservation(res(check_in=16))  # 4 PM check-in; final window starts at 3 PM
+    tick_at(lm, at("2030-01-10T15:05"))
+    assert lm.ha.codes["lock.a"].get("HA-Ann Lee") == "4821"
+    assert lm.hostaway.sent == []
+
+
+def test_late_booking_still_adds_when_add_hour_is_check_in(lm):
+    lm.db.set_setting("add_hour", "15")
+    lm.db.set_setting("early_lead_hours", "0")
+    lm.db.set_setting("guest_messages_enabled", "1")
+    lm.db.set_setting("backup_codes_enabled", "1")
+    lm.s.upsert_reservation(res(check_in=15))
+    tick_at(lm, at("2030-01-10T14:05"))  # in the final hour, before the 3 PM add hour
+    assert lm.ha.codes["lock.a"].get("HA-Ann Lee") == "4821"
+    assert lm.hostaway.sent == []
+    tick_at(lm, at("2030-01-10T15:30"))  # booked/looked at after check-in
+    assert lm.ha.codes["lock.a"].get("HA-Ann Lee") == "4821"
+    assert lm.hostaway.sent == []
 
 
 def test_a_tick_looks_at_a_limited_number_of_locks(lm):
