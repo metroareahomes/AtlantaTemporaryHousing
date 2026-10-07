@@ -87,7 +87,6 @@ def build():
             db.log("setup.webhook", f"Could not check the add-on slug: {exc}", level="warning")
         await discover()
         await syncer.sync_reservations()
-        await syncer.check_arrival_locks()
         await climate.refresh()
         await climate.check_batteries()
 
@@ -97,7 +96,6 @@ def build():
         await asyncio.gather(
             every(settings.sync_minutes, "sync", syncer.sync_reservations, db),
             every(settings.lock_discovery_minutes, "lock_discovery", discover, db),
-            every(settings.lock_check_minutes, "lock_check", syncer.check_arrival_locks, db),
             every(LOCK_TICK_MINUTES, "lock_automation", locks.tick, db),
             every(CLIMATE_TICK_MINUTES, "thermostats", climate.tick, db),
             every(BATTERY_CHECK_MINUTES, "batteries", climate.check_batteries, db),

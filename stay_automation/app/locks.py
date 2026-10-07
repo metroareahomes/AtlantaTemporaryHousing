@@ -264,12 +264,12 @@ class LockManager:
         self._prepare_backup_codes(now)
         # Expired visitor codes were removed from the locks long ago; forget the rows after a grace period.
         self.db.execute("DELETE FROM preview_codes WHERE expires_at < ?", (_utc(now - timedelta(days=2)),))
-        # Automated homes, plus homes switched off that still hold our codes (wound down, never added to).
+        # Only homes with Lock automation ticked. Unticked homes are not read or written (same as thermostats).
         due = self.db.query(
             "SELECT l.*, p.name AS property_name, p.backup_code, p.backup_used_by, "
             "p.lock_automation = 1 AND p.active = 1 AS automated FROM locks l "
             "JOIN properties p ON p.id = l.property_id "
-            "WHERE (p.lock_automation = 1 AND p.active = 1 OR l.code_names LIKE '%\"" + PREFIX + "%') "
+            "WHERE p.lock_automation = 1 AND p.active = 1 "
             "AND (l.next_check_at IS NULL OR l.next_check_at <= ?) ORDER BY l.next_check_at",
             (_utc(now),),
         )

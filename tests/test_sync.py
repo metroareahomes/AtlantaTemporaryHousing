@@ -79,6 +79,16 @@ def test_import_discover_and_match(syncer):
     assert locks["lock.6805_hill"]["property_id"] is None
 
 
+def test_discover_drops_locks_ha_no_longer_has(syncer):
+    run(syncer.import_listings())
+    run(syncer.discover_locks())
+    syncer.db.execute("INSERT INTO locks(entity_id, name, state) VALUES('lock.ghost', 'Old house', 'unavailable')")
+    run(syncer.discover_locks())
+    assert not syncer.db.one("SELECT 1 FROM locks WHERE entity_id = 'lock.ghost'")
+    assert syncer.db.one("SELECT 1 FROM events WHERE kind = 'lock.gone'")
+    assert syncer.db.one("SELECT 1 FROM locks WHERE entity_id = 'lock.124_maple'")
+
+
 def test_manual_assignment_survives_rediscovery(syncer):
     run(syncer.import_listings())
     run(syncer.discover_locks())

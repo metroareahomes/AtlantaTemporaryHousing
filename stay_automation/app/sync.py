@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 from .config import Settings
 from .db import DB, utcnow
 from .matching import match_lock
-from .reservations import changes, normalize, property_state, within
+from .reservations import changes, normalize
 
 log = logging.getLogger(__name__)
 
@@ -20,10 +20,6 @@ RESERVATION_FIELDS = (
     "listing_id", "guest_name", "status", "active", "arrival_date", "departure_date",
     "check_in_at", "check_out_at", "door_code",
 )
-LOCK_CHECK_HOURS = 36
-LOCK_CHECK_GAP_SECONDS = 5
-
-
 class Syncer:
     def __init__(self, db: DB, settings: Settings, hostaway, ha):
         self.db = db
@@ -79,6 +75,12 @@ class Syncer:
 
     async def discover_locks(self) -> int:
         locks = await self.ha.schlage_locks()
+        if not locks and self.db.one("SELECT 1 FROM locks"):
+            self.db.log("lock.refresh_empty",
+                        "Home Assistant returned no Schlage locks; left the existing list alone",
+                        level="warning")
+            return 0
+        live = {lock["entity_id"] for lock in locks}
         properties = self.db.query("SELECT id, name, hostaway_name, address FROM properties")
         matched = 0
         for lock in locks:
@@ -105,6 +107,11 @@ class Syncer:
                     self.db.log("lock.matched", f"{lock['name']} matched automatically",
                                 property_id=property_id)
                     matched += 1
+        for row in self.db.query("SELECT id, entity_id, name FROM locks"):
+            if row["entity_id"] in live:
+                continue
+            self.db.execute("DELETE FROM locks WHERE id = ?", (row["id"],))
+            self.db.log("lock.gone", f"{row['name']} is no longer on this Schlage account ({row['entity_id']})")
         return matched
 
     def assign_lock(self, lock_id: int, property_id: int | None) -> None:
@@ -132,22 +139,6 @@ class Syncer:
             (json.dumps(sorted(self.code_hash(c) for c in codes.values())),
              json.dumps(sorted(codes)), utcnow(), lock_id),
         )
-
-    async def check_arrival_locks(self) -> int:
-        """Read the codes of locks whose next guest arrives within LOCK_CHECK_HOURS."""
-        now = self.now()
-        checked = 0
-        for lock in self.db.query(
-            "SELECT l.* FROM locks l JOIN properties p ON p.id = l.property_id "
-            "WHERE l.state != 'unavailable' AND p.lock_automation = 0"  # automated locks are read by LockManager
-        ):
-            reservations = self.reservations_for(lock["property_id"])
-            state = property_state(reservations, now)
-            if within(state.next, now, LOCK_CHECK_HOURS) and state.next["door_code"]:
-                await self.read_lock_codes(lock)
-                checked += 1
-                await asyncio.sleep(LOCK_CHECK_GAP_SECONDS)
-        return checked
 
     # ---- reservations -----------------------------------------------------
 

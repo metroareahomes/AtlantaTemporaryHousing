@@ -98,8 +98,10 @@ class FakeLock:
         self.read_fails = False
         self.on_add = None
         self.notes = []
+        self.reads = []
 
     async def get_codes(self, entity_id):
+        self.reads.append(entity_id)
         if self.read_fails:
             raise TimeoutError("schlage timeout")
         return dict(self.codes[entity_id])
@@ -298,6 +300,7 @@ def test_homes_without_automation_are_left_alone(lm):
     lm.db.execute("UPDATE properties SET lock_automation = 0")
     lm.s.upsert_reservation(res())
     assert tick_at(lm, at("2030-01-10T08:01")) == 0
+    assert lm.ha.reads == []
     assert "HA-Ann Lee" not in lm.ha.codes["lock.a"]
 
 
@@ -329,24 +332,23 @@ def test_moved_reservation_follows_the_guest(lm):
     assert "HA-Ann Lee" not in lm.ha.codes["lock.a"] and lm.ha.codes["lock.b"] == {"HA-Ann Lee": "4821"}
 
 
-def test_switched_off_home_keeps_current_guest_code_then_cleans_up(lm):
+def test_switched_off_home_is_not_hit_and_keeps_codes_as_they_are(lm):
     lm.db.set_setting("backup_codes_enabled", "1")
     lm.s.upsert_reservation(res())
     lm.s.upsert_reservation(res(id=2, arrival="2030-01-16", departure="2030-01-20", code="7777"))
     tick_at(lm, at("2030-01-10T08:01"))
     assert set(lm.ha.codes["lock.a"]) == {"Master", "HA-Ann Lee", BACKUP_NAME}
+    before = dict(lm.ha.codes["lock.a"])
+    reads = len(lm.ha.reads)
 
     lm.db.execute("UPDATE properties SET lock_automation = 0")
     lm.db.execute("UPDATE locks SET next_check_at = NULL")  # what saving the Properties page does
-    tick_at(lm, at("2030-01-10T09:00"))
-    # guest keeps their code, and the permanent backup stays: an unticked box must not strip the home
-    assert set(lm.ha.codes["lock.a"]) == {"Master", "HA-Ann Lee", BACKUP_NAME}
-    backup = lm.ha.codes["lock.a"][BACKUP_NAME]
-    tick_at(lm, at("2030-01-15T10:01"))
-    assert lm.ha.codes["lock.a"] == {"Master": "9999", BACKUP_NAME: backup}  # guest removed at checkout
-    tick_at(lm, at("2030-01-16T08:01"))
-    assert lm.ha.codes["lock.a"] == {"Master": "9999", BACKUP_NAME: backup}  # nothing new is added
-    assert not [t for t, _ in lm.ha.notes if "NOT confirmed" in t]  # and no guest fallback
+    assert tick_at(lm, at("2030-01-10T09:00")) == 0
+    assert tick_at(lm, at("2030-01-15T10:01")) == 0  # checkout: still not touched
+    assert tick_at(lm, at("2030-01-16T08:01")) == 0  # next guest: nothing added
+    assert len(lm.ha.reads) == reads
+    assert lm.ha.codes["lock.a"] == before
+    assert not [t for t, _ in lm.ha.notes if "NOT confirmed" in t]
 
 
 def test_backup_that_keeps_getting_replaced_raises_one_alert(lm):
@@ -800,7 +802,8 @@ def test_visitor_code_stays_while_automation_is_off_until_it_expires(lm):
     tick_at(lm, at("2030-01-01T12:05"))
     lm.db.execute("UPDATE properties SET lock_automation = 0")
     lm.db.execute("UPDATE locks SET next_check_at = NULL")
+    reads = len(lm.ha.reads)
     tick_at(lm, at("2030-01-01T13:00"))
+    tick_at(lm, at("2030-01-02T12:10"))  # past expiry: still not hit
+    assert len(lm.ha.reads) == reads
     assert lm.ha.codes["lock.a"]["HA-Preview Amy"] == "3141"
-    tick_at(lm, at("2030-01-02T12:10"))
-    assert "HA-Preview Amy" not in lm.ha.codes["lock.a"]
