@@ -111,6 +111,7 @@ class FakeHA:
         self.mode_ranges = {}  # mode -> (min, max) the thermostat accepts once it is in that mode
         self.ignore_sets = False
         self.unavailable_after_set = False
+        self.error_after_set = False  # HA 500 even though Honeywell applied the change
         self.batteries = {}
         self.notes = []
 
@@ -135,6 +136,9 @@ class FakeHA:
         if self.unavailable_after_set:
             state["state"] = "unavailable"
             state["target_temp"] = None
+        if self.error_after_set:
+            raise RuntimeError("POST /api/services/climate/set_temperature: HTTP 500 "
+                               "500 Internal Server Error Server got itself in trouble")
 
     async def set_hvac_mode(self, entity_id, mode):
         self.modes.append((entity_id, mode))
@@ -366,6 +370,16 @@ def test_unavailable_after_a_write_is_not_logged_as_a_failed_set(cm):
     tick(cm, at("2030-06-10T12:00"))
     assert row(cm)["last_mode"] == "vacant" and row(cm)["fail_count"] == 0
     assert not cm.db.one("SELECT 1 FROM events WHERE kind = 'thermostat.failed'")
+
+
+def test_http_500_on_set_is_success_when_thermostat_already_moved(cm):
+    """Cancel → vacant: Lyric returns HTTP 500 but the thermostat is already at vacant."""
+    cm.ha.error_after_set = True
+    tick(cm, at("2030-06-10T12:00"))
+    assert cm.ha.sets[-1][1] == 78.0
+    assert row(cm)["last_mode"] == "vacant" and row(cm)["fail_count"] == 0
+    assert not cm.db.one("SELECT 1 FROM events WHERE kind = 'thermostat.failed'")
+    assert cm.db.one("SELECT 1 FROM events WHERE kind = 'thermostat.set'")
 
 
 def test_a_thermostat_that_ignores_the_command_is_retried_and_then_alerts(cm):

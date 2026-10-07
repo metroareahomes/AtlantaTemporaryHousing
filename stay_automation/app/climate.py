@@ -338,18 +338,27 @@ class ClimateManager:
             return "record"
         try:
             await self.ha.set_temperature(t["entity_id"], **call)
+        except Exception as exc:
+            # Lyric often returns HTTP 500/429 on the POST even when Honeywell already applied the
+            # change (cancel → vacant on CC4). Re-read before counting a failure.
             await asyncio.sleep(self.verify_delay)
             fresh = await self._read(t["entity_id"])
-            # Lyric refreshes the whole account after a set. A 429 makes every climate.* go
-            # unavailable; that is not proof this write failed.
-            if fresh is None or fresh.get("state") in OFFLINE_STATES:
+            if fresh is None or fresh.get("state") in OFFLINE_STATES or took_effect(call, fresh):
                 self._recorded(t, mode, target, summer, already=False,
                                reservation_id=occupying["id"] if occupying else None)
                 return "write"
-            if not took_effect(call, fresh):
-                raise RuntimeError("the thermostat did not take the new temperature")
-        except Exception as exc:
             await self._failed(t, now, str(exc) or type(exc).__name__)
+            return "skip"
+        await asyncio.sleep(self.verify_delay)
+        fresh = await self._read(t["entity_id"])
+        # Lyric refreshes the whole account after a set. A 429 makes every climate.* go
+        # unavailable; that is not proof this write failed.
+        if fresh is None or fresh.get("state") in OFFLINE_STATES:
+            self._recorded(t, mode, target, summer, already=False,
+                           reservation_id=occupying["id"] if occupying else None)
+            return "write"
+        if not took_effect(call, fresh):
+            await self._failed(t, now, "the thermostat did not take the new temperature")
             return "skip"
         self._recorded(t, mode, target, summer, already=False,
                        reservation_id=occupying["id"] if occupying else None)
