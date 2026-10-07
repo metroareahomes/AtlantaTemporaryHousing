@@ -16,7 +16,10 @@ Home Assistant add-on that keeps Schlage lock codes and Honeywell thermostats in
 - Hostaway's own lock automation stays on: Hostaway creates each guest code and usually writes it to the lock.
   A code Hostaway already wrote counts as present, so the add-on only adds its own copy when the code is missing.
   If Hostaway has not removed a guest's code two hours after checkout, staff are alerted.
-- Phase 3 (thermostats) is not built yet.
+- Phase 3: for homes with "Thermostat automation" on, Honeywell (Lyric) setpoints follow the stay —
+  occupied from check-in minus lead hours through check-out plus lag, otherwise vacant. Summer/winter
+  temperatures and timing are edited on Setup. Writes are one-at-a-time; cancel/create wakes that home.
+  Lyric polling in Home Assistant should stay off so Resideo does not rate-limit the account.
 
 ## Run locally
 
