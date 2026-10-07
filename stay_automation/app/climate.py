@@ -18,7 +18,6 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from .matching import match_lock
-from .reservations import property_state
 
 log = logging.getLogger(__name__)
 
@@ -80,6 +79,12 @@ def is_summer(day: date, start_month: int, end_month: int) -> bool:
 
 def occupancy(reservations: list[dict[str, Any]], now: datetime, lead_hours: int, lag_hours: int) -> str:
     """"occupied" or "vacant" for this moment."""
+    return "occupied" if occupying_reservation(reservations, now, lead_hours, lag_hours) else "vacant"
+
+
+def occupying_reservation(reservations: list[dict[str, Any]], now: datetime, lead_hours: int,
+                          lag_hours: int) -> dict[str, Any] | None:
+    """The booking that makes the home occupied right now (check-in minus lead through checkout plus lag)."""
     active = [r for r in reservations if r["active"]]
     for r in active:
         start = datetime.fromisoformat(r["check_in_at"]) - timedelta(hours=lead_hours)
@@ -88,8 +93,8 @@ def occupancy(reservations: list[dict[str, Any]], now: datetime, lead_hours: int
             if other["id"] != r["id"] and other["arrival_date"] == r["departure_date"]:
                 end = max(end, datetime.fromisoformat(other["check_in_at"]))
         if start <= now < end:
-            return "occupied"
-    return "vacant"
+            return r
+    return None
 
 
 def setpoint(mode: str, summer: bool, cfg: dict[str, int]) -> int:
@@ -97,8 +102,12 @@ def setpoint(mode: str, summer: bool, cfg: dict[str, int]) -> int:
 
 
 def should_apply(mode: str, last_mode: str | None, last_applied: datetime | None, now: datetime,
-                 reset_hour: int) -> bool:
-    """Set on every change; and re-set a home that stays vacant once a day (cleaners may have changed it)."""
+                 reset_hour: int, occupying_id: int | None = None,
+                 last_reservation_id: int | None = None) -> bool:
+    """Set on every change; on a new booking even if the last stay was also occupied; and re-set a
+    vacant home once a day (cleaners may have changed it)."""
+    if mode == "occupied" and occupying_id and occupying_id != last_reservation_id:
+        return True
     if mode != last_mode or last_applied is None:
         return True
     return mode == "vacant" and last_applied.date() < now.date() and now.hour >= reset_hour
@@ -226,19 +235,25 @@ class ClimateManager:
     async def _apply(self, t: dict[str, Any], now: datetime, cfg: dict[str, int],
                      allow_write: bool = True) -> str:
         reservations = self.s.reservations_for(t["property_id"])
-        mode = occupancy(reservations, now, cfg["therm_lead_hours"], cfg["therm_lag_hours"])
+        occupying = occupying_reservation(reservations, now, cfg["therm_lead_hours"], cfg["therm_lag_hours"])
+        mode = "occupied" if occupying else "vacant"
         last_applied = None
         if t["last_applied_at"]:
             last_applied = datetime.fromisoformat(t["last_applied_at"]).astimezone(self.s.tz)
 
-        if t["last_mode"] is None and mode == "occupied" and property_state(reservations, now).current:
-            # Switched on in the middle of a stay: leave the guest's temperature alone.
-            self.db.execute("UPDATE thermostats SET last_mode = 'occupied', last_applied_at = ? WHERE id = ?",
-                            (self._stamp(), t["id"]))
+        # Automation switched on mid-stay for a guest who arrived on an earlier day: leave their temp.
+        # A same-day booking (check-in is usually 3pm, guest often arrives at 8pm, booked after 3pm)
+        # is not "mid-stay" — set occupied now.
+        if (t["last_mode"] is None and occupying and not t.get("last_reservation_id")
+                and occupying["arrival_date"] != now.date().isoformat()):
+            self.db.execute(
+                "UPDATE thermostats SET last_mode = 'occupied', last_applied_at = ?, last_reservation_id = ? "
+                "WHERE id = ?", (self._stamp(), occupying["id"], t["id"]))
             self.db.log("thermostat.adopted", f"{t['name']}: stay already under way, left as it is",
                         property_id=t["property_id"])
             return "skip"
-        if not should_apply(mode, t["last_mode"], last_applied, now, cfg["vacant_reset_hour"]):
+        if not should_apply(mode, t["last_mode"], last_applied, now, cfg["vacant_reset_hour"],
+                            occupying["id"] if occupying else None, t.get("last_reservation_id")):
             return "skip"
 
         summer = is_summer(now.date(), cfg["summer_start_month"], cfg["summer_end_month"])
@@ -265,7 +280,8 @@ class ClimateManager:
         if t["state"] == want_mode:
             target = _clamp(t, wanted)
             if took_effect(target_call(t, target, summer), t):
-                self._recorded(t, mode, target, summer, already=True)
+                self._recorded(t, mode, target, summer, already=True,
+                               reservation_id=occupying["id"] if occupying else None)
                 return "record"
         if waiting:
             return "skip"
@@ -276,7 +292,8 @@ class ClimateManager:
         target = _clamp(t, wanted)
         call = target_call(t, target, summer)
         if took_effect(call, t):
-            self._recorded(t, mode, target, summer, already=True)
+            self._recorded(t, mode, target, summer, already=True,
+                           reservation_id=occupying["id"] if occupying else None)
             return "record"
         try:
             await self.ha.set_temperature(t["entity_id"], **call)
@@ -285,19 +302,24 @@ class ClimateManager:
             # Lyric refreshes the whole account after a set. A 429 makes every climate.* go
             # unavailable; that is not proof this write failed.
             if fresh is None or fresh.get("state") in OFFLINE_STATES:
-                self._recorded(t, mode, target, summer, already=False)
+                self._recorded(t, mode, target, summer, already=False,
+                               reservation_id=occupying["id"] if occupying else None)
                 return "write"
             if not took_effect(call, fresh):
                 raise RuntimeError("the thermostat did not take the new temperature")
         except Exception as exc:
             await self._failed(t, now, str(exc) or type(exc).__name__)
             return "skip"
-        self._recorded(t, mode, target, summer, already=False)
+        self._recorded(t, mode, target, summer, already=False,
+                       reservation_id=occupying["id"] if occupying else None)
         return "write"
 
-    def _recorded(self, t: dict[str, Any], mode: str, target: int, summer: bool, *, already: bool) -> None:
-        self.db.execute("UPDATE thermostats SET last_mode = ?, last_applied_at = ?, fail_count = 0, last_error = NULL, "
-                        "retry_after = NULL WHERE id = ?", (mode, self._stamp(), t["id"]))
+    def _recorded(self, t: dict[str, Any], mode: str, target: int, summer: bool, *, already: bool,
+                  reservation_id: int | None) -> None:
+        self.db.execute(
+            "UPDATE thermostats SET last_mode = ?, last_applied_at = ?, fail_count = 0, last_error = NULL, "
+            "retry_after = NULL, last_reservation_id = ? WHERE id = ?",
+            (mode, self._stamp(), reservation_id if mode == "occupied" else None, t["id"]))
         how = "already at" if already else "set to"
         self.db.log("thermostat.set",
                     f"{t['property_name']}: {mode} {'summer' if summer else 'winter'}, {how} {target}°",

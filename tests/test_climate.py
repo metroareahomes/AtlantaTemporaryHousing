@@ -75,6 +75,10 @@ def test_should_apply():
     assert should_apply("vacant", None, None, now, 11)  # first time
     assert should_apply("occupied", "vacant", now, now, 11)  # changed
     assert not should_apply("occupied", "occupied", at("2030-06-11T12:00"), now, 11)  # guests keep their own tweaks
+    assert should_apply("occupied", "occupied", at("2030-06-11T12:00"), now, 11, occupying_id=9,
+                        last_reservation_id=1)  # new booking, including last-minute after 3pm check-in
+    assert not should_apply("occupied", "occupied", at("2030-06-11T12:00"), now, 11, occupying_id=1,
+                            last_reservation_id=1)
     assert not should_apply("vacant", "vacant", at("2030-06-12T08:00"), now, 11)  # already done today
     assert should_apply("vacant", "vacant", at("2030-06-11T12:00"), now, 11)  # next day: cleaners may have touched it
     assert not should_apply("vacant", "vacant", at("2030-06-11T12:00"), at("2030-06-12T10:59"), 11)  # not yet
@@ -288,6 +292,18 @@ def test_switching_on_mid_stay_leaves_the_guest_alone(cm):
     assert cm.db.one("SELECT 1 FROM events WHERE kind = 'thermostat.adopted'")
     tick(cm, at("2030-06-15T13:00"))  # but checkout still sets it vacant
     assert cm.ha.sets[-1][1] == 78.0
+
+
+def test_same_day_booking_after_3pm_checkin_sets_occupied(cm):
+    """Hostaway check-in is 3pm; guest often arrives at 8pm. A 3:30pm booking is already 'in stay'
+    on paper — still set summer occupied, do not adopt."""
+    cm.db.execute("DELETE FROM reservations")
+    tick(cm, at("2030-06-10T12:00"))  # vacant
+    cm.s.upsert_reservation(res(id=50, arrival="2030-06-10", departure="2030-06-12", check_in=15))
+    tick(cm, at("2030-06-10T15:30"))
+    assert cm.ha.sets[-1][1] == 72.0
+    assert row(cm)["last_reservation_id"] == 50
+    assert not cm.db.one("SELECT 1 FROM events WHERE kind = 'thermostat.adopted'")
 
 
 def test_one_honeywell_write_per_pass_when_several_homes_are_due(cm):
