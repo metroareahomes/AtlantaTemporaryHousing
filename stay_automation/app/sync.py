@@ -32,6 +32,8 @@ class Syncer:
         self.ha = ha
         self.tz = ZoneInfo(settings.timezone)
         self._code_key = self._secret("code_hash_key")
+        self.on_thermostats = None  # ClimateManager.tick_property; set from main
+        self._thermostat_wake: set[int] = set()
 
     def now(self) -> datetime:
         return datetime.now(self.tz)
@@ -212,6 +214,8 @@ class Syncer:
             )
             for home in homes:
                 self.db.execute("UPDATE locks SET next_check_at = NULL WHERE property_id = ?", (home["id"],))
+                self.db.execute("UPDATE thermostats SET retry_after = NULL WHERE property_id = ?", (home["id"],))
+                self._thermostat_wake.add(home["id"])
             prop = next((h for h in homes if h["hostaway_listing_id"] == new["listing_id"]), None)
             self.db.log(
                 "reservation." + what[0],
@@ -222,6 +226,15 @@ class Syncer:
             )
         return what
 
+    async def wake_thermostats(self) -> None:
+        """Apply occupied/vacant as soon as Hostaway creates, cancels, or changes a stay."""
+        ids = list(self._thermostat_wake)
+        self._thermostat_wake.clear()
+        if not self.on_thermostats:
+            return
+        for property_id in ids:
+            await self.on_thermostats(property_id)
+
     async def sync_reservations(self) -> int:
         since = (self.now().date() - timedelta(days=1)).isoformat()
         changed = 0
@@ -229,6 +242,7 @@ class Syncer:
             if self.upsert_reservation(raw):
                 changed += 1
         self.db.set_setting("last_sync_at", utcnow())
+        await self.wake_thermostats()
         return changed
 
     async def fix_addon_slug(self) -> bool:
@@ -259,7 +273,9 @@ class Syncer:
             return []
         raw = await self.hostaway.reservation(reservation_id)
         self.db.log("webhook.received", f"Webhook for reservation {reservation_id}")
-        return self.upsert_reservation(raw)
+        what = self.upsert_reservation(raw)
+        await self.wake_thermostats()
+        return what
 
 
 def _other_object(payload: Any) -> bool:

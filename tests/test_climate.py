@@ -306,6 +306,15 @@ def test_same_day_booking_after_3pm_checkin_sets_occupied(cm):
     assert not cm.db.one("SELECT 1 FROM events WHERE kind = 'thermostat.adopted'")
 
 
+def test_cancelled_reservation_sets_vacant_summer(cm):
+    cm.ha.climate["climate.maple"]["target_temp"] = 78
+    tick(cm, at("2030-06-12T13:00"))  # occupied, 3 hours before 4pm check-in
+    assert cm.ha.sets[-1][1] == 72.0
+    cm.s.upsert_reservation({**res(), "status": "cancelled"})
+    tick(cm, at("2030-06-12T13:05"))
+    assert cm.ha.sets[-1][1] == 78.0
+
+
 def test_one_honeywell_write_per_pass_when_several_homes_are_due(cm):
     pid2 = cm.db.execute("INSERT INTO properties(hostaway_listing_id, hostaway_name, name, thermostat_automation) "
                          "VALUES(101, 'Cedar 1', 'Cedar 1', 1)")

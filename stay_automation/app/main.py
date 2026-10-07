@@ -76,6 +76,7 @@ def build():
     syncer = Syncer(db, settings, hostaway, ha)
     locks = LockManager(syncer)
     climate = ClimateManager(syncer, locks.alert)
+    syncer.on_thermostats = climate.tick_property
 
     discover = _then(syncer.import_listings, syncer.discover_locks)
 

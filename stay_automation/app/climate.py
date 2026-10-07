@@ -208,19 +208,30 @@ class ClimateManager:
         """Refresh HA's cached readings, apply occupied/vacant where due. Honeywell is only contacted for
         homes that actually need a change, and only a few per pass (Lyric refreshes the whole account
         on every write)."""
+        return await self._run(None)
+
+    async def tick_property(self, property_id: int) -> int:
+        """One home after a Hostaway create/cancel/change. Same rules as tick, no extra Honeywell polling."""
+        return await self._run(property_id)
+
+    async def _run(self, property_id: int | None) -> int:
         await self.refresh()
         now = self.s.now()
         cfg = self.cfg()
         changed = 0
         writes = 0
         cap = cfg["therm_max_per_tick"]
-        due = self.db.query(
+        sql = (
             "SELECT t.*, p.name AS property_name, p.hostaway_listing_id FROM thermostats t "
             "JOIN properties p ON p.id = t.property_id "
-            "WHERE p.thermostat_automation = 1 AND p.active = 1 ORDER BY t.id")
+            "WHERE p.thermostat_automation = 1 AND p.active = 1"
+        )
+        due = (self.db.query(sql + " AND t.property_id = ? ORDER BY t.id", (property_id,))
+               if property_id is not None else
+               self.db.query(sql + " ORDER BY t.id"))
         for t in due:
             if t["state"] in OFFLINE_STATES:
-                continue  # cannot be reached; the offline alert covers it
+                continue
             result = await self._apply(t, now, cfg, allow_write=writes < cap)
             if result == "skip":
                 continue
