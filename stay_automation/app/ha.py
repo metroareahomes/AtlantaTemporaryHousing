@@ -1,4 +1,5 @@
 """Home Assistant REST client (Supervisor proxy inside the add-on, direct URL locally)."""
+import json
 from typing import Any
 
 import httpx
@@ -52,29 +53,59 @@ class HAClient:
             if s["entity_id"] in wanted
         ]
 
+    @staticmethod
+    def _climate_from_state(s: dict[str, Any]) -> dict[str, Any]:
+        a = s.get("attributes") or {}
+        return {
+            "entity_id": s["entity_id"],
+            "name": a.get("friendly_name", s["entity_id"]),
+            "state": s["state"],
+            "current_temp": a.get("current_temperature"),
+            "target_temp": a.get("temperature"),
+            "target_low": a.get("target_temp_low"),
+            "target_high": a.get("target_temp_high"),
+            "hvac_action": a.get("hvac_action"),
+            "fan_mode": a.get("fan_mode"),
+            "min_temp": a.get("min_temp"),
+            "max_temp": a.get("max_temp"),
+        }
+
+    async def _climate_entity_ids(self) -> set[str]:
+        """Honeywell Lyric (and Total Connect Comfort) climate entities only."""
+        raw = await self._post(
+            "/api/template",
+            {"template": "{% set ids = integration_entities('lyric') + integration_entities('honeywell') %}"
+                         "{{ ids | select('match', 'climate[.]') | unique | list | tojson }}"},
+        )
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except json.JSONDecodeError:
+                raw = []
+        return {e for e in (raw if isinstance(raw, list) else []) if isinstance(e, str)}
+
     async def climate_states(self) -> list[dict[str, Any]]:
-        """Every climate.* entity with its readings. state is the HVAC mode, or 'unavailable' when offline."""
+        """Honeywell climate entities with readings. Leftover climate.* from removed devices are ignored."""
+        wanted = await self._climate_entity_ids()
         resp = await self._http.get("/api/states")
         resp.raise_for_status()
         out = []
         for s in resp.json():
-            if not s["entity_id"].startswith("climate."):
+            eid = s.get("entity_id") or ""
+            if not eid.startswith("climate."):
                 continue
-            a = s.get("attributes") or {}
-            out.append({
-                "entity_id": s["entity_id"],
-                "name": a.get("friendly_name", s["entity_id"]),
-                "state": s["state"],
-                "current_temp": a.get("current_temperature"),
-                "target_temp": a.get("temperature"),
-                "target_low": a.get("target_temp_low"),
-                "target_high": a.get("target_temp_high"),
-                "hvac_action": a.get("hvac_action"),
-                "fan_mode": a.get("fan_mode"),
-                "min_temp": a.get("min_temp"),
-                "max_temp": a.get("max_temp"),
-            })
+            if wanted and eid not in wanted:
+                continue
+            out.append(self._climate_from_state(s))
         return out
+
+    async def climate_state(self, entity_id: str) -> dict[str, Any] | None:
+        """One thermostat after a set, without listing every climate entity Home Assistant still has."""
+        resp = await self._http.get(f"/api/states/{entity_id}")
+        if resp.status_code == 404:
+            return None
+        resp.raise_for_status()
+        return self._climate_from_state(resp.json())
 
     async def set_temperature(self, entity_id: str, *, temperature: float | None = None,
                               low: float | None = None, high: float | None = None) -> None:

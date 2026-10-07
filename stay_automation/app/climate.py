@@ -162,23 +162,43 @@ class ClimateManager:
         """Timestamps come from the same clock the schedule uses."""
         return self.s.now().astimezone(timezone.utc).isoformat(timespec="seconds")
 
-    async def refresh(self) -> int:
-        """Find thermostats in Home Assistant, store their readings, and track how long each has been offline."""
+    def _automation_on(self, row: dict[str, Any]) -> bool:
+        if not row.get("property_id"):
+            return False
+        auto = self.db.one("SELECT thermostat_automation FROM properties WHERE id = ?", (row["property_id"],))
+        return bool(auto and auto["thermostat_automation"])
+
+    async def _read(self, entity_id: str) -> dict[str, Any] | None:
+        if hasattr(self.ha, "climate_state"):
+            return await self.ha.climate_state(entity_id)
         states = await self.ha.climate_states()
+        return next((c for c in states if c["entity_id"] == entity_id), None)
+
+    async def refresh(self) -> int:
+        """Find Honeywell thermostats in Home Assistant, store readings, and drop leftovers from the old account."""
+        states = await self.ha.climate_states()
+        if not states and self.db.one("SELECT 1 FROM thermostats"):
+            self.db.log("thermostat.refresh_empty",
+                        "Home Assistant returned no Honeywell thermostats; left the existing list alone",
+                        level="warning")
+            return 0
         properties = self.db.query("SELECT id, name, hostaway_name, address FROM properties")
+        live = {c["entity_id"]: c for c in states}
         for c in states:
             row = self.db.one("SELECT * FROM thermostats WHERE entity_id = ?", (c["entity_id"],))
             offline = c["state"] in OFFLINE_STATES
             if row is None:
+                if offline:
+                    continue  # leftover unavailable climate.* from devices no longer on this account
                 self.db.execute("INSERT INTO thermostats(entity_id, name) VALUES(?, ?)", (c["entity_id"], c["name"]))
                 self.db.log("thermostat.found", f"New thermostat {c['name']} ({c['entity_id']})")
                 row = self.db.one("SELECT * FROM thermostats WHERE entity_id = ?", (c["entity_id"],))
+            elif offline and not self._automation_on(row):
+                continue
             since = row["offline_since"] if offline else None
             if offline and not since:
                 since = self._stamp()
-                auto = row["property_id"] and self.db.one(
-                    "SELECT thermostat_automation FROM properties WHERE id = ?", (row["property_id"],))
-                if auto and auto["thermostat_automation"]:
+                if self._automation_on(row):
                     self.db.log("thermostat.offline",
                                 f"{c['name']} reported as '{c['state']}' by Home Assistant "
                                 f"(current temp {c['current_temp']})",
@@ -191,12 +211,22 @@ class ClimateManager:
                  c["hvac_action"], c["fan_mode"], since, self._stamp(), c.get("min_temp"), c.get("max_temp"),
                  row["id"]),
             )
-            if row["match_source"] is None:
+            if not offline and row["match_source"] is None:
                 property_id = match_lock(c["name"], properties)
                 if property_id is not None:
                     self.db.execute("UPDATE thermostats SET property_id = ?, match_source = 'auto' WHERE id = ?",
                                     (property_id, row["id"]))
                     self.db.log("thermostat.matched", f"{c['name']} matched automatically", property_id=property_id)
+        for row in self.db.query(
+                "SELECT t.id, t.entity_id, t.name, t.property_id, p.thermostat_automation "
+                "FROM thermostats t LEFT JOIN properties p ON p.id = t.property_id"):
+            c = live.get(row["entity_id"])
+            keep = c is not None and (c["state"] not in OFFLINE_STATES or bool(row["thermostat_automation"]))
+            if keep:
+                continue
+            self.db.execute("DELETE FROM thermostats WHERE id = ?", (row["id"],))
+            self.db.log("thermostat.gone",
+                        f"{row['name']} is no longer on this Honeywell account ({row['entity_id']})")
         return len(states)
 
     def assign(self, thermostat_id: int, property_id: int | None) -> None:
@@ -309,7 +339,7 @@ class ClimateManager:
         try:
             await self.ha.set_temperature(t["entity_id"], **call)
             await asyncio.sleep(self.verify_delay)
-            fresh = next((c for c in await self.ha.climate_states() if c["entity_id"] == t["entity_id"]), None)
+            fresh = await self._read(t["entity_id"])
             # Lyric refreshes the whole account after a set. A 429 makes every climate.* go
             # unavailable; that is not proof this write failed.
             if fresh is None or fresh.get("state") in OFFLINE_STATES:
@@ -345,7 +375,7 @@ class ClimateManager:
         try:
             await self.ha.set_hvac_mode(t["entity_id"], want)
             await asyncio.sleep(self.verify_delay)
-            fresh = next((c for c in await self.ha.climate_states() if c["entity_id"] == t["entity_id"]), None)
+            fresh = await self._read(t["entity_id"])
         except Exception as exc:  # the temperature is still attempted; a failure there is judged on its own
             self.db.log("thermostat.mode_failed", f"{t['name']}: could not switch to {want} ({exc or type(exc).__name__})",
                         level="warning", property_id=t["property_id"])

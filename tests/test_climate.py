@@ -117,6 +117,10 @@ class FakeHA:
     async def climate_states(self):
         return [dict(v) for v in self.climate.values()]
 
+    async def climate_state(self, entity_id):
+        v = self.climate.get(entity_id)
+        return dict(v) if v else None
+
     async def set_temperature(self, entity_id, *, temperature=None, low=None, high=None):
         self.sets.append((entity_id, temperature, low, high))
         if self.ignore_sets:
@@ -415,6 +419,22 @@ def test_discovery_adds_and_matches_thermostats(cm):
     asyncio.run(cm.refresh())
     new = cm.db.one("SELECT * FROM thermostats WHERE entity_id = 'climate.cedar'")
     assert new["property_id"] == cm.db.one("SELECT id FROM properties")["id"] and new["match_source"] == "auto"
+
+
+def test_refresh_drops_ghost_thermostats_from_the_old_account(cm):
+    cm.db.execute("INSERT INTO thermostats(entity_id, name) VALUES('climate.ghost', 'Old house')")
+    asyncio.run(cm.refresh())
+    assert not cm.db.one("SELECT 1 FROM thermostats WHERE entity_id = 'climate.ghost'")
+    assert cm.db.one("SELECT 1 FROM events WHERE kind = 'thermostat.gone'")
+    assert cm.db.one("SELECT entity_id FROM thermostats")["entity_id"] == "climate.maple"
+
+
+def test_refresh_does_not_adopt_unavailable_leftovers(cm):
+    cm.ha.climate["climate.ghost"] = {**cm.ha.climate["climate.maple"], "entity_id": "climate.ghost",
+                                      "name": "Removed thermostat", "state": "unavailable"}
+    asyncio.run(cm.refresh())
+    assert not cm.db.one("SELECT 1 FROM thermostats WHERE entity_id = 'climate.ghost'")
+    assert not cm.db.one("SELECT 1 FROM events WHERE kind = 'thermostat.found'")
 
 
 # ---- dashboard -----------------------------------------------------------------
