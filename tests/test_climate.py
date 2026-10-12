@@ -302,6 +302,18 @@ def test_switching_on_mid_stay_leaves_the_guest_alone(cm):
     assert cm.ha.sets[-1][1] == 78.0
 
 
+def test_a_settings_save_does_not_rewrite_a_stay_already_under_way(cm):
+    """Saving Setup clears vacant homes so the new number is applied. It must not switch an
+    occupied guest to cool or send the occupied temperature again."""
+    tick(cm, at("2030-06-12T13:00"))  # occupied, three hours before check-in; already at 72 cool
+    assert row(cm)["last_mode"] == "occupied" and row(cm)["last_reservation_id"] == 1
+    cm.ha.climate["climate.maple"].update(state="heat", target_temp=68)  # guest chose heat
+    cm.db.execute("UPDATE thermostats SET last_mode = NULL, last_applied_at = NULL")
+    tick(cm, at("2030-06-13T12:00"))
+    assert cm.ha.sets == [] and cm.ha.modes == []
+    assert row(cm)["last_mode"] == "occupied"
+
+
 def test_same_day_booking_after_3pm_checkin_sets_occupied(cm):
     """Hostaway check-in is 3pm; guest often arrives at 8pm. A 3:30pm booking is already 'in stay'
     on paper — still set summer occupied, do not adopt."""
@@ -514,6 +526,23 @@ def test_thermostat_settings_validated_then_saved(cm):
     assert c.post("/thermostat-settings-save", data={**good, "vac_summer": "80"}).status_code == 303
     assert cm.db.get_int("vac_summer", 0) == 80
     assert "Thermostat automation" in c.get("/setup").text
+
+
+def test_saving_thermostat_settings_reapplies_vacant_only(cm):
+    c = client(cm)
+    tick(cm, at("2030-06-10T12:00"))  # vacant
+    pid2 = cm.db.execute("INSERT INTO properties(hostaway_listing_id, hostaway_name, name, thermostat_automation) "
+                         "VALUES(101, 'Cedar 1', 'Cedar 1', 1)")
+    cm.db.execute(
+        "INSERT INTO thermostats(entity_id, name, property_id, match_source, last_mode, last_applied_at, "
+        "last_reservation_id) VALUES('climate.cedar', 'Cedar thermostat', ?, 'manual', 'occupied', ?, 9)",
+        (pid2, "2030-06-10T12:00:00+00:00"))
+    good = {k: str(v) for k, v in DEFAULTS.items()}
+    assert c.post("/thermostat-settings-save", data=good).status_code == 303
+    vacant = cm.db.one("SELECT last_mode FROM thermostats WHERE entity_id = 'climate.maple'")
+    occupied = cm.db.one("SELECT last_mode, last_reservation_id FROM thermostats WHERE entity_id = 'climate.cedar'")
+    assert vacant["last_mode"] is None
+    assert occupied["last_mode"] == "occupied" and occupied["last_reservation_id"] == 9
 
 
 def test_street_sort_groups_by_street_then_number():

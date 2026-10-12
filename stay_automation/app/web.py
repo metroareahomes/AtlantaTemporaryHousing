@@ -624,7 +624,10 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None) 
             raise HTTPException(400, "Summer vacant must not be cooler than summer occupied")
         for key, value in values.items():
             db.set_setting(key, str(value))
-        db.execute("UPDATE thermostats SET last_mode = NULL, last_applied_at = NULL")  # re-apply with the new numbers
+        # Re-apply vacant homes so a new vacant number is picked up. An occupied stay was already
+        # set in the 3 hours before check-in; clearing it would switch the guest's mode and temperature.
+        db.execute("UPDATE thermostats SET last_mode = NULL, last_applied_at = NULL "
+                   "WHERE last_mode IS NULL OR last_mode != 'occupied'")
         db.log("settings.saved", "Thermostat settings saved")
         return RedirectResponse("setup", status_code=303)
 

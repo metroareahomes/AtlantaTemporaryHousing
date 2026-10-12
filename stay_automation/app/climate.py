@@ -287,11 +287,18 @@ class ClimateManager:
         # is not "mid-stay" — set occupied now.
         if (t["last_mode"] is None and occupying and not t.get("last_reservation_id")
                 and occupying["arrival_date"] != now.date().isoformat()):
-            self.db.execute(
-                "UPDATE thermostats SET last_mode = 'occupied', last_applied_at = ?, last_reservation_id = ? "
-                "WHERE id = ?", (self._stamp(), occupying["id"], t["id"]))
+            self._remember_occupied(t, occupying["id"])
             self.db.log("thermostat.adopted", f"{t['name']}: stay already under way, left as it is",
                         property_id=t["property_id"])
+            return "skip"
+        # This stay was already set (including the 3 hours before check-in). A settings save used to
+        # clear last_mode and the next pass then switched occupied homes to cool and rewrote the
+        # temperature. Never send mode or temperature again for a reservation we already handled.
+        if occupying and t.get("last_reservation_id") == occupying["id"]:
+            if t["last_mode"] != "occupied" or not t["last_applied_at"]:
+                self._remember_occupied(t, occupying["id"])
+                self.db.log("thermostat.adopted", f"{t['name']}: stay already under way, left as it is",
+                            property_id=t["property_id"])
             return "skip"
         if not should_apply(mode, t["last_mode"], last_applied, now, cfg["vacant_reset_hour"],
                             occupying["id"] if occupying else None, t.get("last_reservation_id")):
@@ -363,6 +370,11 @@ class ClimateManager:
         self._recorded(t, mode, target, summer, already=False,
                        reservation_id=occupying["id"] if occupying else None)
         return "write"
+
+    def _remember_occupied(self, t: dict[str, Any], reservation_id: int) -> None:
+        self.db.execute(
+            "UPDATE thermostats SET last_mode = 'occupied', last_applied_at = ?, last_reservation_id = ? "
+            "WHERE id = ?", (self._stamp(), reservation_id, t["id"]))
 
     def _recorded(self, t: dict[str, Any], mode: str, target: int, summer: bool, *, already: bool,
                   reservation_id: int | None) -> None:
