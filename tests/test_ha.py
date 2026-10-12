@@ -21,11 +21,12 @@ def test_notify_omits_empty_notification_id():
     assert calls == [("/api/services/persistent_notification/create", {"title": "T", "message": "M"})]
 
 
-def test_climate_states_only_honeywell_entities():
+def test_climate_states_only_resideo_entities():
     calls = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        calls.append(request.url.path)
+        body = json.loads(request.content) if request.content else None
+        calls.append((request.url.path, body))
         if request.url.path == "/api/template":
             return httpx.Response(200, json=["climate.keep"])
         return httpx.Response(200, json=[
@@ -39,7 +40,10 @@ def test_climate_states_only_honeywell_entities():
                                                           transport=httpx.MockTransport(handler)))
     states = asyncio.run(ha.climate_states())
     assert [s["entity_id"] for s in states] == ["climate.keep"]
-    assert "/api/template" in calls
+    template = next(body["template"] for path, body in calls if path == "/api/template")
+    assert "integration_entities('resideo')" in template
+    assert "lyric" not in template
+    assert "honeywell" not in template
 
 
 def test_notify_also_uses_notify_service():

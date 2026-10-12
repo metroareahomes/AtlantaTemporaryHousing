@@ -175,11 +175,11 @@ class ClimateManager:
         return next((c for c in states if c["entity_id"] == entity_id), None)
 
     async def refresh(self) -> int:
-        """Find Honeywell thermostats in Home Assistant, store readings, and drop leftovers from the old account."""
+        """Find Resideo thermostats in Home Assistant, store readings, and drop leftovers from the old account."""
         states = await self.ha.climate_states()
         if not states and self.db.one("SELECT 1 FROM thermostats"):
             self.db.log("thermostat.refresh_empty",
-                        "Home Assistant returned no Honeywell thermostats; left the existing list alone",
+                        "Home Assistant returned no Resideo thermostats; left the existing list alone",
                         level="warning")
             return 0
         properties = self.db.query("SELECT id, name, hostaway_name, address FROM properties")

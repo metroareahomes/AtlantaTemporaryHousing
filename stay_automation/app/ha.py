@@ -71,10 +71,10 @@ class HAClient:
         }
 
     async def _climate_entity_ids(self) -> set[str]:
-        """Honeywell Lyric (and Total Connect Comfort) climate entities only."""
+        """Resideo (First Alert) climate entities only. Lyric entities stay out of this list."""
         raw = await self._post(
             "/api/template",
-            {"template": "{% set ids = integration_entities('lyric') + integration_entities('honeywell') %}"
+            {"template": "{% set ids = integration_entities('resideo') %}"
                          "{{ ids | select('match', 'climate[.]') | unique | list | tojson }}"},
         )
         if isinstance(raw, str):
@@ -85,7 +85,7 @@ class HAClient:
         return {e for e in (raw if isinstance(raw, list) else []) if isinstance(e, str)}
 
     async def climate_states(self) -> list[dict[str, Any]]:
-        """Honeywell climate entities with readings. Leftover climate.* from removed devices are ignored."""
+        """Resideo climate entities with readings. Leftover climate.* from removed devices are ignored."""
         wanted = await self._climate_entity_ids()
         resp = await self._http.get("/api/states")
         resp.raise_for_status()
