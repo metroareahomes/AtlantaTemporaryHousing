@@ -312,6 +312,8 @@ SETTING_LABELS = {
 def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None) -> FastAPI:
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None)
     app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
+    # The stylesheet URL changes whenever the file does, so a browser or the HA ingress proxy never serves a stale copy.
+    templates.env.globals["css_v"] = int((HERE / "static" / "style.css").stat().st_mtime)
     db = syncer.db
 
     @app.exception_handler(HostawayError)

@@ -184,7 +184,7 @@ def test_dashboard_pages_render(syncer):
     page = client.get("/?show=all")
     assert page.status_code == 200
     assert "Maple 124b" in page.text and "Not checked yet" in page.text
-    assert 'href="static/style.css"' in page.text  # relative, for HA ingress
+    assert 'href="static/style.css?v=' in page.text  # relative, for HA ingress
     attention = client.get("/")
     assert attention.status_code == 200 and "Needs attention" in attention.text
     for path in ("/properties", "/events", "/setup"):
