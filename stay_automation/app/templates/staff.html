@@ -1,6 +1,9 @@
 {% extends "base.html" %}{% set active = 'staff' %}
 {% block body %}
+<div class="page-head"><h1>Staff</h1><p>Lock codes for staff, visitors, and who gets alerted.</p></div>
+<div class="narrow">
 <form method="post" action="staff-save">
+<section class="panel">
 <h2>Staff lock codes</h2>
 <p class="sub">Permanent 4-digit codes pushed to every home with lock automation on.
   Uncheck Active (or clear the name) to remove a code from the locks; the row drops from this list once the locks no longer hold it.
@@ -25,8 +28,10 @@
 </table>
 </div>
 <p><button class="primary">Save staff</button></p>
+</section>
 </form>
 
+<section class="panel">
 <h2>Visitor (preview) codes</h2>
 <p class="sub">A temporary 4-digit code for someone previewing a home. It goes onto the lock right away and is removed
   automatically when the time is up. Leave the code blank to have one picked. Only homes with Lock automation ticked are listed.</p>
@@ -47,7 +52,7 @@
   </tbody>
 </table>
 </div>
-<form method="post" action="preview-add" class="stack" style="margin-top:12px">
+<form method="post" action="preview-add" class="stack cols" style="margin-top:16px">
   <label>Home <select name="property_id" required>
     {% for h in lock_homes %}<option value="{{ h.id }}">{{ h.name }}</option>{% endfor %}</select></label>
   <label>Visitor name or note <input name="label" placeholder="e.g. Walkthrough, Bob"></label>
@@ -55,8 +60,10 @@
   <label>Valid for (hours, up to 168) <input name="hours" value="24" inputmode="numeric"></label>
   <button class="primary">Add visitor code</button>
 </form>
+</section>
 
 <form method="post" action="recipients-save">
+<section class="panel">
 <h2>Alert recipients</h2>
 <p class="sub">Extra Home Assistant notify targets for lock failures, missing guest codes and the daily arrivals report.
   Use a full service id such as <code>notify.mobile_app_kurts_iphone</code> (an email recipient needs an email notify service
@@ -81,5 +88,7 @@
 </table>
 </div>
 <p><button class="primary">Save recipients</button></p>
+</section>
 </form>
+</div>
 {% endblock %}

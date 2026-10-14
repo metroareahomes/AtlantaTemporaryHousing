@@ -1,85 +1,153 @@
 {% extends "base.html" %}{% set active = 'properties' %}
 {% block body %}
-<form method="post" action="properties-save">
-<h2>Properties</h2>
-<p class="sub">Tick <strong>Lock automation</strong> to let the add-on manage a home's codes, and
-  <strong>Thermostat automation</strong> to schedule its temperature. The backup code (HA-BACKUP) stays on the lock
-  permanently; change it here. Only fields you change are saved.</p>
-<div class="scroll">
-<table>
-  <thead><tr><th>Property</th><th>Lock</th><th>Lock automation</th><th>Backup code</th><th>Thermostat</th><th>Thermostat automation</th><th>Active</th></tr></thead>
-  <tbody>
-  {% for p in properties %}
-    <tr class="{{ 'problem' if p.lock_automation and p.lock_list|selectattr('state', 'equalto', 'unavailable')|list }}">
-      <td><input name="name_{{ p.id }}" value="{{ p.name }}">
-        <div class="sub">{{ p.hostaway_name }} · #{{ p.hostaway_listing_id }}</div></td>
-      <td>{% for l in p.lock_list %}<div>{{ l.name }} <span class="sub">· {{ l.state }}{% if l.battery is not none %} · {{ l.battery }}%{% endif %}</span></div>
-          {% else %}<span class="sub">no lock</span>{% endfor %}</td>
-      <td><input type="checkbox" name="auto_{{ p.id }}" {{ 'checked' if p.lock_automation }}>
-        <input type="hidden" name="was_auto_{{ p.id }}" value="{{ 1 if p.lock_automation else 0 }}">
-        {% if p.lock_list and not p.lock_automation %}<div class="sub">ready to activate</div>{% endif %}</td>
-      <td><input name="backup_{{ p.id }}" value="{{ p.backup_code or '' }}" inputmode="numeric" maxlength="4"
-                 style="width:5rem" placeholder="—">
-        <input type="hidden" name="was_backup_{{ p.id }}" value="{{ p.backup_code or '' }}"></td>
-      <td>{% for t in p.therm_list %}<div>{{ t.name }} <span class="sub">· {{ ('offline, HA says ' ~ t.state) if t.offline_since else t.state }}</span></div>
-          {% else %}<span class="sub">no thermostat</span>{% endfor %}</td>
-      <td><input type="checkbox" name="tauto_{{ p.id }}" {{ 'checked' if p.thermostat_automation }}>
-        <input type="hidden" name="was_tauto_{{ p.id }}" value="{{ 1 if p.thermostat_automation else 0 }}">
-        {% if p.therm_list and not p.thermostat_automation %}<div class="sub">ready to activate</div>{% endif %}</td>
-      <td><input type="checkbox" name="active_{{ p.id }}" {{ 'checked' if p.active }}>
-        <input type="hidden" name="was_active_{{ p.id }}" value="{{ 1 if p.active else 0 }}"></td>
-    </tr>
-  {% endfor %}
-  </tbody>
-</table>
+<form method="post" action="properties-save" class="narrow">
+<div class="page-head">
+  <h1>Properties</h1>
+  <p>Lock automation is on for {{ automation.locks }} of {{ automation.homes }} homes.
+    Thermostat automation is on for {{ automation.therms }} of {{ automation.homes }}.</p>
 </div>
-<p><button class="primary">Save</button></p>
 
-<h2>Locks</h2>
-<p class="sub">Found in Home Assistant and matched to homes by name. Correct any that are wrong; your choice sticks.</p>
+{% if gaps or open_locks or open_thermostats %}
+<section class="panel attention">
+<h2>Needs a match</h2>
+<ul class="checks">
+  {% for g in gaps %}
+  <li><a href="#home-{{ g.id }}">{{ g.name }}</a> <strong>{{ g.why }}</strong></li>
+  {% endfor %}
+  {% for l in open_locks %}
+  <li>{{ l.name }} <strong>lock not assigned</strong></li>
+  {% endfor %}
+  {% for t in open_thermostats %}
+  <li>{{ t.name }} <strong>thermostat not assigned</strong></li>
+  {% endfor %}
+</ul>
+</section>
+{% endif %}
+
+<section class="panel">
+<h2>Homes</h2>
+<p class="sub">Open one home to change its name, automation, or backup code. Device assignment is below.</p>
+<input id="find-home" type="search" placeholder="Search homes" aria-label="Search homes">
+{% for p in properties %}
+<details class="home" id="home-{{ p.id }}" data-name="{{ p.name|lower }}">
+  <summary>
+    <strong>{{ p.name }}</strong>
+    <span class="sub">
+      {% if not p.active %}inactive · {% endif %}
+      {% if p.lock_list %}{{ p.lock_list|length }} lock{% if p.lock_list|length != 1 %}s{% endif %} · lock automation {{ 'on' if p.lock_automation else 'off' }}
+      {% else %}no lock{% endif %}
+      · {% if p.therm_list %}thermostat automation {{ 'on' if p.thermostat_automation else 'off' }}{% else %}no thermostat{% endif %}
+    </span>
+  </summary>
+  <div class="stack cols">
+    <label>Name <input name="name_{{ p.id }}" value="{{ p.name }}"></label>
+    <div class="sub">{{ p.hostaway_name }} · #{{ p.hostaway_listing_id }}</div>
+    {% if p.lock_list %}
+      {% for l in p.lock_list %}<div class="sub">{{ l.name }} · {{ l.state }}{% if l.battery is not none %} · {{ l.battery }}%{% endif %}</div>{% endfor %}
+    {% endif %}
+    <label><input type="checkbox" name="auto_{{ p.id }}" {{ 'checked' if p.lock_automation }}> Lock automation</label>
+    <input type="hidden" name="was_auto_{{ p.id }}" value="{{ 1 if p.lock_automation else 0 }}">
+    <label>Backup code
+      <input name="backup_{{ p.id }}" value="{{ p.backup_code or '' }}" inputmode="numeric" maxlength="4" placeholder="—">
+    </label>
+    <input type="hidden" name="was_backup_{{ p.id }}" value="{{ p.backup_code or '' }}">
+    {% if p.therm_list %}
+      {% for t in p.therm_list %}<div class="sub">{{ t.name }} · {{ 'offline' if t.offline_since else t.state }}</div>{% endfor %}
+    {% endif %}
+    <label><input type="checkbox" name="tauto_{{ p.id }}" {{ 'checked' if p.thermostat_automation }}> Thermostat automation</label>
+    <input type="hidden" name="was_tauto_{{ p.id }}" value="{{ 1 if p.thermostat_automation else 0 }}">
+    <label><input type="checkbox" name="active_{{ p.id }}" {{ 'checked' if p.active }}> Active</label>
+    <input type="hidden" name="was_active_{{ p.id }}" value="{{ 1 if p.active else 0 }}">
+  </div>
+</details>
+{% endfor %}
+<p><button class="primary">Save</button></p>
+</section>
+
+<section class="panel">
+<h2>Unassigned devices</h2>
+<p class="sub">These are in Home Assistant and not tied to a home yet.</p>
+{% if open_locks or open_thermostats %}
 <div class="scroll">
 <table>
-  <thead><tr><th>Lock</th><th>State</th><th>Property</th><th>Matched</th></tr></thead>
+  <thead><tr><th>Device</th><th>State</th><th>Property</th></tr></thead>
   <tbody>
-  {% for l in locks %}
-    <tr class="{{ 'problem' if not l.property_id }}">
-      <td>{{ l.name }}<div class="sub">{{ l.entity_id }}</div></td>
+  {% for l in open_locks %}
+    <tr class="problem">
+      <td>Lock · {{ l.name }}<div class="sub">{{ l.entity_id }}</div></td>
       <td>{{ l.state }}</td>
       <td><select name="lock_{{ l.id }}">
         <option value="">— not assigned —</option>
-        {% for p in properties %}<option value="{{ p.id }}" {{ 'selected' if p.id == l.property_id }}>{{ p.name }}</option>{% endfor %}
+        {% for p in properties %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}
       </select>
-        <input type="hidden" name="was_lock_{{ l.id }}" value="{{ l.property_id or '' }}"></td>
-      <td class="sub">{{ l.match_source or '' }}</td>
+        <input type="hidden" name="was_lock_{{ l.id }}" value=""></td>
     </tr>
   {% endfor %}
-  </tbody>
-</table>
-</div>
-
-<h2>Thermostats</h2>
-<p class="sub">Every climate device in Home Assistant. Only those assigned to a home with Thermostat automation ticked are ever changed.</p>
-<div class="scroll">
-<table>
-  <thead><tr><th>Thermostat</th><th>Mode</th><th>Property</th><th>Matched</th></tr></thead>
-  <tbody>
-  {% for t in thermostats %}
+  {% for t in open_thermostats %}
     <tr class="{{ 'problem' if t.offline_since }}">
-      <td>{{ t.name }}<div class="sub">{{ t.entity_id }}</div></td>
+      <td>Thermostat · {{ t.name }}<div class="sub">{{ t.entity_id }}</div></td>
       <td>{{ 'offline' if t.offline_since else t.state }}</td>
       <td><select name="thermo_{{ t.id }}">
         <option value="">— not assigned —</option>
-        {% for p in properties %}<option value="{{ p.id }}" {{ 'selected' if p.id == t.property_id }}>{{ p.name }}</option>{% endfor %}
+        {% for p in properties %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}
       </select>
-        <input type="hidden" name="was_thermo_{{ t.id }}" value="{{ t.property_id or '' }}"></td>
-      <td class="sub">{{ t.match_source or '' }}</td>
+        <input type="hidden" name="was_thermo_{{ t.id }}" value=""></td>
     </tr>
-  {% else %}
-    <tr><td colspan="4" class="sub">No thermostats found yet. They appear a few minutes after the add-on starts.</td></tr>
   {% endfor %}
   </tbody>
 </table>
 </div>
+{% else %}
+<p class="sub">Every lock and thermostat is assigned.</p>
+{% endif %}
+
+<details class="fold">
+  <summary>Assigned locks and thermostats</summary>
+  <p class="sub">Correct a match here. Your choice sticks.</p>
+  <div class="scroll">
+  <table>
+    <thead><tr><th>Device</th><th>State</th><th>Property</th><th>Matched</th></tr></thead>
+    <tbody>
+    {% for l in locks if l.property_id %}
+      <tr>
+        <td>Lock · {{ l.name }}<div class="sub">{{ l.entity_id }}</div></td>
+        <td>{{ l.state }}</td>
+        <td><select name="lock_{{ l.id }}">
+          <option value="">— not assigned —</option>
+          {% for p in properties %}<option value="{{ p.id }}" {{ 'selected' if p.id == l.property_id }}>{{ p.name }}</option>{% endfor %}
+        </select>
+          <input type="hidden" name="was_lock_{{ l.id }}" value="{{ l.property_id or '' }}"></td>
+        <td class="sub">{{ l.match_source or '' }}</td>
+      </tr>
+    {% endfor %}
+    {% for t in thermostats if t.property_id %}
+      <tr class="{{ 'problem' if t.offline_since }}">
+        <td>Thermostat · {{ t.name }}<div class="sub">{{ t.entity_id }}</div></td>
+        <td>{{ 'offline' if t.offline_since else t.state }}</td>
+        <td><select name="thermo_{{ t.id }}">
+          <option value="">— not assigned —</option>
+          {% for p in properties %}<option value="{{ p.id }}" {{ 'selected' if p.id == t.property_id }}>{{ p.name }}</option>{% endfor %}
+        </select>
+          <input type="hidden" name="was_thermo_{{ t.id }}" value="{{ t.property_id or '' }}"></td>
+        <td class="sub">{{ t.match_source or '' }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</details>
 <p><button class="primary">Save</button></p>
+</section>
 </form>
+<script>
+  var find = document.getElementById("find-home");
+  if (find) find.addEventListener("input", function () {
+    var q = find.value.toLowerCase();
+    document.querySelectorAll("details.home").forEach(function (el) {
+      el.hidden = q && el.dataset.name.indexOf(q) === -1;
+    });
+  });
+  var opened = document.getElementById((location.hash || "").slice(1));
+  if (opened && opened.tagName === "DETAILS") opened.open = true;
+</script>
 {% endblock %}

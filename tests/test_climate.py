@@ -470,12 +470,29 @@ def client(cm):
 
 
 def test_status_page_shows_temperatures_and_battery(cm):
+    cm.s.now = lambda: at("2030-06-10T12:00")  # vacant, summer: schedule is Cool 78
     cm.db.execute("UPDATE locks SET battery = 12")
     asyncio.run(cm.refresh())
     page = client(cm).get("/")
     assert page.status_code == 200
-    assert "74°" in page.text and "72°" in page.text and "cool · cooling · fan auto" in page.text
+    assert "should be Cool 78" in page.text and "74°" in page.text and "72°" in page.text
     assert "battery 12%" in page.text  # flagged as needing attention (limit is 15)
+
+
+def test_status_page_calls_a_matching_summer_setpoint_on_target(cm):
+    cm.s.now = lambda: at("2030-06-10T12:00")
+    cm.ha.climate["climate.maple"].update(state="cool", current_temp=74, target_temp=78)
+    asyncio.run(cm.refresh())
+    assert "on target" in client(cm).get("/?show=all").text
+    assert "should be" not in client(cm).get("/").text.lower()
+
+
+def test_status_page_flags_heat_during_summer(cm):
+    cm.s.now = lambda: at("2030-06-10T12:00")
+    cm.ha.climate["climate.maple"].update(state="heat", current_temp=74, target_temp=72)
+    asyncio.run(cm.refresh())
+    text = client(cm).get("/").text
+    assert "should be Cool 78" in text and "heat" in text
 
 
 def test_status_page_shows_offline_thermostat_as_a_problem(cm):
@@ -555,11 +572,11 @@ def test_status_filters_and_sorting(cm):
     c = client(cm)
     cm.db.execute("INSERT INTO properties(hostaway_listing_id, hostaway_name, name) VALUES(200, 'Aspen 5', 'Aspen 5')")
     asyncio.run(cm.refresh())
-    everything = c.get("/").text
+    everything = c.get("/?show=all").text
     assert "Maple 1" in everything and "Aspen 5" in everything
-    by_name = c.get("/?sort=name").text
+    by_name = c.get("/?show=all&sort=name").text
     assert by_name.index("Aspen 5") < by_name.index("Maple 1")
     arriving = c.get("/?show=arriving").text
     assert "No homes match" in arriving  # nobody arrives today in the test data
-    assert c.get("/?show=nonsense").status_code == 200  # unknown filters fall back to all
+    assert c.get("/?show=nonsense").status_code == 200
     assert "Next check-out" not in everything and "→" in everything  # stay shows start → end

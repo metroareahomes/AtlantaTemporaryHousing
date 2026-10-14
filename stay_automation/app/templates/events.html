@@ -1,5 +1,17 @@
 {% extends "base.html" %}{% set active = 'events' %}
 {% block body %}
+<div class="page-head"><h1>Log</h1></div>
+<form method="get" action="events" class="toolbar">
+  <a class="chip {{ 'on' if not level }}" href="events?q={{ q|urlencode }}&kind={{ kind|urlencode }}">All</a>
+  <a class="chip {{ 'on' if level == 'error' }}" href="events?level=error&q={{ q|urlencode }}&kind={{ kind|urlencode }}">Errors</a>
+  <a class="chip {{ 'on' if level == 'warning' }}" href="events?level=warning&q={{ q|urlencode }}&kind={{ kind|urlencode }}">Warnings</a>
+  <select name="kind" aria-label="Event kind" onchange="this.form.submit()">
+    <option value="">Every kind</option>
+    {% for k in kinds %}<option value="{{ k }}" {{ 'selected' if k == kind }}>{{ k }}</option>{% endfor %}
+  </select>
+  <input type="hidden" name="level" value="{{ level }}">
+  <input name="q" value="{{ q }}" placeholder="Home or message" type="search">
+</form>
 <div class="scroll">
 <table>
   <thead><tr><th>Time</th><th>Property</th><th>Event</th></tr></thead>
@@ -7,11 +19,11 @@
   {% for e in events %}
     <tr class="lv-{{ e.level }}">
       <td class="sub nowrap">{{ e.at_local }}</td>
-      <td>{{ e.property or '' }}</td>
+      <td>{% if e.property %}<a href="./?show=all&q={{ e.property|urlencode }}">{{ e.property }}</a>{% endif %}</td>
       <td>{{ e.message }}<div class="sub">{{ e.kind }}</div></td>
     </tr>
   {% else %}
-    <tr><td colspan="3" class="sub">Nothing yet.</td></tr>
+    <tr><td colspan="3" class="sub">Nothing matches.</td></tr>
   {% endfor %}
   </tbody>
 </table>

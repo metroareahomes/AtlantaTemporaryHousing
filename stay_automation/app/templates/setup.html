@@ -1,5 +1,8 @@
 {% extends "base.html" %}{% set active = 'setup' %}
 {% block body %}
+<div class="page-head"><h1>Setup</h1><p>Connections, real-time updates, and the rules the automations follow.</p></div>
+<div class="narrow">
+<section class="panel">
 <h2>Connections</h2>
 <ul class="checks">
   <li>Home Assistant: <strong>{{ 'connected' if ha_ok else 'NOT connected' }}</strong></li>
@@ -10,22 +13,25 @@
     {% if webhook_full %}<details class="edit"><summary>show the full URL (keep it private)</summary>
       <code style="word-break: break-all">{{ webhook_full }}</code></details>{% endif %}</li>{% endif %}
 </ul>
-
+</section>
+<section class="panel">
 <h2>Real-time updates from Hostaway</h2>
 <p class="sub">Hostaway posts each booking change to your public Home Assistant address, which hands it to this add-on.
   Without it, changes still arrive on the regular sync.</p>
-<form method="post" action="setup-webhook" class="stack">
+<form method="post" action="setup-webhook" class="stack cols">
   <label>Public Home Assistant address <input name="public_url" value="{{ public_url }}"></label>
   <label>Add-on slug <input name="addon_slug" value="{{ addon_slug }}"></label>
   <label><input type="checkbox" name="register_hostaway"> Also register the webhook with Hostaway</label>
   <button class="primary">Save webhook</button>
 </form>
+</section>
+<section class="panel">
 <h2>Lock automation</h2>
 <p class="sub">Applies to the {{ automated }} homes with Lock automation ticked on Properties. Hostaway's own lock automation
   stays on, and a code it already put in the lock counts as present. Codes we add are named HA-&lt;guest name&gt;;
   nothing else is touched. Staff codes and alert recipients are on the Staff page.</p>
-<form method="post" action="settings-save" class="stack">
-  {% for key, label, value in numbers %}
+<form method="post" action="settings-save" class="stack cols">
+  {% for key, label, value in lock_guest %}
   <label>{{ label }} <input name="{{ key }}" value="{{ value }}" inputmode="numeric"></label>
   {% endfor %}
   <label>Alert also through (optional HA notify service, e.g. notify.mobile_app_kurts_iphone)
@@ -37,20 +43,45 @@
     (off: staff are alerted instead)</label>
   <label>Guest message ({guest}, {property}, {code})
     <textarea name="guest_message" rows="3">{{ guest_message }}</textarea></label>
+  <details class="fold">
+    <summary>Advanced lock timing</summary>
+    {% for key, label, value in lock_advanced %}
+    <label>{{ label }} <input name="{{ key }}" value="{{ value }}" inputmode="numeric"></label>
+    {% endfor %}
+  </details>
   <button class="primary">Save settings</button>
 </form>
+</section>
+<section class="panel">
 <h2>Thermostat automation</h2>
-<p class="sub">Applies to the {{ thermostat_homes }} homes with Thermostat automation ticked on Properties. A home goes to the
-  occupied temperature before check-in and the vacant one after check-out; vacant homes are reset daily. A stay already
-  under way when a home is switched on is left alone. Units follow Home Assistant (°F for a US setup).</p>
-<form method="post" action="thermostat-settings-save" class="stack">
-  {% for key, label, value in climate_numbers %}
+<p class="sub">Applies to the {{ thermostat_homes }} homes with Thermostat automation ticked on Properties. Summer uses cool,
+  winter uses heat. A home goes to the occupied temperature before check-in and the vacant one after check-out.</p>
+<form method="post" action="thermostat-settings-save" class="stack cols">
+  {% for key, label, value in climate_guest %}
   <label>{{ label }} <input name="{{ key }}" value="{{ value }}" inputmode="numeric"></label>
   {% endfor %}
+  {% for key, label, value in climate_months %}
+  <label>{{ label }}
+    <select name="{{ key }}">
+      {% for n in range(1, 13) %}
+      <option value="{{ n }}" {{ 'selected' if n == value }}>{{ month_names[n] }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  {% endfor %}
+  <details class="fold">
+    <summary>Advanced thermostat limits</summary>
+    {% for key, label, value in climate_advanced %}
+    <label>{{ label }} <input name="{{ key }}" value="{{ value }}" inputmode="numeric"></label>
+    {% endfor %}
+  </details>
   <button class="primary">Save thermostat settings</button>
 </form>
+</section>
+<section class="panel">
 <h2>Alerts</h2>
 <form method="post" action="test-alert" class="inline"><button>Send test alert</button></form>
-
+</section>
 {% if not is_addon %}<p class="sub">Running outside Home Assistant (development mode).</p>{% endif %}
+</div>
 {% endblock %}

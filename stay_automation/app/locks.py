@@ -584,7 +584,7 @@ class LockManager:
         if rows:
             lines = [f"- {r['name']}: {r['next_guest'] or 'guest'} at {r['next_in'].split(', ')[-1]}"
                      f" — {r['code_label'] or 'n/a'}"
-                     + (f" ({'; '.join(r['problems'])})" if r["problems"] else "") for r in rows]
+                     + (f" ({'; '.join(p['text'] for p in r['problems'])})" if r["problems"] else "") for r in rows]
             not_ready = sum(1 for r in rows if r["code"] != "in_lock")
             message = f"{len(rows)} arrivals today, {not_ready} without a confirmed code.\n" + "\n".join(lines)
         else:

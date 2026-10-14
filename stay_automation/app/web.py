@@ -6,6 +6,7 @@ import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlencode
 
 from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.exception_handlers import http_exception_handler
@@ -14,7 +15,10 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from .climate import DEFAULTS as CLIMATE_DEFAULTS, LABELS as CLIMATE_LABELS, RANGES as CLIMATE_RANGES
+from .climate import (
+    DEFAULTS as CLIMATE_DEFAULTS, LABELS as CLIMATE_LABELS, RANGES as CLIMATE_RANGES,
+    TOLERANCE, is_summer, occupancy, occupying_reservation, setpoint,
+)
 from .hostaway import HostawayError
 from .locks import DEFAULT_GUEST_MESSAGE, DEFAULTS, LockManager, _utc, new_backup_code
 from .reservations import code_status, property_state, within
@@ -32,12 +36,23 @@ STATUS_LABELS = {
 }
 CODE_LABELS = {
     "in_lock": "In lock",
-    "missing": "NOT in lock",
+    "missing": "Missing",
     "unknown": "Not checked yet",
     "no_code": "No code from Hostaway",
     "no_lock": "No lock",
     "none": "",
 }
+BOARD_SHOWS = {"attention", "arriving", "departing", "occupied", "vacant", "all"}
+MONTH_NAMES = ["", "January", "February", "March", "April", "May", "June",
+               "July", "August", "September", "October", "November", "December"]
+LOCK_GUEST_KEYS = ("add_hour", "early_lead_hours", "final_check_minutes")
+LOCK_ADVANCED_KEYS = ("afternoon_check_hour", "retry_minutes", "daily_check_hour", "report_hour", "stale_check_minutes")
+CLIMATE_GUEST_KEYS = ("occ_summer", "occ_winter", "vac_summer", "vac_winter", "therm_lead_hours", "therm_lag_hours")
+CLIMATE_MONTH_KEYS = ("summer_start_month", "summer_end_month")
+CLIMATE_ADVANCED_KEYS = (
+    "vacant_reset_hour", "therm_offline_minutes", "therm_retry_minutes",
+    "therm_max_per_tick", "therm_gap_seconds", "battery_alert_percent",
+)
 
 
 def _fmt(iso: str | None, tz) -> str:
@@ -50,17 +65,140 @@ def _deg(value: float | None) -> str:
     return "" if value is None else f"{value:g}°"
 
 
-def climate_label(t: dict[str, Any]) -> dict[str, str]:
-    """One thermostat as the dashboard shows it: inside temperature, set temperature, HVAC mode and fan."""
-    if t["offline_since"]:
-        return {"name": t["name"], "inside": "offline", "set": "", "hvac": ""}
+def _ago(iso: str | None, now: datetime, stale_after: timedelta) -> tuple[str, bool]:
+    """A short age, and whether it is old enough to warn about."""
+    if not iso:
+        return "never", True
+    then = datetime.fromisoformat(iso)
+    if then.tzinfo is None:
+        then = then.replace(tzinfo=now.tzinfo)
+    seconds = max(0, (now - then.astimezone(now.tzinfo)).total_seconds())
+    stale = seconds > stale_after.total_seconds()
+    if seconds < 45:
+        return "just now", stale
+    if seconds < 3600:
+        return f"{max(1, int(seconds // 60))} min ago", stale
+    if seconds < 48 * 3600:
+        hours = max(1, int(seconds // 3600))
+        return ("1 hour ago" if hours == 1 else f"{hours} hours ago"), stale
+    days = max(1, int(seconds // 86400))
+    return ("1 day ago" if days == 1 else f"{days} days ago"), stale
+
+
+def _board_back(show: str, sort: str, q: str, notice: str = "") -> str:
+    show = show if show in BOARD_SHOWS else "attention"
+    sort = "name" if sort == "name" else "attention"
+    args = {"show": show, "sort": sort, "q": q}
+    if notice:
+        args["notice"] = notice
+    return ".?" + urlencode(args)
+
+
+def _done(url: str, notice: str) -> RedirectResponse:
+    """Redirect back to a page with a one-line confirmation the page shows once."""
+    return RedirectResponse(url + ("&" if "?" in url else "?") + urlencode({"notice": notice}), status_code=303)
+
+
+def _set_phrase(t: dict[str, Any]) -> str:
+    if t["target_temp"] is not None:
+        return f"set {_deg(t['target_temp'])}"
     if t["target_low"] is not None and t["target_high"] is not None:
-        target = f"{_deg(t['target_low'])}–{_deg(t['target_high'])}"
-    else:
-        target = _deg(t["target_temp"])
-    hvac = " · ".join(x for x in (t["state"], t["hvac_action"], f"fan {t['fan_mode']}" if t["fan_mode"] else "") if x)
-    return {"name": t["name"], "inside": _deg(t["current_temp"]), "set": target, "hvac": hvac,
-            "action": t["hvac_action"] or ""}
+        return f"set {_deg(t['target_low'])}–{_deg(t['target_high'])}"
+    return ""
+
+
+def _clamped(t: dict[str, Any], wanted: int) -> int:
+    low, high = t.get("min_temp"), t.get("max_temp")
+    if low is not None and high is not None and not low <= wanted <= high:
+        return int(min(max(wanted, low), high))
+    return int(wanted)
+
+
+def _reading(t: dict[str, Any]) -> str:
+    bits = []
+    if t["current_temp"] is not None:
+        bits.append(_deg(t["current_temp"]))
+    if t["state"]:
+        bits.append(str(t["state"]))
+    phrase = _set_phrase(t)
+    if phrase:
+        bits.append(phrase)
+    return " · ".join(bits) or "No reading"
+
+
+def _climate_views(therms: list[dict], prop: dict, reservations: list[dict], now: datetime,
+                   cfg: dict[str, int]) -> list[dict[str, Any]]:
+    """What each thermostat should be doing, and the one problem line when it is not."""
+    summer = is_summer(now.date(), cfg["summer_start_month"], cfg["summer_end_month"])
+    wanted = setpoint(occupancy(reservations, now, cfg["therm_lead_hours"], cfg["therm_lag_hours"]), summer, cfg)
+    want_mode = "cool" if summer else "heat"
+    occupying = occupying_reservation(reservations, now, cfg["therm_lead_hours"], cfg["therm_lag_hours"])
+    views = []
+    for t in therms:
+        detail = " · ".join(x for x in (t["hvac_action"], f"fan {t['fan_mode']}" if t["fan_mode"] else "") if x)
+        if t["offline_since"]:
+            ago, _ = _ago(t["offline_since"], now, timedelta(0))
+            views.append({
+                "name": t["name"], "line": f"Offline since {ago}" if ago != "never" else "Offline",
+                "ok": False, "detail": detail, "action": "",
+                "problem": f"{t['name']} offline (Home Assistant says {t['state'] or 'nothing'})",
+            })
+            continue
+        if not prop["thermostat_automation"]:
+            views.append({"name": t["name"], "line": _reading(t), "ok": True, "detail": detail,
+                          "problem": None, "action": ""})
+            continue
+        adopted = bool(
+            occupying and (
+                t.get("last_reservation_id") == occupying["id"]
+                or (not t.get("last_reservation_id") and occupying["arrival_date"] != now.date().isoformat())
+            )
+        )
+        schedule_temp = _clamped(t, wanted)
+        on_target = (
+            t["state"] == want_mode and t["target_temp"] is not None
+            and abs(float(t["target_temp"]) - schedule_temp) <= TOLERANCE
+        )
+        schedule = f"{want_mode.title()} {schedule_temp}°"
+        now_bits = " ".join(x for x in (_deg(t["current_temp"]), t["state"]) if x)
+        set_bit = _set_phrase(t)
+        if t["fail_count"] and not adopted:
+            views.append({
+                "name": t["name"], "line": f"Should be {schedule} · last try failed",
+                "ok": False, "detail": detail, "action": "",
+                "problem": f"{t['name']}: {t['last_error']} (tries: {t['fail_count']})",
+            })
+            continue
+        if on_target:
+            limit = f" · device allows {schedule_temp}°" if schedule_temp != wanted else ""
+            views.append({
+                "name": t["name"], "line": f"{schedule} · now {now_bits} · on target{limit}",
+                "ok": True, "detail": detail, "problem": None, "action": "",
+            })
+            continue
+        if adopted:
+            views.append({
+                "name": t["name"], "line": f"Now {now_bits} · left for this stay",
+                "ok": True, "detail": detail, "problem": None, "action": "",
+            })
+            continue
+        asked = f"{want_mode.title()} {wanted}°"
+        views.append({
+            "name": t["name"],
+            "line": " · ".join(x for x in (f"Should be {asked}", f"now {now_bits}".strip(), set_bit) if x),
+            "ok": False, "detail": detail, "action": "",
+            "problem": f"{t['name']} should be {asked}. Now {now_bits}" + (f", {set_bit}" if set_bit else ""),
+        })
+    return views
+
+
+def _context(state, tz) -> str:
+    label = STATUS_LABELS[state.status]
+    if state.current:
+        return f"{label} · {state.current['guest_name']} out {_fmt(state.current['check_out_at'], tz)}"
+    if state.next:
+        return f"{label} · {state.next['guest_name']} in {_fmt(state.next['check_in_at'], tz)}"
+    return label
 
 
 def street_key(name: str) -> tuple[str, int, str]:
@@ -81,12 +219,14 @@ def dashboard_rows(syncer: Syncer, query: str = "") -> list[dict[str, Any]]:
     for t in syncer.db.query("SELECT * FROM thermostats WHERE property_id IS NOT NULL ORDER BY name"):
         therms_by_property.setdefault(t["property_id"], []).append(t)
     battery_limit = syncer.db.get_int("battery_alert_percent", CLIMATE_DEFAULTS["battery_alert_percent"])
+    cfg = {k: syncer.db.get_int(k, v) for k, v in CLIMATE_DEFAULTS.items()}
 
     rows = []
     for prop in syncer.db.query("SELECT * FROM properties WHERE active = 1 ORDER BY name"):
         if query and query.lower() not in prop["name"].lower():
             continue
-        state = property_state(syncer.reservations_for(prop["id"]), now)
+        reservations = syncer.reservations_for(prop["id"])
+        state = property_state(reservations, now)
         locks = locks_by_property.get(prop["id"], [])
         per_lock = [
             code_status(
@@ -98,36 +238,41 @@ def dashboard_rows(syncer: Syncer, query: str = "") -> list[dict[str, Any]]:
         # The worst lock decides: one lock without the code means the guest may be stuck at that door.
         order = ["missing", "unknown", "no_code", "in_lock", "no_lock", "none"]
         code = min(per_lock, key=order.index)
+        read_at = max((l["codes_read_at"] for l in locks if l["codes_read_at"]), default=None)
+        read_ago, read_stale = _ago(read_at, now, timedelta(hours=12))
 
         problems = []
         soon = within(state.next, now, 36)
         if code == "missing" and soon:
-            problems.append("Guest code not in lock")
+            problems.append({"text": f"Guest code missing. Last read {read_ago}.", "action": "check_lock"})
         if code == "no_code" and soon:
-            problems.append("No door code in Hostaway")
+            problems.append({"text": "No door code in Hostaway.", "action": ""})
         for lock in locks:
             if lock["state"] == "unavailable":
-                problems.append(f"{lock['name']} offline")
+                problems.append({"text": f"{lock['name']} offline", "action": "check_lock"})
             elif lock["codes_error"]:
-                problems.append(f"{lock['name']}: read failed")
+                problems.append({"text": f"{lock['name']}: read failed", "action": "check_lock"})
             if prop["lock_automation"] and lock["fail_count"] and lock["state"] != "unavailable":
                 # Hostaway/HA wording stays in the Log; the board gets a short line.
                 error = (lock["last_error"] or "").split(" (")[0]
-                problems.append(f"{lock['name']}: {error or 'check failed'}, tried {lock['fail_count']}x")
+                problems.append({
+                    "text": f"{lock['name']}: {error or 'check failed'}, tried {lock['fail_count']}x",
+                    "action": "check_lock",
+                })
             if lock["battery"] is not None and lock["battery"] < battery_limit:
-                problems.append(f"{lock['name']}: battery {lock['battery']}%")
+                problems.append({"text": f"{lock['name']}: battery {lock['battery']}%", "action": ""})
         therms = therms_by_property.get(prop["id"], [])
-        for t in therms:
-            if t["offline_since"]:
-                problems.append(f"{t['name']} offline (Home Assistant says {t['state'] or 'nothing'})")
-            elif prop["thermostat_automation"] and t["fail_count"]:
-                problems.append(f"{t['name']}: {t['last_error']} (tries: {t['fail_count']})")
+        climate = _climate_views(therms, prop, reservations, now, cfg)
+        for view in climate:
+            if view["problem"]:
+                problems.append({"text": view["problem"], "action": view["action"]})
 
         rows.append({
             "id": prop["id"],
             "name": prop["name"],
             "status": state.status,
             "status_label": STATUS_LABELS[state.status],
+            "context": _context(state, tz),
             "current_guest": state.current["guest_name"] if state.current else "",
             "current_out": _fmt(state.current["check_out_at"], tz) if state.current else "",
             "next_guest": state.next["guest_name"] if state.next else "",
@@ -140,10 +285,11 @@ def dashboard_rows(syncer: Syncer, query: str = "") -> list[dict[str, Any]]:
             "code": code,
             "code_label": CODE_LABELS[code],
             "locks": locks,
-            "lock_read": _fmt(max((l["codes_read_at"] for l in locks if l["codes_read_at"]), default=None), tz),
+            "lock_read": read_ago if locks else "",
+            "lock_stale": bool(locks and read_at and read_stale),
             "problems": problems,
             "lock_automation": prop["lock_automation"],
-            "climate": [climate_label(t) for t in therms],
+            "climate": climate,
             "battery": min((l["battery"] for l in locks if l["battery"] is not None), default=None),
             "battery_low": any(l["battery"] is not None and l["battery"] < battery_limit for l in locks),
         })
@@ -188,17 +334,27 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None) 
             status_code=400)
 
     def page(request: Request, name: str, **ctx: Any) -> HTMLResponse:
+        now = syncer.now()
+        sync_ago, sync_stale = _ago(
+            db.get_setting("last_sync_at"), now,
+            timedelta(minutes=max(45, syncer.settings.sync_minutes * 3)))
+        webhook_ago, _ = _ago(db.get_setting("last_webhook_at"), now, timedelta(days=365))
         return templates.TemplateResponse(request, name, {
             "last_sync": _fmt(db.get_setting("last_sync_at"), syncer.tz),
             "last_webhook": _fmt(db.get_setting("last_webhook_at"), syncer.tz),
+            "sync_ago": sync_ago,
+            "sync_stale": sync_stale,
+            "webhook_ago": webhook_ago,
+            "notice": request.query_params.get("notice", "")[:200],
             **ctx,
         })
 
     @app.get("/", response_class=HTMLResponse)
-    async def status(request: Request, q: str = "", show: str = "all", sort: str = "attention"):
+    async def status(request: Request, q: str = "", show: str = "attention", sort: str = "attention"):
         rows = dashboard_rows(syncer, q)
         counts = {k: sum(1 for r in rows if r["status"] == k) for k in STATUS_LABELS}
         problems = sum(1 for r in rows if r["problems"])
+        total = len(rows)
         filters = {
             "attention": lambda r: bool(r["problems"]),
             "arriving": lambda r: r["status"] in ("arriving_today", "turnover_today"),
@@ -206,17 +362,14 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None) 
             "occupied": lambda r: r["status"] == "occupied",
             "vacant": lambda r: r["status"] == "vacant",
         }
-        show = show if show in filters else "all"
+        show = show if show in filters or show == "all" else "attention"
         if show != "all":
             rows = [r for r in rows if filters[show](r)]
         sort = sort if sort == "name" else "attention"
         if sort == "name":
             rows.sort(key=lambda r: street_key(r["name"]))
-        automation = db.one(
-            "SELECT COUNT(*) AS homes, COALESCE(SUM(lock_automation), 0) AS locks, "
-            "COALESCE(SUM(thermostat_automation), 0) AS therms FROM properties WHERE active = 1")
-        return page(request, "status.html", rows=rows, q=q, counts=counts, problems=problems, show=show,
-                    sort=sort, automation=automation)
+        return page(request, "status.html", rows=rows, q=q, counts=counts, problems=problems, total=total,
+                    show=show, sort=sort)
 
     @app.get("/properties", response_class=HTMLResponse)
     async def properties(request: Request):
@@ -231,10 +384,27 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None) 
         for t in thermostats:
             if t["property_id"]:
                 therm_by_property.setdefault(t["property_id"], []).append(t)
+        gaps = []
         for prop in props:
             prop["lock_list"] = by_property.get(prop["id"], [])
             prop["therm_list"] = therm_by_property.get(prop["id"], [])
-        return page(request, "properties.html", properties=props, locks=locks, thermostats=thermostats)
+            if not prop["active"]:
+                continue
+            if not prop["lock_list"]:
+                gaps.append({"id": prop["id"], "name": prop["name"], "why": "No lock assigned"})
+            for lock in prop["lock_list"]:
+                if lock["state"] == "unavailable":
+                    gaps.append({"id": prop["id"], "name": prop["name"], "why": f"{lock['name']} offline"})
+            for t in prop["therm_list"]:
+                if t["offline_since"]:
+                    gaps.append({"id": prop["id"], "name": prop["name"], "why": f"{t['name']} offline"})
+        automation = db.one(
+            "SELECT COUNT(*) AS homes, COALESCE(SUM(lock_automation), 0) AS locks, "
+            "COALESCE(SUM(thermostat_automation), 0) AS therms FROM properties WHERE active = 1")
+        return page(request, "properties.html", properties=props, locks=locks, thermostats=thermostats,
+                    gaps=gaps, automation=automation,
+                    open_locks=[l for l in locks if not l["property_id"]],
+                    open_thermostats=[t for t in thermostats if not t["property_id"]])
 
     @app.post("/properties-save")
     async def properties_save(request: Request):
@@ -325,7 +495,7 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None) 
             db.execute(f"UPDATE locks SET next_check_at = NULL WHERE property_id IN ({', '.join('?' for _ in touched)})",
                        tuple(touched))
         db.log("properties.saved", "Property settings saved")
-        return RedirectResponse("properties", status_code=303)
+        return _done("properties", "Property settings saved")
 
     @app.get("/staff", response_class=HTMLResponse)
     async def staff(request: Request):
@@ -372,7 +542,8 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None) 
         db.execute("UPDATE locks SET next_check_at = NULL WHERE property_id = ?", (property_id,))
 
     @app.post("/code-override")
-    async def code_override(reservation_id: int = Form(...), code: str = Form("")):
+    async def code_override(reservation_id: int = Form(...), code: str = Form(""),
+                            show: str = Form("attention"), sort: str = Form("attention"), q: str = Form("")):
         """Staff change the code a guest uses (the guest asked for a different one). Blank goes back to Hostaway's."""
         row = db.one("SELECT r.*, p.id AS pid, p.name AS pname FROM reservations r "
                      "JOIN properties p ON p.hostaway_listing_id = r.listing_id WHERE r.id = ?", (reservation_id,))
@@ -397,7 +568,7 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None) 
                f"Guest code for {row['guest_name'] or reservation_id} "
                f"{'changed on the dashboard' if code else 'back to the Hostaway code'}",
                property_id=row["pid"], reservation_id=reservation_id)
-        return RedirectResponse(".", status_code=303)
+        return _done(_board_back(show, sort, q), "Guest code saved" if code else "Guest code back to the Hostaway code")
 
     @app.post("/preview-add")
     async def preview_add(property_id: int = Form(...), label: str = Form(""), code: str = Form(""),
@@ -420,7 +591,7 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None) 
         recheck_locks(property_id)
         db.log("preview.added", f"Visitor code for {label.strip() or 'a visitor'} added to {prop['name']} "
                                 f"for {int(hours)} hours", property_id=property_id)
-        return RedirectResponse("staff", status_code=303)
+        return _done("staff", "Visitor code added")
 
     @app.post("/preview-delete")
     async def preview_delete(preview_id: int = Form(...)):
@@ -430,7 +601,7 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None) 
             recheck_locks(row["property_id"])
             db.log("preview.removed", f"Visitor code {row['label'] or preview_id} ended early",
                    property_id=row["property_id"])
-        return RedirectResponse("staff", status_code=303)
+        return _done("staff", "Visitor code ended")
 
     @app.post("/staff-save")
     async def staff_save(request: Request):
@@ -501,7 +672,7 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None) 
         db.execute("UPDATE locks SET next_check_at = NULL WHERE property_id IN "
                    "(SELECT id FROM properties WHERE lock_automation = 1)")
         db.log("staff.saved", "Staff codes saved")
-        return RedirectResponse("staff", status_code=303)
+        return _done("staff", "Staff codes saved")
 
     @app.post("/recipients-save")
     async def recipients_save(request: Request):
@@ -536,17 +707,31 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None) 
         for sql, args in updates:
             db.execute(sql, args)
         db.log("recipients.saved", "Alert recipients saved")
-        return RedirectResponse("staff", status_code=303)
+        return _done("staff", "Alert recipients saved")
 
     @app.get("/events", response_class=HTMLResponse)
-    async def events(request: Request):
-        rows = db.query(
-            "SELECT e.*, p.name AS property FROM events e LEFT JOIN properties p ON p.id = e.property_id "
-            "ORDER BY e.id DESC LIMIT 300"
-        )
+    async def events(request: Request, q: str = "", level: str = "", kind: str = ""):
+        where: list[str] = []
+        args: list[Any] = []
+        if q.strip():
+            where.append("(IFNULL(p.name, '') LIKE ? OR e.message LIKE ? OR e.kind LIKE ?)")
+            like = f"%{q.strip()}%"
+            args.extend((like, like, like))
+        if level in ("error", "warning", "info"):
+            where.append("e.level = ?")
+            args.append(level)
+        if kind:
+            where.append("e.kind = ?")
+            args.append(kind)
+        sql = ("SELECT e.*, p.name AS property FROM events e "
+               "LEFT JOIN properties p ON p.id = e.property_id ")
+        if where:
+            sql += "WHERE " + " AND ".join(where) + " "
+        rows = db.query(sql + "ORDER BY e.id DESC LIMIT 300", tuple(args))
         for r in rows:
             r["at_local"] = _fmt(r["at"], syncer.tz)
-        return page(request, "events.html", events=rows)
+        kinds = [r["kind"] for r in db.query("SELECT DISTINCT kind FROM events ORDER BY kind")]
+        return page(request, "events.html", events=rows, q=q, level=level, kind=kind, kinds=kinds)
 
     @app.post("/sync")
     async def sync_now():
@@ -554,13 +739,14 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None) 
         await syncer.discover_locks()
         changed = await syncer.sync_reservations()
         db.log("sync.manual", f"Manual sync: {changed} reservations changed")
-        return RedirectResponse(".", status_code=303)
+        return _done(".", f"Sync finished: {changed} reservation{'' if changed == 1 else 's'} changed")
 
     @app.post("/lock-refresh")
-    async def lock_refresh(property_id: int = Form(...)):
+    async def lock_refresh(property_id: int = Form(...), show: str = Form("attention"),
+                           sort: str = Form("attention"), q: str = Form("")):
         for lock in db.query("SELECT * FROM locks WHERE property_id = ?", (property_id,)):
             await syncer.read_lock_codes(lock)
-        return RedirectResponse(".", status_code=303)
+        return _done(_board_back(show, sort, q), "Lock read")
 
     @app.get("/setup", response_class=HTMLResponse)
     async def setup(request: Request):
@@ -579,8 +765,12 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None) 
             webhook_full=f"{public_url}/api/webhook/{webhook_id}" if webhook_id and public_url else "",
             registered=db.get_setting("hostaway_webhook_registered_at"),
             is_addon=syncer.settings.is_addon,
-            numbers=[(k, SETTING_LABELS[k], db.get_int(k, v)) for k, v in DEFAULTS.items()],
-            climate_numbers=[(k, CLIMATE_LABELS[k], db.get_int(k, v)) for k, v in CLIMATE_DEFAULTS.items()],
+            lock_guest=[(k, SETTING_LABELS[k], db.get_int(k, DEFAULTS[k])) for k in LOCK_GUEST_KEYS],
+            lock_advanced=[(k, SETTING_LABELS[k], db.get_int(k, DEFAULTS[k])) for k in LOCK_ADVANCED_KEYS],
+            climate_guest=[(k, CLIMATE_LABELS[k], db.get_int(k, CLIMATE_DEFAULTS[k])) for k in CLIMATE_GUEST_KEYS],
+            climate_months=[(k, CLIMATE_LABELS[k], db.get_int(k, CLIMATE_DEFAULTS[k])) for k in CLIMATE_MONTH_KEYS],
+            climate_advanced=[(k, CLIMATE_LABELS[k], db.get_int(k, CLIMATE_DEFAULTS[k])) for k in CLIMATE_ADVANCED_KEYS],
+            month_names=MONTH_NAMES,
             thermostat_homes=db.one("SELECT COUNT(*) AS n FROM properties WHERE thermostat_automation = 1")["n"],
             alert_service=db.get_setting("alert_service", "") or "",
             backup_codes_enabled=db.get_bool("backup_codes_enabled"),
@@ -607,7 +797,7 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None) 
         db.set_setting("guest_message", message)
         db.execute("UPDATE locks SET next_check_at = NULL")
         db.log("settings.saved", "Lock automation settings saved")
-        return RedirectResponse("setup", status_code=303)
+        return _done("setup", "Lock settings saved")
 
     @app.post("/thermostat-settings-save")
     async def thermostat_settings_save(request: Request):
@@ -629,13 +819,13 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None) 
         db.execute("UPDATE thermostats SET last_mode = NULL, last_applied_at = NULL "
                    "WHERE last_mode IS NULL OR last_mode != 'occupied'")
         db.log("settings.saved", "Thermostat settings saved")
-        return RedirectResponse("setup", status_code=303)
+        return _done("setup", "Thermostat settings saved")
 
     @app.post("/test-alert")
     async def test_alert():
         if locks is not None:
             await locks.alert("Stay Automation test", "Alerts are working.")
-        return RedirectResponse("setup", status_code=303)
+        return _done("setup", "Test alert sent")
 
     @app.post("/setup-webhook")
     async def setup_webhook(public_url: str = Form(...), addon_slug: str = Form(...),
@@ -659,7 +849,7 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None) 
             await syncer.hostaway.register_webhook(f"{public_url}/api/webhook/{webhook_id}")
             db.set_setting("hostaway_webhook_registered_at", datetime.now(syncer.tz).isoformat())
             db.log("setup.webhook", "Webhook registered with Hostaway")
-        return RedirectResponse("setup", status_code=303)
+        return _done("setup", "Webhook registered")
 
     @app.post("/webhook/{secret}")
     async def webhook_direct(secret: str, request: Request):

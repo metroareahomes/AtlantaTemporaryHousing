@@ -11,19 +11,38 @@
     <div class="bar-left">
       <div class="brand">Stays</div>
       <nav>
-        <a href="." class="{{ 'on' if active == 'status' }}">Status</a>
-        <a href="properties" class="{{ 'on' if active == 'properties' }}">Properties</a>
-        <a href="staff" class="{{ 'on' if active == 'staff' }}">Staff</a>
+        <a href="." class="{{ 'on' if active == 'status' }}" {{ 'aria-current=page' if active == 'status' }}>Status</a>
         <a href="events" class="{{ 'on' if active == 'events' }}">Log</a>
-        <a href="setup" class="{{ 'on' if active == 'setup' }}">Setup</a>
+        <details class="menu {{ 'on' if active in ['properties', 'staff', 'setup'] }}">
+          <summary>Settings</summary>
+          <div class="menu-panel">
+            <a href="properties" class="{{ 'on' if active == 'properties' }}">Properties</a>
+            <a href="staff" class="{{ 'on' if active == 'staff' }}">Staff</a>
+            <a href="setup" class="{{ 'on' if active == 'setup' }}">Setup</a>
+          </div>
+        </details>
       </nav>
     </div>
-    <div class="meta">
-      <span><span class="dot {{ '' if last_sync else 'off' }}"></span>synced {{ last_sync or 'never' }}</span>
-      <span>webhook {{ last_webhook or 'never' }}</span>
+    <div class="meta" id="syncmeta">
+      <span class="{{ 'stale' if sync_stale|default(false) else '' }}" title="{{ last_sync or 'never' }}">
+        <span class="dot {{ 'off' if sync_stale|default(false) else '' }}"></span>synced {{ sync_ago|default(last_sync or 'never', true) }}</span>
+      <span title="{{ last_webhook or 'never' }}">webhook {{ webhook_ago|default(last_webhook or 'never', true) }}</span>
       <form method="post" action="sync" class="inline"><button>Sync now</button></form>
     </div>
   </header>
-  <main>{% block body %}{% endblock %}</main>
+  <main>
+  {% if notice %}<div class="notice" role="status">{{ notice }}</div>{% endif %}
+  {% block body %}{% endblock %}</main>
+<script>
+  // tidy: drop the one-time notice from the address bar, close the Settings menu on outside click / Escape
+  if (location.search.indexOf("notice=") > -1 && history.replaceState) {
+    var u = new URL(location.href); u.searchParams.delete("notice"); history.replaceState(null, "", u);
+  }
+  var menu = document.querySelector("details.menu");
+  if (menu) {
+    document.addEventListener("click", function (e) { if (!menu.contains(e.target)) menu.removeAttribute("open"); });
+    document.addEventListener("keydown", function (e) { if (e.key === "Escape") menu.removeAttribute("open"); });
+  }
+</script>
 </body>
 </html>

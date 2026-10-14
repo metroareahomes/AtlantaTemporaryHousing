@@ -181,14 +181,16 @@ def test_dashboard_pages_render(syncer):
     run(syncer.discover_locks())
     run(syncer.sync_reservations())
     client = TestClient(create_app(syncer))
-    page = client.get("/")
+    page = client.get("/?show=all")
     assert page.status_code == 200
     assert "Maple 124b" in page.text and "Not checked yet" in page.text
     assert 'href="static/style.css"' in page.text  # relative, for HA ingress
+    attention = client.get("/")
+    assert attention.status_code == 200 and "Needs attention" in attention.text
     for path in ("/properties", "/events", "/setup"):
         assert client.get(path).status_code == 200, path
 
     lock = syncer.db.one("SELECT * FROM locks WHERE entity_id = 'lock.124_maple'")
     resp = client.post("/lock-refresh", data={"property_id": lock["property_id"]}, follow_redirects=False)
     assert resp.status_code == 303
-    assert "In lock" in client.get("/").text
+    assert "In lock" in client.get("/?show=all").text

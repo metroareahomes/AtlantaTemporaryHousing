@@ -710,8 +710,8 @@ def test_staff_can_change_a_guest_code_and_it_survives_hostaway_syncs(lm):
     lm.s.upsert_reservation(res())  # the next Hostaway sync still says 4821
     tick_at(lm, at("2030-01-10T08:06"))
     assert lm.ha.codes["lock.a"]["HA-Ann Lee"] == "6677"
-    page = c.get("/").text
-    assert "6677" in page and "custom" in page and "change code" in page
+    page = c.get("/?show=all").text
+    assert "6677" in page and "custom" in page and "Change guest code" in page
     assert lm.db.one("SELECT 1 FROM events WHERE kind = 'code.override'")
 
     assert c.post("/code-override", data={"reservation_id": 1, "code": ""}).status_code == 303  # back to Hostaway's
