@@ -26,41 +26,46 @@
 
 <section class="panel">
 <h2>Homes</h2>
-<p class="sub">Open one home to change its name, automation, or backup code. Device assignment is below.</p>
+<p class="sub">Change a name, switch automation on or off, or set a backup code. Press Save when you are done.</p>
 <input id="find-home" type="search" placeholder="Search homes" aria-label="Search homes">
-{% for p in properties %}
-<details class="home" id="home-{{ p.id }}" data-name="{{ p.name|lower }}">
-  <summary>
-    <strong>{{ p.name }}</strong>
-    <span class="sub">
-      {% if not p.active %}inactive · {% endif %}
-      {% if p.lock_list %}{{ p.lock_list|length }} lock{% if p.lock_list|length != 1 %}s{% endif %} · lock automation {{ 'on' if p.lock_automation else 'off' }}
-      {% else %}no lock{% endif %}
-      · {% if p.therm_list %}thermostat automation {{ 'on' if p.thermostat_automation else 'off' }}{% else %}no thermostat{% endif %}
-    </span>
-  </summary>
-  <div class="stack cols">
-    <label>Name <input name="name_{{ p.id }}" value="{{ p.name }}"></label>
-    <div class="sub">{{ p.hostaway_name }} · #{{ p.hostaway_listing_id }}</div>
-    {% if p.lock_list %}
-      {% for l in p.lock_list %}<div class="sub">{{ l.name }} · {{ l.state }}{% if l.battery is not none %} · {{ l.battery }}%{% endif %}</div>{% endfor %}
-    {% endif %}
-    <label><input type="checkbox" name="auto_{{ p.id }}" {{ 'checked' if p.lock_automation }}> Lock automation</label>
-    <input type="hidden" name="was_auto_{{ p.id }}" value="{{ 1 if p.lock_automation else 0 }}">
-    <label>Backup code
-      <input name="backup_{{ p.id }}" value="{{ p.backup_code or '' }}" inputmode="numeric" maxlength="4" placeholder="—">
-    </label>
-    <input type="hidden" name="was_backup_{{ p.id }}" value="{{ p.backup_code or '' }}">
-    {% if p.therm_list %}
-      {% for t in p.therm_list %}<div class="sub">{{ t.name }} · {{ 'offline' if t.offline_since else t.state }}</div>{% endfor %}
-    {% endif %}
-    <label><input type="checkbox" name="tauto_{{ p.id }}" {{ 'checked' if p.thermostat_automation }}> Thermostat automation</label>
-    <input type="hidden" name="was_tauto_{{ p.id }}" value="{{ 1 if p.thermostat_automation else 0 }}">
-    <label><input type="checkbox" name="active_{{ p.id }}" {{ 'checked' if p.active }}> Active</label>
-    <input type="hidden" name="was_active_{{ p.id }}" value="{{ 1 if p.active else 0 }}">
-  </div>
-</details>
-{% endfor %}
+<div class="scroll">
+<table class="homes-table">
+  <thead><tr><th>Home</th><th>Devices</th><th class="c">Lock auto</th><th class="c">Thermostat auto</th><th>Backup code</th><th class="c">Active</th></tr></thead>
+  <tbody>
+  {% for p in properties %}
+  <tr class="home {{ '' if p.active else 'inactive' }}" id="home-{{ p.id }}" data-name="{{ p.name|lower }}">
+    <td class="h-main">
+      <input name="name_{{ p.id }}" value="{{ p.name }}" aria-label="Name">
+      <div class="sub">{{ p.hostaway_name }} · #{{ p.hostaway_listing_id }}</div>
+    </td>
+    <td class="devs">
+      {% for l in p.lock_list %}<div>Lock · {{ l.name }} <span class="sub">{{ l.state }}{% if l.battery is not none %} · {{ l.battery }}%{% endif %}</span></div>{% endfor %}
+      {% for t in p.therm_list %}<div>Thermostat · {{ t.name }} <span class="sub {{ 'warn' if t.offline_since }}">{{ 'offline' if t.offline_since else t.state }}</span></div>{% endfor %}
+      {% if not p.lock_list and not p.therm_list %}<span class="none">No devices</span>{% endif %}
+    </td>
+    <td class="c">
+      <input type="checkbox" name="auto_{{ p.id }}" aria-label="Lock automation" {{ 'checked' if p.lock_automation }}>
+      <input type="hidden" name="was_auto_{{ p.id }}" value="{{ 1 if p.lock_automation else 0 }}">
+    </td>
+    <td class="c">
+      <input type="checkbox" name="tauto_{{ p.id }}" aria-label="Thermostat automation" {{ 'checked' if p.thermostat_automation }}>
+      <input type="hidden" name="was_tauto_{{ p.id }}" value="{{ 1 if p.thermostat_automation else 0 }}">
+    </td>
+    <td>
+      <input name="backup_{{ p.id }}" value="{{ p.backup_code or '' }}" inputmode="numeric" maxlength="4" placeholder="—" aria-label="Backup code">
+      <input type="hidden" name="was_backup_{{ p.id }}" value="{{ p.backup_code or '' }}">
+    </td>
+    <td class="c">
+      <input type="checkbox" name="active_{{ p.id }}" aria-label="Active" {{ 'checked' if p.active }}>
+      <input type="hidden" name="was_active_{{ p.id }}" value="{{ 1 if p.active else 0 }}">
+    </td>
+  </tr>
+  {% else %}
+  <tr><td colspan="6" class="empty">No properties yet. Press "Sync now".</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
 <p><button class="primary">Save</button></p>
 </section>
 
@@ -143,11 +148,9 @@
   var find = document.getElementById("find-home");
   if (find) find.addEventListener("input", function () {
     var q = find.value.toLowerCase();
-    document.querySelectorAll("details.home").forEach(function (el) {
+    document.querySelectorAll("tr.home").forEach(function (el) {
       el.hidden = q && el.dataset.name.indexOf(q) === -1;
     });
   });
-  var opened = document.getElementById((location.hash || "").slice(1));
-  if (opened && opened.tagName === "DETAILS") opened.open = true;
 </script>
 {% endblock %}

@@ -234,3 +234,15 @@ p > button.primary { margin-top: 8px; }
 @media (max-width: 720px) { .panel { padding: 16px; border-radius: 10px; } .panel details.home { margin: 0 -16px; padding: 0 16px; } }
 .panel .checks { max-width: none; }
 .stack.cols { align-items: end; }
+
+/* ---- properties table ---- */
+.homes-table th.c, .homes-table td.c { text-align: center; }
+.homes-table td { vertical-align: middle; }
+.homes-table td.h-main input { width: 100%; min-width: 14rem; font-weight: 600; }
+.homes-table td.devs { min-width: 16rem; }
+.homes-table td input[name^=backup_] { width: 5.5rem; min-width: 0; }
+.homes-table tr.inactive td { opacity: .55; }
+.homes-table tr.home:target td { background: var(--accent-soft); }
+.homes-table thead th { position: sticky; top: 0; background: var(--card); }
+.homes-table td.c input[type=checkbox] { margin: 0; width: 20px; height: 20px; }
+.panel.attention .checks { max-height: 320px; overflow-y: auto; }
