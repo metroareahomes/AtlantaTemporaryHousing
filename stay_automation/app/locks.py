@@ -490,6 +490,17 @@ class LockManager:
 
     async def retry_guest_messages(self) -> None:
         now = self.s.now()
+        # A process may stop after committing send intent but before recording the result.
+        # Surface that uncertainty after restart without replaying the guest message.
+        for row in self.db.query(
+                "SELECT g.*, p.name FROM guest_notices g JOIN properties p ON p.id=g.property_id "
+                "JOIN reservations r ON r.id=g.reservation_id WHERE g.delivered=0 "
+                "AND g.next_attempt IS NULL AND g.attempts>0 AND r.active=1 AND r.check_out_at>?",
+                (now.isoformat(timespec="seconds"),)):
+            await self.alert(f"Guest code NOT confirmed: {row['name']}",
+                             f"Backup message delivery for reservation {row['reservation_id']} is uncertain. "
+                             "Check the Hostaway conversation before sending again.",
+                             key=f"fallback:{row['reservation_id']}:manual")
         if not self.db.get_bool("guest_messages_enabled") or not self.db.get_bool("backup_codes_enabled"):
             return
         for notice in self.db.query("SELECT * FROM guest_notices WHERE delivered=0 AND next_attempt <= ?",

@@ -355,3 +355,16 @@ def test_startup_provider_failure_does_not_skip_other_work_and_shutdown_cleans_u
     assert all(job in calls for job in ("listings", "locks", "sync", "climate", "batteries",
                                        "notification_retry", "webhook_retry", "webhook_setup"))
     assert calls.count("closed") == 2
+
+
+def test_interrupted_guest_send_surfaces_manual_check_after_restart(lm):
+    lock = setup_fallback(lm)
+    async def interrupted(*args):
+        raise asyncio.CancelledError()
+    lm.hostaway.send_guest_message = interrupted
+    with pytest.raises(asyncio.CancelledError):
+        run(lm.fallback(norm(), lock, "test"))
+    assert not lm.db.one("SELECT * FROM alerts_sent WHERE key='fallback:1:manual'")
+    run(lm.retry_guest_messages())
+    assert lm.db.one("SELECT * FROM alerts_sent WHERE key='fallback:1:manual'")
+    assert lm.hostaway.sent == []
