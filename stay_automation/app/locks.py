@@ -568,6 +568,9 @@ class LockManager:
         except Exception as exc:
             log.error("alert failed: %s", exc)
             self.db.log("alert.failed", f"Could not deliver alert '{title}': {exc}", level="error")
+            # Do not suppress future attempts when notification delivery failed.
+            # The same persistent-notification ID prevents duplicate HA dashboard notices.
+            return
         if key:
             self.db.execute("INSERT OR IGNORE INTO alerts_sent(key, at) VALUES(?, ?)", (key, utcnow()))
         self.db.log("alert", f"{title}: {message}", level="warning")
