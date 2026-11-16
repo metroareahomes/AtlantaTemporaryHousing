@@ -368,3 +368,27 @@ def test_interrupted_guest_send_surfaces_manual_check_after_restart(lm):
     run(lm.retry_guest_messages())
     assert lm.db.one("SELECT * FROM alerts_sent WHERE key='fallback:1:manual'")
     assert lm.hostaway.sent == []
+
+
+def test_rescheduled_stay_does_not_get_backup_message_early(lm):
+    lock = setup_fallback(lm)
+    async def broken(*args):
+        raise HostawayMessageNotSent()
+    lm.hostaway.send_guest_message = broken
+    run(lm.fallback(norm(), lock, "test"))
+    lm.s.upsert_reservation(res(arrival="2030-01-11"))
+    lm.s.now = lambda: at("2030-01-10T15:21")
+    run(lm.retry_guest_messages())
+    assert lm.db.one("SELECT attempts FROM guest_notices")["attempts"] == 1
+
+
+def test_backup_retry_stops_at_end_of_original_arrival_window(lm):
+    lock = setup_fallback(lm)
+    async def broken(*args):
+        raise HostawayMessageNotSent()
+    lm.hostaway.send_guest_message = broken
+    run(lm.fallback(norm(), lock, "test"))
+    lm.s.now = lambda: at("2030-01-10T22:01")
+    run(lm.retry_guest_messages())
+    assert lm.db.one("SELECT next_attempt FROM guest_notices")["next_attempt"] is None
+    assert lm.db.one("SELECT * FROM alerts_sent WHERE key='fallback:1:expired'")

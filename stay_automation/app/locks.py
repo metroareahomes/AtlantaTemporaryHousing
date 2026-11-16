@@ -514,6 +514,15 @@ class LockManager:
                 self.db.execute("UPDATE guest_notices SET next_attempt=NULL WHERE reservation_id=?",
                                 (notice["reservation_id"],))
                 continue
+            if not in_final_window(r, now, self.cfg()["final_check_minutes"]):
+                if now >= _dt(r["check_in_at"]) + timedelta(hours=6):
+                    self.db.execute("UPDATE guest_notices SET next_attempt=NULL,attempts=0 WHERE reservation_id=?",
+                                    (r["id"],))
+                    await self.alert(f"Backup message needs staff follow-up: {prop['name']}",
+                                     f"Reservation {r['id']}: backup message was not sent before the "
+                                     "arrival messaging window ended. Please contact the guest.",
+                                     key=f"fallback:{r['id']}:expired")
+                continue
             lock = self.db.one("SELECT * FROM locks WHERE property_id=? ORDER BY id LIMIT 1", (prop["id"],))
             if lock:
                 await self.fallback(r, lock, "backup-code message delivery is being retried")

@@ -25,7 +25,7 @@ Webhook wiring is saved only after HA accepts it and is rechecked every five min
 ## Guest backup messages
 Known failures before the message POST retry after five minutes, including after restart. Retry processing
 checks that the reservation is active, has not checked out, the property is active/automated, and messaging
-and backup codes remain enabled. Disabled messaging pauses pending retries.
+and backup codes remain enabled. Retries respect the existing arrival messaging window (one hour before\ncheck-in through six hours after); a rescheduled future arrival waits, and an expired window triggers staff\nfollow-up. Disabled messaging pauses pending retries.
 
 A message POST is not automatically replayed after a server error, timeout, or ambiguous response.
 Send intent is saved first and the backup code is marked used before the POST, so uncertain delivery still
