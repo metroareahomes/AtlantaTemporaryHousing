@@ -1,0 +1,26 @@
+name: Stay Automation tests
+
+on:
+  push:
+    branches:
+      - fix/needs-attention-code-timing
+  pull_request:
+    paths:
+      - 'stay_automation/**'
+      - 'tests/**'
+      - 'requirements-dev.txt'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install test dependencies
+        run: python -m pip install -r requirements-dev.txt
+      - name: Run tests
+        run: python -m pytest -q

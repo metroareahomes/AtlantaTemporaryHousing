@@ -20,7 +20,7 @@ from .climate import (
     TOLERANCE, is_summer, occupancy, occupying_reservation, setpoint,
 )
 from .hostaway import HostawayError
-from .locks import DEFAULT_GUEST_MESSAGE, DEFAULTS, LockManager, _utc, new_backup_code
+from .locks import DEFAULT_GUEST_MESSAGE, DEFAULTS, LockManager, _utc, add_time, new_backup_code
 from .reservations import code_status, property_state, within
 from .sync import Syncer
 
@@ -208,6 +208,16 @@ def street_key(name: str) -> tuple[str, int, str]:
     return words, int(number.group()) if number else 0, name.lower()
 
 
+def missing_code_warning_due(reservation: dict[str, Any] | None, now: datetime,
+                             add_hour: int, early_lead_hours: int,
+                             final_check_minutes: int, grace_minutes: int = 15) -> bool:
+    """Only warn after the lock's scheduled guest-code installation plus grace."""
+    if reservation is None:
+        return False
+    scheduled = add_time(reservation, add_hour, early_lead_hours, final_check_minutes)
+    return now >= scheduled + timedelta(minutes=grace_minutes)
+
+
 def dashboard_rows(syncer: Syncer, query: str = "") -> list[dict[str, Any]]:
     now = syncer.now()
     tz = syncer.tz
@@ -243,8 +253,11 @@ def dashboard_rows(syncer: Syncer, query: str = "") -> list[dict[str, Any]]:
 
         problems = []
         soon = within(state.next, now, 36)
-        if code == "missing" and soon:
-            problems.append({"text": f"Guest code missing. Last read {read_ago}.", "action": "check_lock"})
+        if code == "missing" and soon and state.next:
+            lock_cfg = {key: syncer.db.get_int(key, DEFAULTS[key])
+                        for key in ("add_hour", "early_lead_hours", "final_check_minutes")}
+            if missing_code_warning_due(state.next, now, **lock_cfg):
+                problems.append({"text": f"Guest code missing. Last read {read_ago}.", "action": "check_lock"})
         if code == "no_code" and soon:
             problems.append({"text": "No door code in Hostaway.", "action": ""})
         for lock in locks:
