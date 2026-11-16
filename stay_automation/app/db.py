@@ -69,6 +69,23 @@ CREATE TABLE IF NOT EXISTS guest_notices (
     message TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS alert_deliveries (
+    key TEXT NOT NULL,
+    target TEXT NOT NULL,
+    title TEXT NOT NULL,
+    message TEXT NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    next_attempt TEXT NOT NULL,
+    delivered INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY(key, target)
+);
+
+CREATE TABLE IF NOT EXISTS webhook_pending (
+    reservation_id INTEGER PRIMARY KEY,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    next_attempt TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS alerts_sent (
     key TEXT PRIMARY KEY,
     at TEXT NOT NULL
@@ -121,6 +138,7 @@ CREATE TABLE IF NOT EXISTS thermostats (
 
 # Columns added after the first release; applied to existing databases on start.
 MIGRATIONS = {
+    "guest_notices": {"next_attempt": "TEXT", "attempts": "INTEGER NOT NULL DEFAULT 0"},
     "thermostats": {
         "min_temp": "REAL",        # the range Home Assistant says the device accepts
         "max_temp": "REAL",

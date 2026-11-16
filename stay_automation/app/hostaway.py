@@ -15,6 +15,10 @@ class HostawayError(Exception):
     pass
 
 
+class HostawayMessageNotSent(HostawayError):
+    """Failure before the message POST: safe to retry."""
+
+
 class HostawayClient:
     def __init__(self, account_id: str, api_key: str, *,
                  load_token: Callable[[], str | None] = lambda: None,
@@ -56,17 +60,26 @@ class HostawayClient:
         return token
 
     async def _request(self, method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        retry_safe = kwargs.pop("retry_safe", True)
         if self._token is None:
             self._token = self._load_token()
         for attempt in range(4):
             if self._token is None:
                 self._token = await self._fetch_token()
-            resp = await self._http.request(
-                method, path, headers={"Authorization": f"Bearer {self._token}"}, **kwargs
-            )
+            try:
+                resp = await self._http.request(
+                    method, path, headers={"Authorization": f"Bearer {self._token}"}, **kwargs
+                )
+            except httpx.TransportError:
+                if not retry_safe or method != "GET" or attempt == 3:
+                    raise
+                await asyncio.sleep(2 ** attempt)
+                continue
             if resp.status_code in (401, 403):
                 self._token = None
                 continue
+            if not retry_safe and resp.status_code >= 500:
+                raise HostawayError(f"{method} {path}: delivery uncertain; HTTP {resp.status_code}")
             if resp.status_code == 429 or resp.status_code >= 500:
                 await asyncio.sleep(2 ** attempt)
                 continue
@@ -105,13 +118,17 @@ class HostawayClient:
 
     async def send_guest_message(self, reservation_id: int, body: str) -> None:
         """Post a message into the guest's conversation (goes out on the booking channel)."""
-        found = await self._request("GET", "/conversations", params={"reservationId": reservation_id})
-        conversations = [c for c in found.get("result") or []
-                         if str(c.get("reservationId")) == str(reservation_id)]
-        if not conversations:
-            raise HostawayError(f"No conversation for reservation {reservation_id}")
+        try:
+            found = await self._request("GET", "/conversations", params={"reservationId": reservation_id})
+            conversations = [c for c in found.get("result") or []
+                             if str(c.get("reservationId")) == str(reservation_id)]
+            if not conversations:
+                raise HostawayError(f"No conversation for reservation {reservation_id}")
+            conversation_id = conversations[0]["id"]
+        except Exception as exc:
+            raise HostawayMessageNotSent(f"Message preparation failed for reservation {reservation_id}") from exc
         await self._request(
-            "POST", f"/conversations/{conversations[0]['id']}/messages",
+            "POST", f"/conversations/{conversation_id}/messages", retry_safe=False,
             json={"body": body, "communicationType": "channel"},
         )
 

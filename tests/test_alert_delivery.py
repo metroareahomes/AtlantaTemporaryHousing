@@ -33,6 +33,7 @@ def test_failed_notification_does_not_suppress_retry():
     assert db.one("SELECT * FROM events WHERE kind = 'alert.failed'") is not None
 
     ha.fail = False
+    db.execute("UPDATE alert_deliveries SET next_attempt = '2000-01-01T00:00:00+00:00'")
     asyncio.run(manager.alert("Guest access problem", "Check lock", key="lockfail:1:2030-01-10"))
     assert len(ha.calls) == 2
     assert db.one("SELECT * FROM alerts_sent WHERE key = ?", ("lockfail:1:2030-01-10",)) is not None

@@ -30,6 +30,7 @@ class Syncer:
         self._code_key = self._secret("code_hash_key")
         self.on_thermostats = None  # ClimateManager.tick_property; set from main
         self._thermostat_wake: set[int] = set()
+        self._webhook_lock = asyncio.Lock()
 
     def now(self) -> datetime:
         return datetime.now(self.tz)
@@ -220,11 +221,17 @@ class Syncer:
     async def wake_thermostats(self) -> None:
         """Apply occupied/vacant as soon as Hostaway creates, cancels, or changes a stay."""
         ids = list(self._thermostat_wake)
-        self._thermostat_wake.clear()
         if not self.on_thermostats:
             return
         for property_id in ids:
-            await self.on_thermostats(property_id)
+            try:
+                await self.on_thermostats(property_id)
+            except Exception:
+                log.exception("Thermostat wake failed for property %s; retained for retry", property_id)
+                self.db.log("thermostat.wake_failed", "Thermostat wake failed; retained for retry",
+                            level="error", property_id=property_id)
+            else:
+                self._thermostat_wake.discard(property_id)
 
     async def sync_reservations(self) -> int:
         since = (self.now().date() - timedelta(days=1)).isoformat()
@@ -244,10 +251,10 @@ class Syncer:
         slug = await self.ha.own_slug()
         if not slug or slug == self.db.get_setting("addon_slug"):
             return False
-        self.db.set_setting("addon_slug", slug)
         webhook_id = self.db.get_setting("webhook_id")
         if webhook_id:
             await self.ha.create_webhook_automation(webhook_id, slug)
+        self.db.set_setting("addon_slug", slug)
         self.db.log("setup.webhook", f"Webhook automation now points at this add-on ({slug})")
         return True
 
@@ -262,11 +269,35 @@ class Syncer:
             self.db.log("webhook.ignored", "Webhook received but not a reservation I can use: " + _shape(payload),
                         level="warning")
             return []
+        async with self._webhook_lock:
+            self.db.execute("INSERT INTO webhook_pending(reservation_id,next_attempt) VALUES(?,?) "
+                            "ON CONFLICT(reservation_id) DO UPDATE SET next_attempt=excluded.next_attempt",
+                            (reservation_id, utcnow()))
+            return await self._process_webhook(reservation_id)
+
+    async def _process_webhook(self, reservation_id: int) -> list[str]:
+        row = self.db.one("SELECT * FROM webhook_pending WHERE reservation_id=?", (reservation_id,))
+        attempts = row["attempts"] + 1
+        retry = self.now() + timedelta(seconds=min(900, 60 * 2 ** min(attempts - 1, 4)))
+        self.db.execute("UPDATE webhook_pending SET attempts=?,next_attempt=? WHERE reservation_id=?",
+                        (attempts, retry.astimezone(ZoneInfo("UTC")).isoformat(timespec="seconds"), reservation_id))
         raw = await self.hostaway.reservation(reservation_id)
-        self.db.log("webhook.received", f"Webhook for reservation {reservation_id}")
         what = self.upsert_reservation(raw)
+        self.db.execute("DELETE FROM webhook_pending WHERE reservation_id=?", (reservation_id,))
+        self.db.log("webhook.received", f"Webhook for reservation {reservation_id}")
         await self.wake_thermostats()
         return what
+
+    async def retry_webhooks(self) -> None:
+        async with self._webhook_lock:
+            for row in self.db.query("SELECT reservation_id FROM webhook_pending WHERE next_attempt <= ? "
+                                     "ORDER BY next_attempt LIMIT 50", (utcnow(),)):
+                try:
+                    await self._process_webhook(row["reservation_id"])
+                except Exception:
+                    self.db.log("webhook.retry_failed", "Reservation webhook retry failed; will retry again",
+                                level="error", reservation_id=row["reservation_id"])
+        await self.wake_thermostats()
 
 
 def _other_object(payload: Any) -> bool:
