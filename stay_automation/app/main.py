@@ -111,6 +111,7 @@ def build():
         await asyncio.gather(
             every(1, "notification_retry", retry_notifications, db),
             every(1, "webhook_retry", syncer.retry_webhooks, db),
+            every(5, "webhook_setup", syncer.fix_addon_slug, db),
             every(settings.sync_minutes, "sync", sync_reservations, db),
             every(settings.lock_discovery_minutes, "lock_discovery", discover, db),
             every(LOCK_TICK_MINUTES, "lock_automation", locks.tick, db),
@@ -125,11 +126,14 @@ def build():
             queue: asyncio.Queue = asyncio.Queue()
             start_stdin_reader(asyncio.get_running_loop(), queue)
             tasks.append(asyncio.create_task(consume_webhooks(queue, syncer)))
-        yield
-        for task in tasks:
-            task.cancel()
-        await hostaway.close()
-        await ha.close()
+        try:
+            yield
+        finally:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            await hostaway.close()
+            await ha.close()
 
     return create_app(syncer, locks, lifespan=lifespan)
 

@@ -224,14 +224,14 @@ class Syncer:
         if not self.on_thermostats:
             return
         for property_id in ids:
+            self._thermostat_wake.discard(property_id)
             try:
                 await self.on_thermostats(property_id)
             except Exception:
+                self._thermostat_wake.add(property_id)
                 log.exception("Thermostat wake failed for property %s; retained for retry", property_id)
                 self.db.log("thermostat.wake_failed", "Thermostat wake failed; retained for retry",
                             level="error", property_id=property_id)
-            else:
-                self._thermostat_wake.discard(property_id)
 
     async def sync_reservations(self) -> int:
         since = (self.now().date() - timedelta(days=1)).isoformat()

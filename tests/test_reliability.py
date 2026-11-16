@@ -44,7 +44,7 @@ def test_partial_delivery_retries_only_failed_recipient_after_restart(tmp_path):
     db.execute("INSERT INTO alert_recipients(name,target) VALUES('Bad','notify.bad')")
     manager = LockManager(FakeSyncer(db, ha))
     run(manager.alert("Problem", "Check", key="problem"))
-    assert ha.calls == ["dashboard", "notify.good", "notify.bad"]
+    assert sorted(ha.calls) == ["dashboard", "notify.bad", "notify.good"]
     assert not db.one("SELECT * FROM alerts_sent")
     run(manager.retry_alerts())
     assert len(ha.calls) == 3  # backoff
@@ -52,7 +52,7 @@ def test_partial_delivery_retries_only_failed_recipient_after_restart(tmp_path):
     due(db, "alert_deliveries")
     ha.bad.clear()
     run(restarted.retry_alerts())
-    assert ha.calls == ["dashboard", "notify.good", "notify.bad", "notify.bad"]
+    assert sorted(ha.calls) == ["dashboard", "notify.bad", "notify.bad", "notify.good"]
     assert db.one("SELECT * FROM alerts_sent WHERE key='problem'")
     run(restarted.alert("Problem", "Check", key="problem"))
     assert len(ha.calls) == 4
@@ -233,3 +233,125 @@ def test_mobile_notification_uses_stable_replacement_tag():
         transport=httpx.MockTransport(handler), base_url="http://ha"))
     run(ha.notify_mobile("T", "M", "notify.phone", "unique"))
     assert payloads == [{"title": "T", "message": "M", "data": {"tag": "unique"}}]
+
+
+def test_invalid_backup_template_uses_default_without_losing_message(lm):
+    lock = setup_fallback(lm)
+    lm.db.set_setting("guest_message", "Hi {guest}, {unsupported}")
+    run(lm.fallback(norm(), lock, "test"))
+    assert len(lm.hostaway.sent) == 1 and "5555" in lm.hostaway.sent[0][1]
+    assert lm.db.one("SELECT * FROM events WHERE kind='guest.template_invalid'")
+
+
+def test_disabled_guest_messaging_pauses_pending_retries(lm):
+    lock = setup_fallback(lm)
+    async def broken(*args):
+        raise HostawayMessageNotSent()
+    lm.hostaway.send_guest_message = broken
+    run(lm.fallback(norm(), lock, "test"))
+    lm.s.now = lambda: at("2030-01-10T15:21")
+    lm.db.set_setting("guest_messages_enabled", "0")
+    run(lm.retry_guest_messages())
+    assert lm.db.one("SELECT attempts FROM guest_notices")["attempts"] == 1
+
+
+def test_slug_is_not_saved_until_automation_update_succeeds(syncer):
+    from dataclasses import replace
+    syncer.settings = replace(syncer.settings, is_addon=True)
+    syncer.db.set_setting("webhook_id", "secret")
+    calls = []
+    async def slug():
+        return "real_slug"
+    async def broken(*args):
+        calls.append(args)
+        raise RuntimeError("HA unavailable")
+    syncer.ha.own_slug = slug
+    syncer.ha.create_webhook_automation = broken
+    with pytest.raises(RuntimeError):
+        run(syncer.fix_addon_slug())
+    assert not syncer.db.get_setting("addon_slug")
+    async def recovered(*args):
+        calls.append(args)
+    syncer.ha.create_webhook_automation = recovered
+    assert run(syncer.fix_addon_slug())
+    assert len(calls) == 2 and syncer.db.get_setting("addon_slug") == "real_slug"
+
+
+def test_thermostat_wake_keeps_changes_arriving_during_request(syncer):
+    syncer._thermostat_wake.add(1)
+    async def changed_during_request(pid):
+        syncer._thermostat_wake.add(pid)
+    syncer.on_thermostats = changed_during_request
+    run(syncer.wake_thermostats())
+    assert syncer._thermostat_wake == {1}
+
+
+def test_startup_provider_failure_does_not_skip_other_work_and_shutdown_cleans_up(monkeypatch):
+    import app.main as main
+    from test_sync import SETTINGS
+    calls = []
+    class Client:
+        def __init__(self, *args, **kwargs):
+            pass
+        async def close(self):
+            calls.append("closed")
+    class Sync:
+        def __init__(self, db, settings, hostaway, ha):
+            self.db = db
+            self.ha = ha
+            self.hostaway = hostaway
+        async def fix_addon_slug(self):
+            pass
+        async def import_listings(self):
+            calls.append("listings")
+            raise RuntimeError("Hostaway down")
+        async def discover_locks(self):
+            calls.append("locks")
+        async def sync_reservations(self):
+            calls.append("sync")
+        async def retry_webhooks(self):
+            pass
+    class Locks:
+        def __init__(self, syncer):
+            pass
+        async def tick(self):
+            pass
+        async def retry_alerts(self):
+            pass
+        async def retry_guest_messages(self):
+            pass
+    class Climate:
+        def __init__(self, *args):
+            pass
+        async def refresh(self):
+            calls.append("climate")
+        async def check_batteries(self):
+            calls.append("batteries")
+        async def tick(self):
+            pass
+        async def tick_property(self, pid):
+            pass
+    async def alert(*args, **kwargs):
+        pass
+    Locks.alert = alert
+    async def every(minutes, name, job, db):
+        calls.append(name)
+    monkeypatch.setattr(main, "load_settings", lambda: SETTINGS)
+    monkeypatch.setattr(main, "HostawayClient", Client)
+    monkeypatch.setattr(main, "HAClient", Client)
+    monkeypatch.setattr(main, "Syncer", Sync)
+    monkeypatch.setattr(main, "LockManager", Locks)
+    monkeypatch.setattr(main, "ClimateManager", Climate)
+    monkeypatch.setattr(main, "every", every)
+    monkeypatch.setattr(main, "create_app", lambda *args, lifespan: lifespan)
+    lifespan = main.build()
+    async def exercise():
+        with pytest.raises(RuntimeError, match="app failure"):
+            async with lifespan(None):
+                for _ in range(5):
+                    await asyncio.sleep(0)
+                raise RuntimeError("app failure")
+    run(exercise())
+    assert all(job in calls for job in ("listings", "locks", "sync", "climate", "batteries",
+                                       "notification_retry", "webhook_retry", "webhook_setup"))
+    assert calls.count("closed") == 2

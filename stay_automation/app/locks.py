@@ -490,10 +490,12 @@ class LockManager:
 
     async def retry_guest_messages(self) -> None:
         now = self.s.now()
+        if not self.db.get_bool("guest_messages_enabled") or not self.db.get_bool("backup_codes_enabled"):
+            return
         for notice in self.db.query("SELECT * FROM guest_notices WHERE delivered=0 AND next_attempt <= ?",
                                     (_utc(now),)):
             prop = self.db.one("SELECT * FROM properties WHERE id=?", (notice["property_id"],))
-            if not prop or not prop["active"] or not prop["lock_automation"]:
+            if not prop or not prop["active"] or not prop["lock_automation"] or not prop["backup_code"]:
                 continue
             r = next((r for r in self.s.reservations_for(prop["id"])
                       if r["id"] == notice["reservation_id"]), None)
@@ -523,7 +525,13 @@ class LockManager:
             return
 
         template = self.db.get_setting("guest_message") or DEFAULT_GUEST_MESSAGE
-        message = template.format(guest=(r["guest_name"] or "there").split()[0], property=prop["name"], code=backup)
+        values = dict(guest=(r["guest_name"] or "there").split()[0], property=prop["name"], code=backup)
+        try:
+            message = template.format(**values)
+        except (KeyError, ValueError, IndexError, AttributeError):
+            message = DEFAULT_GUEST_MESSAGE.format(**values)
+            self.db.log("guest.template_invalid", "Invalid guest-message template; used the default message",
+                        level="error", reservation_id=r["id"])
         delivered = False
         if self.db.get_bool("guest_messages_enabled"):
             # A crash/timeout after POST is ambiguous: never blindly send a second copy.
@@ -547,7 +555,10 @@ class LockManager:
             staff += " The backup code was sent to the guest through Hostaway."
             self.db.execute("UPDATE properties SET backup_used_by = ? WHERE id = ?", (r["id"], prop["id"]))
         self._record_notice(r, prop, delivered, message)
-        await self.alert(f"Guest code NOT confirmed: {prop['name']}", staff, key=f"fallback:{r['id']}")
+        state = "sent" if delivered else ("retry" if self.db.one(
+            "SELECT next_attempt FROM guest_notices WHERE reservation_id=?", (r["id"],))["next_attempt"]
+            else "manual")
+        await self.alert(f"Guest code NOT confirmed: {prop['name']}", staff, key=f"fallback:{r['id']}:{state}")
 
     def _record_notice(self, r, prop, delivered: bool, message: str) -> None:
         self.db.execute(
