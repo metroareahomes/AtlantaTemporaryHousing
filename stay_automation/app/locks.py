@@ -20,6 +20,7 @@ from datetime import datetime, time, timedelta, timezone
 from typing import Any, Callable
 
 from .db import utcnow
+from .hostaway import HostawayMessageNotSent
 
 log = logging.getLogger(__name__)
 
@@ -243,6 +244,8 @@ class LockManager:
         self.gap = GAP_BETWEEN_LOCKS_SECONDS
         self.max_per_tick = MAX_LOCKS_PER_TICK
         self.read_error = ""
+        self._alert_lock = asyncio.Lock()
+        self._fallback_lock = asyncio.Lock()
 
     def cfg(self) -> dict[str, int]:
         return {k: self.db.get_int(k, v) for k, v in DEFAULTS.items()}
@@ -482,7 +485,52 @@ class LockManager:
                     key=f"stale:{r['id']}:{lock['id']}")
 
     async def fallback(self, r: dict[str, Any], lock: dict[str, Any], reason: str) -> None:
-        if self.db.one("SELECT 1 FROM guest_notices WHERE reservation_id = ?", (r["id"],)):
+        async with self._fallback_lock:
+            await self._fallback(r, lock, reason)
+
+    async def retry_guest_messages(self) -> None:
+        now = self.s.now()
+        # A process may stop after committing send intent but before recording the result.
+        # Surface that uncertainty after restart without replaying the guest message.
+        for row in self.db.query(
+                "SELECT g.*, p.name FROM guest_notices g JOIN properties p ON p.id=g.property_id "
+                "JOIN reservations r ON r.id=g.reservation_id WHERE g.delivered=0 "
+                "AND g.next_attempt IS NULL AND g.attempts>0 AND r.active=1 AND r.check_out_at>?",
+                (now.isoformat(timespec="seconds"),)):
+            await self.alert(f"Guest code NOT confirmed: {row['name']}",
+                             f"Backup message delivery for reservation {row['reservation_id']} is uncertain. "
+                             "Check the Hostaway conversation before sending again.",
+                             key=f"fallback:{row['reservation_id']}:manual")
+        if not self.db.get_bool("guest_messages_enabled") or not self.db.get_bool("backup_codes_enabled"):
+            return
+        for notice in self.db.query("SELECT * FROM guest_notices WHERE delivered=0 AND next_attempt <= ?",
+                                    (_utc(now),)):
+            prop = self.db.one("SELECT * FROM properties WHERE id=?", (notice["property_id"],))
+            if not prop or not prop["active"] or not prop["lock_automation"] or not prop["backup_code"]:
+                continue
+            r = next((r for r in self.s.reservations_for(prop["id"])
+                      if r["id"] == notice["reservation_id"]), None)
+            if not r or not r["active"] or _dt(r["check_out_at"]) <= now:
+                self.db.execute("UPDATE guest_notices SET next_attempt=NULL WHERE reservation_id=?",
+                                (notice["reservation_id"],))
+                continue
+            if not in_final_window(r, now, self.cfg()["final_check_minutes"]):
+                if now >= _dt(r["check_in_at"]) + timedelta(hours=6):
+                    self.db.execute("UPDATE guest_notices SET next_attempt=NULL,attempts=0 WHERE reservation_id=?",
+                                    (r["id"],))
+                    await self.alert(f"Backup message needs staff follow-up: {prop['name']}",
+                                     f"Reservation {r['id']}: backup message was not sent before the "
+                                     "arrival messaging window ended. Please contact the guest.",
+                                     key=f"fallback:{r['id']}:expired")
+                continue
+            lock = self.db.one("SELECT * FROM locks WHERE property_id=? ORDER BY id LIMIT 1", (prop["id"],))
+            if lock:
+                await self.fallback(r, lock, "backup-code message delivery is being retried")
+
+    async def _fallback(self, r: dict[str, Any], lock: dict[str, Any], reason: str) -> None:
+        notice = self.db.one("SELECT * FROM guest_notices WHERE reservation_id = ?", (r["id"],))
+        if notice and (notice["delivered"] or not notice["next_attempt"]
+                       or _dt(notice["next_attempt"]) > self.s.now()):
             return
         prop = self.db.one("SELECT * FROM properties WHERE id = ?", (lock["property_id"],))
         arrival = _dt(r["check_in_at"]).astimezone(self.s.tz).strftime("%I:%M %p").lstrip("0")
@@ -497,26 +545,46 @@ class LockManager:
             return
 
         template = self.db.get_setting("guest_message") or DEFAULT_GUEST_MESSAGE
-        message = template.format(guest=(r["guest_name"] or "there").split()[0], property=prop["name"], code=backup)
+        values = dict(guest=(r["guest_name"] or "there").split()[0], property=prop["name"], code=backup)
+        try:
+            message = template.format(**values)
+        except (KeyError, ValueError, IndexError, AttributeError):
+            message = DEFAULT_GUEST_MESSAGE.format(**values)
+            self.db.log("guest.template_invalid", "Invalid guest-message template; used the default message",
+                        level="error", reservation_id=r["id"])
         delivered = False
         if self.db.get_bool("guest_messages_enabled"):
+            # A crash/timeout after POST is ambiguous: never blindly send a second copy.
+            self._record_notice(r, prop, False, message)
+            self.db.execute("UPDATE guest_notices SET next_attempt=NULL, attempts=attempts+1 "
+                            "WHERE reservation_id=?", (r["id"],))
+            self.db.execute("UPDATE properties SET backup_used_by=? WHERE id=?", (r["id"], prop["id"]))
             try:
                 await self.hostaway.send_guest_message(r["id"], message)
                 delivered = True
-            except Exception as exc:
-                staff += f" Sending the backup code FAILED ({exc}); please contact the guest."
+            except HostawayMessageNotSent:
+                retry = self.s.now() + timedelta(minutes=5)
+                self.db.execute("UPDATE guest_notices SET next_attempt=? WHERE reservation_id=?",
+                                (_utc(retry), r["id"]))
+                staff += " Backup message was not sent; an automatic retry is scheduled."
+            except Exception:
+                staff += " Backup message delivery is uncertain; please check Hostaway before sending again."
         else:
             staff += " Guest messages are switched off, so nothing was sent; please give the guest the backup code."
         if delivered:
             staff += " The backup code was sent to the guest through Hostaway."
             self.db.execute("UPDATE properties SET backup_used_by = ? WHERE id = ?", (r["id"], prop["id"]))
         self._record_notice(r, prop, delivered, message)
-        await self.alert(f"Guest code NOT confirmed: {prop['name']}", staff, key=f"fallback:{r['id']}")
+        state = "sent" if delivered else ("retry" if self.db.one(
+            "SELECT next_attempt FROM guest_notices WHERE reservation_id=?", (r["id"],))["next_attempt"]
+            else "manual")
+        await self.alert(f"Guest code NOT confirmed: {prop['name']}", staff, key=f"fallback:{r['id']}:{state}")
 
     def _record_notice(self, r, prop, delivered: bool, message: str) -> None:
         self.db.execute(
             "INSERT OR IGNORE INTO guest_notices(reservation_id, property_id, sent_at, delivered, message) "
-            "VALUES(?, ?, ?, ?, ?)",
+            "VALUES(?, ?, ?, ?, ?) ON CONFLICT(reservation_id) DO UPDATE SET "
+            "sent_at=excluded.sent_at, delivered=excluded.delivered, message=excluded.message",
             (r["id"], prop["id"], utcnow(), 1 if delivered else 0, message),
         )
         self.db.log("guest.backup_sent" if delivered else "guest.backup_not_sent",
@@ -561,16 +629,49 @@ class LockManager:
         return targets
 
     async def alert(self, title: str, message: str, key: str | None = None) -> None:
-        if key and self.db.one("SELECT 1 FROM alerts_sent WHERE key = ?", (key,)):
-            return
-        try:
-            await self.ha.notify(title, message, services=self.alert_targets(), notification_id=key or "")
-        except Exception as exc:
-            log.error("alert failed: %s", exc)
-            self.db.log("alert.failed", f"Could not deliver alert '{title}': {exc}", level="error")
-        if key:
-            self.db.execute("INSERT OR IGNORE INTO alerts_sent(key, at) VALUES(?, ?)", (key, utcnow()))
-        self.db.log("alert", f"{title}: {message}", level="warning")
+        key = key or "unkeyed:" + secrets.token_hex(16)
+        async with self._alert_lock:
+            if self.db.one("SELECT 1 FROM alerts_sent WHERE key = ?", (key,)):
+                return
+            # Snapshot recipients once. Later retries touch only undelivered destinations.
+            if not self.db.one("SELECT 1 FROM alert_deliveries WHERE key = ?", (key,)):
+                for target in [""] + self.alert_targets():
+                    self.db.execute(
+                        "INSERT OR IGNORE INTO alert_deliveries(key,target,title,message,next_attempt) "
+                        "VALUES(?,?,?,?,?)", (key, target, title, message, utcnow()))
+            await self._deliver_alerts(key)
+
+    async def retry_alerts(self) -> None:
+        async with self._alert_lock:
+            await self._deliver_alerts()
+
+    async def _deliver_alerts(self, key: str | None = None) -> None:
+        now = datetime.now(timezone.utc)
+        rows = self.db.query(
+            "SELECT * FROM alert_deliveries WHERE delivered = 0 AND next_attempt <= ? "
+            + ("AND key = ? " if key else "") + "ORDER BY next_attempt LIMIT 100",
+            (now.isoformat(timespec="seconds"), key) if key else (now.isoformat(timespec="seconds"),))
+        for row in rows:
+            attempts = row["attempts"] + 1
+            retry = now + timedelta(seconds=min(3600, 60 * 2 ** min(attempts - 1, 6)))
+            # Persist before I/O, including cancellation/restart. A timed-out send can still
+            # arrive; stable dashboard IDs and mobile tags reduce duplicates in that case.
+            self.db.execute("UPDATE alert_deliveries SET attempts=?, next_attempt=? WHERE key=? AND target=?",
+                            (attempts, retry.isoformat(timespec="seconds"), row["key"], row["target"]))
+            try:
+                if row["target"]:
+                    await self.ha.notify_mobile(row["title"], row["message"], row["target"], row["key"])
+                else:
+                    await self.ha.notify(row["title"], row["message"], services=[], notification_id=row["key"])
+            except Exception:
+                self.db.log("alert.failed", f"Alert delivery failed for {row['target'] or 'HA dashboard'}; "
+                            f"attempt {attempts}, retry scheduled", level="error")
+                continue
+            self.db.execute("UPDATE alert_deliveries SET delivered=1 WHERE key=? AND target=?",
+                            (row["key"], row["target"]))
+            if not self.db.one("SELECT 1 FROM alert_deliveries WHERE key=? AND delivered=0", (row["key"],)):
+                self.db.execute("INSERT OR IGNORE INTO alerts_sent(key, at) VALUES(?,?)", (row["key"], utcnow()))
+                self.db.log("alert", f"{row['title']}: {row['message']}", level="warning")
 
     async def daily_report(self, now: datetime) -> None:
         cfg = self.cfg()

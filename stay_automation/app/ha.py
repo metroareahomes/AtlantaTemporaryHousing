@@ -181,6 +181,12 @@ class HAClient:
         if failed:
             raise HAError("notify failed for " + "; ".join(failed))
 
+    async def notify_mobile(self, title: str, message: str, target: str, key: str) -> None:
+        if not target.startswith("notify.") or not target.removeprefix("notify."):
+            raise HAError("Invalid notification target")
+        await self._post(f"/api/services/notify/{target.removeprefix('notify.')}",
+                         {"title": title, "message": message, "data": {"tag": key}})
+
     async def webhook_automation_exists(self) -> bool:
         resp = await self._http.get(f"/api/config/automation/config/{WEBHOOK_AUTOMATION_ID}")
         return resp.status_code == 200

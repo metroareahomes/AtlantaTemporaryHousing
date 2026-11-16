@@ -85,16 +85,34 @@ def build():
             await syncer.fix_addon_slug()
         except Exception as exc:  # never block startup over the webhook wiring
             db.log("setup.webhook", f"Could not check the add-on slug: {exc}", level="warning")
-        await discover()
-        await syncer.sync_reservations()
-        await climate.refresh()
-        await climate.check_batteries()
+        # One unavailable provider must not skip startup work for the other provider.
+        for name, job in (("listings", syncer.import_listings), ("locks", syncer.discover_locks),
+                          ("sync", sync_reservations), ("climate_refresh", climate.refresh),
+                          ("batteries", climate.check_batteries)):
+            await run_logged(name, job, db)
+
+    async def sync_reservations() -> None:
+        try:
+            await syncer.sync_reservations()
+        except Exception:
+            await locks.alert("Hostaway synchronization failed",
+                              "Reservation updates could not be fetched. Cached reservations remain in use; "
+                              "automatic synchronization will retry.",
+                              key="syncfail:" + syncer.now().date().isoformat())
+            raise
+
+    async def retry_notifications() -> None:
+        await locks.retry_alerts()
+        await locks.retry_guest_messages()
 
     async def scheduler() -> None:
         # One chain so the startup sync finishes before the periodic loops begin.
         await run_logged("startup", startup, db)
         await asyncio.gather(
-            every(settings.sync_minutes, "sync", syncer.sync_reservations, db),
+            every(1, "notification_retry", retry_notifications, db),
+            every(1, "webhook_retry", syncer.retry_webhooks, db),
+            every(5, "webhook_setup", syncer.fix_addon_slug, db),
+            every(settings.sync_minutes, "sync", sync_reservations, db),
             every(settings.lock_discovery_minutes, "lock_discovery", discover, db),
             every(LOCK_TICK_MINUTES, "lock_automation", locks.tick, db),
             every(CLIMATE_TICK_MINUTES, "thermostats", climate.tick, db),
@@ -108,11 +126,14 @@ def build():
             queue: asyncio.Queue = asyncio.Queue()
             start_stdin_reader(asyncio.get_running_loop(), queue)
             tasks.append(asyncio.create_task(consume_webhooks(queue, syncer)))
-        yield
-        for task in tasks:
-            task.cancel()
-        await hostaway.close()
-        await ha.close()
+        try:
+            yield
+        finally:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            await hostaway.close()
+            await ha.close()
 
     return create_app(syncer, locks, lifespan=lifespan)
 

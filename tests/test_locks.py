@@ -117,6 +117,9 @@ class FakeLock:
         if self.delete_times_out:
             raise TimeoutError()
 
+    async def notify_mobile(self, title, message, target, key):
+        self.notes.append((f"via:{target}", message))
+
     async def notify(self, title, message, service="", services=None, notification_id=""):
         self.notes.append((title, message))
         for target in list(services or []) + ([service] if service else []):
