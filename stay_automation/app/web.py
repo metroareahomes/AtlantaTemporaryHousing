@@ -20,7 +20,7 @@ from .climate import (
     TOLERANCE, is_summer, occupancy, occupying_reservation, setpoint,
 )
 from .hostaway import HostawayError
-from .locks import DEFAULT_GUEST_MESSAGE, DEFAULTS, LockManager, _utc, new_backup_code
+from .locks import DEFAULT_GUEST_MESSAGE, DEFAULTS, LockManager, _utc, add_time, new_backup_code
 from .reservations import code_status, property_state, within
 from .sync import Syncer
 
@@ -243,8 +243,11 @@ def dashboard_rows(syncer: Syncer, query: str = "") -> list[dict[str, Any]]:
 
         problems = []
         soon = within(state.next, now, 36)
-        if code == "missing" and soon:
-            problems.append({"text": f"Guest code missing. Last read {read_ago}.", "action": "check_lock"})
+        if code == "missing" and soon and state.next:
+            lock_cfg = {key: syncer.db.get_int(key, DEFAULTS[key]) for key in ("add_hour", "early_lead_hours", "final_check_minutes")}
+            scheduled = add_time(state.next, lock_cfg["add_hour"], lock_cfg["early_lead_hours"], lock_cfg["final_check_minutes"])
+            if now >= scheduled + timedelta(minutes=15):
+                problems.append({"text": f"Guest code missing. Last read {read_ago}.", "action": "check_lock"})
         if code == "no_code" and soon:
             problems.append({"text": "No door code in Hostaway.", "action": ""})
         for lock in locks:
