@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.6.22 — shared Google property status sheet
+
+- Add an optional view-only Google Sheet mirror, updated every five minutes from cached app readings without extra device polling.
+- Include owner, address, occupancy/dates, lock status/battery, thermostat readings, issues and source/update timestamps; flag stale data and sort problems first.
+- Provide a Google receiver script with All homes, Mike, Kurt and Needs attention filter views, frozen headers and property columns.
+- Add plain-language Setup controls for the receiver URL and hidden connection key, with last confirmed update and readable failures.
+- Authenticate snapshots, escape formula-like text, reject old requests and retry failed updates without appending duplicate rows.
+- Exclude guest names, door codes, messages, raw errors and credentials from sheet data.
+- Sheet updates start OFF; one-time Google authorization/deployment is required. Live Google execution and sharing still need verification.
+
+Source rollback: stable-0.6.21-before-property-sheet. The separate reauthorization-monitor size-limit issue remains unresolved.
+
+
 ## 0.6.21 — email test validation and delayed thermostat verification
 
 - Show a helpful message when no saved active recipient is selected instead of a raw validation error.
