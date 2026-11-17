@@ -169,6 +169,7 @@ def cm():
     s.upsert_reservation(res())
     m = ClimateManager(s, LockManager(s).alert)
     m.verify_delay = 0
+    m.verify_recheck_delay = 0
     return m
 
 
@@ -580,3 +581,40 @@ def test_status_filters_and_sorting(cm):
     assert "No homes match" in arriving  # nobody arrives today in the test data
     assert c.get("/?show=nonsense").status_code == 200
     assert "Next check-out" not in everything and "→" in everything  # stay shows start → end
+
+
+def test_delayed_target_readback_clears_without_resending(cm):
+    cm.ha.ignore_sets = True
+    original = cm.ha.climate_state
+    reads = []
+
+    async def delayed(entity_id):
+        reads.append(entity_id)
+        if len(reads) == 2:
+            cm.ha.climate[entity_id]["target_temp"] = 78
+        return await original(entity_id)
+
+    cm.ha.climate_state = delayed
+    tick(cm, at("2030-06-10T12:00"))
+    assert len(reads) == 2
+    assert len(cm.ha.sets) == 1
+    assert row(cm)["fail_count"] == 0
+    assert row(cm)["last_mode"] == "vacant"
+    assert not cm.db.one("SELECT 1 FROM events WHERE kind = 'thermostat.failed'")
+
+
+def test_delayed_verification_waits_only_for_a_mismatched_reading(cm, monkeypatch):
+    sleeps = []
+
+    async def sleep(seconds):
+        sleeps.append(seconds)
+
+    monkeypatch.setattr("app.climate.asyncio.sleep", sleep)
+    cm.verify_delay = 20
+    cm.verify_recheck_delay = 40
+    asyncio.run(cm._verify_temperature("climate.maple", {"temperature": 78}))
+    assert sleeps == [20, 40]
+    sleeps.clear()
+    cm.ha.climate["climate.maple"]["target_temp"] = 78
+    asyncio.run(cm._verify_temperature("climate.maple", {"temperature": 78}))
+    assert sleeps == [20]

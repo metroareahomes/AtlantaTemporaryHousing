@@ -454,3 +454,45 @@ def test_related_smtp_settings_roll_back_together_on_storage_error(service):
         service.db.set_settings({'smtp_host':'new.example.com','smtp_password':object()})
     assert service.db.get_setting('smtp_host') == before
     assert service.db.get_setting('smtp_password') == 'test-secret-123'
+
+
+@pytest.mark.parametrize('value', [None, '', 'invalid', '0', '-1', '999999999999999999999999999999999999'])
+def test_missing_or_invalid_test_recipient_returns_help_not_json(service, value):
+    from urllib.parse import parse_qs, urlsplit
+    c = TestClient(create_app(service.s, LockManager(service.s)), follow_redirects=False)
+    r = c.post('/recipient-test', data={} if value is None else {'recipient_id': value})
+    assert r.status_code == 303
+    assert r.headers['location'].startswith('staff?')
+    assert 'Choose a saved active recipient' in parse_qs(urlsplit(r.headers['location']).query)['notice'][0]
+    assert not service.db.one('SELECT 1 FROM staff_alert_events')
+
+
+def test_staff_explains_empty_and_inactive_recipient_lists(service):
+    c = TestClient(create_app(service.s))
+    for add in (False, True):
+        if add:
+            rid = recipient(service)
+            service.db.execute('UPDATE alert_recipients SET active=0 WHERE id=?', (rid,))
+        html = c.get('/staff').text
+        assert 'No active recipients saved yet' in html
+        assert 'action="recipient-test"' not in html
+
+
+def test_saved_active_recipient_test_is_queued_from_real_form(service):
+    rid = recipient(service)
+    lm = LockManager(service.s)
+    c = TestClient(create_app(service.s, lm), follow_redirects=False)
+    html = c.get('/staff').text
+    assert 'aria-label="Recipient to test" required' in html
+    assert 'Choose a saved recipient' in html
+    assert c.post('/recipient-test', data={'recipient_id': rid}).status_code == 303
+    jobs = service.db.query('SELECT * FROM staff_alert_deliveries')
+    assert len(jobs) == 1 and jobs[0]['recipient_id'] == rid
+
+
+def test_recipient_disabled_after_page_load_is_rejected_without_queue(service):
+    rid = recipient(service)
+    service.db.execute('UPDATE alert_recipients SET active=0 WHERE id=?', (rid,))
+    c = TestClient(create_app(service.s, LockManager(service.s)), follow_redirects=False)
+    assert c.post('/recipient-test', data={'recipient_id': rid}).status_code == 303
+    assert not service.db.one('SELECT 1 FROM staff_alert_deliveries')

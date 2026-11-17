@@ -90,7 +90,10 @@ The existing Setup app-alert fallback still receives all owners; clear it if you
 </section>
 </form>
 <section class="panel"><h2>Test a saved recipient</h2><p class="sub">Save recipients first. A test goes only to the selected person.</p>
-<form method="post" action="recipient-test" class="inline"><select name="recipient_id" aria-label="Recipient to test">{% for r in recipients if r.active %}<option value="{{ r.id }}">{{ r.name }}</option>{% endfor %}</select><button>Send recipient test</button></form></section>
+{% set test_recipients = [] %}{% for r in recipients if r.active and (r.email or r.target) %}{% set _ = test_recipients.append(r) %}{% endfor %}
+{% if test_recipients %}
+<form method="post" action="recipient-test" class="inline"><select name="recipient_id" aria-label="Recipient to test" required><option value="" selected disabled>Choose a saved recipient…</option>{% for r in test_recipients %}<option value="{{ r.id }}">{{ r.name }}</option>{% endfor %}</select><button>Send recipient test</button></form>
+{% else %}<p class="sub" role="status">No active recipients saved yet. Add a name and email above, check Active, and press Save recipients. Then you can send a test here.</p>{% endif %}</section>
 {% if delivery_issues %}<section class="panel"><h2>Alerts waiting for delivery</h2>
 {% for d in delivery_issues %}<p>{{ d.name or 'Setup app target' }} · {{ d.channel }} · {{ d.status }}{% if d.status == 'uncertain' %} — the mail server may have accepted this message; check before retrying{% else %} — retry scheduled{% endif %}{% if d.last_error %}<br>{{ d.last_error }}{% endif %}</p>{% if d.status == 'uncertain' %}<form method="post" action="alert-delivery-retry" class="inline"><input type="hidden" name="delivery_id" value="{{ d.id }}"><label><input type="checkbox" name="checked_inbox" required> Inbox checked; retry may duplicate this email</label><button>Retry email</button></form>{% endif %}{% endfor %}</section>{% endif %}
 </div>
