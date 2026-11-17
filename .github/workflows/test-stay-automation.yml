@@ -35,8 +35,10 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install browser test tools
-        run: python -m pip install playwright
+        run: python -m pip install playwright -r requirements-dev.txt
       - name: Install Chromium
         run: python -m playwright install --with-deps chromium
       - name: Check scrolling and Save actions on desktop and phone
         run: python tests/browser/check_scrolling.py
+      - name: Check daily temperature Setup on desktop and phone
+        run: python tests/browser/check_daily_setup.py

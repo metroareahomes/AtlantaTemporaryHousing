@@ -182,3 +182,49 @@ SETUP_FIELDS = {
         "example": "climate.livingroom_thermostat"
     }
 }
+
+SETUP_FIELDS.update({
+    "occupied_reset_enabled": {
+        "label": "Check occupied-home temperatures once a day",
+        "brief": "Turn this on to gently limit high heating or low cooling while guests are staying.",
+        "more": "Off by default. Applies to active homes already marked for thermostat automation, on full days between arrival and departure. Each thermostat is checked once per day after the hour below. A reasonable setting is left alone. This does not change arrival or vacant temperatures.",
+        "example": "Summer cooling at 68°F becomes 73°F; cooling at 75°F stays at 75°F."
+    },
+    "daily_winter": {
+        "label": "Winter: highest reasonable heating setting (°F)",
+        "brief": "Lower the heating setting to this number only when it is higher. Default: 70°F.",
+        "more": "This is the thermostat setting, not the measured room temperature. Uses your winter months. Settings at or below this number are left alone.",
+        "example": "At 70°F: heating set to 75°F becomes 70°F; heating set to 68°F stays 68°F."
+    },
+    "daily_summer": {
+        "label": "Summer: lowest reasonable cooling setting (°F)",
+        "brief": "Raise the cooling setting to this number only when it is lower. Default: 73°F.",
+        "more": "This is the thermostat setting, not the measured room temperature. Uses your summer months. Settings at or above this number are left alone.",
+        "example": "At 73°F: cooling set to 68°F becomes 73°F; cooling set to 75°F stays 75°F."
+    },
+    "occupied_reset_hour": {
+        "label": "Daily occupied-home check hour (0–23)",
+        "brief": "Choose a whole hour using the local schedule. Default: 10 AM.",
+        "more": "The queue starts after this hour on full days between arrival and departure. Arrival and checkout days never qualify, even with early check-in or late checkout. Homes are staggered rather than changed together. Saving again does not repeat a completed check.",
+        "example": "10 = 10 AM; 14 = 2 PM."
+    },
+    "temperature_complaints_enabled": {
+        "label": "Pause daily resets when a guest complains about temperature",
+        "brief": "Read incoming messages for temperature complaints, without AI tokens.",
+        "more": "Keyword rules are imperfect. A match pauses only this reservation’s daily reset until checkout, including extensions, and adds NTC to its Guest Notes. Staff can also enter NTC in Guest Notes to pause the stay. Staff and outgoing messages are ignored. New guests start fresh.",
+        "example": "The thermostat keeps resetting, please stop changing it."
+    },
+    "temperature_pause_field_id": {
+        "label": "Optional extra Hostaway pause field number",
+        "brief": "NTC in Guest Notes works without this. Leave 0 unless you also use a custom field.",
+        "more": "Create a private reservation text field in Hostaway named Pause daily temperature reset. Put YES in it to pause this stay. Use its numeric field ID here, not its name. The app reads this optional field too; automatic pauses are saved locally and add NTC to Guest Notes. Once paused, a stay remains paused through checkout.",
+        "example": "If the field ID is 167, enter 167 here. Staff can then enter YES on a reservation."
+    }
+})
+
+SETUP_FIELDS["occupied_reset_spacing_seconds"] = {
+    "label": "Seconds between daily thermostat adjustments",
+    "brief": "Spread changes across all homes. Default: at least 90 seconds between thermostat commands.",
+    "more": "One thermostat at a time, including homes with multiple thermostats. A setting that is already reasonable needs no cloud command. Daily resets also wait after arrival or vacant-home commands. A failed or uncertain daily adjustment pauses the queue using the existing thermostat retry delay. Other apps and the integration may still make their own cloud requests.",
+    "example": "90 = one adjustment about every 1½ minutes. Use 180 or 300 for a slower rollout."
+}

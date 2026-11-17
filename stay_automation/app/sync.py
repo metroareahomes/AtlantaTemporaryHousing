@@ -30,6 +30,7 @@ class Syncer:
         self._code_key = self._secret("code_hash_key")
         self.on_thermostats = None  # ClimateManager.tick_property; set from main
         self._thermostat_wake: set[int] = set()
+        self.temperature_pauses = None
 
     def now(self) -> datetime:
         return datetime.now(self.tz)
@@ -215,6 +216,8 @@ class Syncer:
                 property_id=prop["id"] if prop else None,
                 reservation_id=new["id"],
             )
+        if self.temperature_pauses:
+            self.temperature_pauses.remember_field(raw)
         return what
 
     async def wake_thermostats(self) -> None:

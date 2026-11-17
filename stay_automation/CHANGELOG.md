@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.6.18 — occupied temperature limits and NTC pauses
+
+- Add optional daily occupied temperature limits: winter 70°F, summer 73°F, with an editable 10 AM start.
+- Apply only on full days between arrival and departure; preserve arrival preparation and vacant control.
+- Stagger thermostat adjustments at least 90 seconds apart by default, editable in Setup, with persistent pacing and failure backoff.
+- Leave reasonable settings and HVAC mode alone; record attempts before sending to avoid repeat adjustments that day.
+- Detect complaints only in incoming guest messages, excluding staff replies, internal messages, automated messages and quoted history.
+- Respect NTC anywhere as a standalone marker in reservation Guest Notes as a concierge override.
+- Append NTC after an automatic pause using a durable retry queue, preserving existing notes and avoiding duplicate markers.
+- Keep the pause for that reservation through extensions and clear its property indicator at checkout.
+- Add Setup help and pending-note visibility on Properties.
+
+The new feature is OFF until enabled in Setup. Only homes already marked for thermostat automation
+are eligible. Version 0.6.17 is preserved at stable-0.6.17-before-occupied-reset. Existing guest access,
+lock scheduling, backup messaging and normal arrival/vacant thermostat controls are retained.
+PR #2's reliability work and PR #4's final check-in changes are not included.
+
 ## 0.6.17 — selected Lyric thermostat support
 
 - Add individual Honeywell Lyric thermostats through Setup, while excluding unselected Lyric devices.

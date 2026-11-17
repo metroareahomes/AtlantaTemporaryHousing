@@ -13,7 +13,7 @@
   {{ help(key) }}
   <input id="setting-{{ key }}" name="{{ key }}" value="{{ value }}" inputmode="numeric" aria-describedby="hint-{{ key }}">
   <p class="field-hint" id="hint-{{ key }}">{{ setup_fields[key].brief }}
-    {% if key in ['add_hour', 'afternoon_check_hour', 'daily_check_hour', 'report_hour', 'vacant_reset_hour'] and value >= 0 and value <= 23 %}
+    {% if key in ['add_hour', 'afternoon_check_hour', 'daily_check_hour', 'report_hour', 'vacant_reset_hour', 'occupied_reset_hour'] and value >= 0 and value <= 23 %}
     <span class="saved-time">Current choice: {{ value % 12 or 12 }} {{ 'AM' if value < 12 else 'PM' }}.</span>
     {% endif %}
   </p>
