@@ -147,7 +147,12 @@ def took_effect(call: dict[str, float], t: dict[str, Any]) -> bool:
     for key, field in (("temperature", "target_temp"), ("low", "target_low"), ("high", "target_high")):
         if key in call:
             seen = t.get(field)
-            if seen is None or abs(float(seen) - call[key]) > TOLERANCE:
+            # Lyric auto-changeover devices may expose range targets while reporting Heat/Cool.
+            # Reconcile the active side only; never infer it in Auto, Off or unavailable mode.
+            if key == "temperature" and seen is None:
+                active_field = {"heat": "target_low", "cool": "target_high"}.get(t.get("state"))
+                seen = t.get(active_field) if active_field else None
+            if seen is None or not math.isfinite(float(seen)) or abs(float(seen) - call[key]) > TOLERANCE:
                 return False
     return True
 
