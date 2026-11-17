@@ -31,6 +31,7 @@ button { min-height: 32px; }
 @media (prefers-reduced-motion: reduce) { .notice { animation: none; } }
 
 /* ---- top bar ---- */
+body > header { position: sticky; top: 0; z-index: 60; }
 header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 28px; justify-content: space-between;
          padding: 14px 28px 0; border-bottom: 1px solid var(--line); background: var(--paper); }
 .bar-left { display: flex; align-items: baseline; gap: 32px; flex-wrap: wrap; }
@@ -276,8 +277,8 @@ p > button.primary { margin-top: 8px; }
 .floating-columns table { margin-top: 0; margin-bottom: 0; border-collapse: collapse; }
 .floating-columns th { position: static; background: var(--card); }
 .floating-columns .h.head { background: var(--paper); }
-:root { --save-bar-height: 0px; }
-html { scroll-padding-bottom: calc(var(--save-bar-height) + 18px); }
+:root { --save-bar-height: 0px; --app-header-height: 0px; }
+html { scroll-padding-top: calc(var(--app-header-height) + 12px); scroll-padding-bottom: calc(var(--save-bar-height) + 18px); }
 body { padding-bottom: var(--save-bar-height); }
 .save-bar { position: fixed; bottom: 0; left: 0; right: 0; z-index: 40; display: flex;
   justify-content: flex-end; align-items: center; flex-wrap: wrap; gap: 10px 18px;
@@ -296,6 +297,7 @@ body { padding-bottom: var(--save-bar-height); }
   .save-state { text-align: center; }
 }
 @media print {
+  body > header { position: static; }
   .save-bar, .floating-columns { display: none !important; }
   body { padding-bottom: 0; }
 }

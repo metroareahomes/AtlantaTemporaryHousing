@@ -51,15 +51,21 @@
   floating.hidden = true;
   document.body.appendChild(floating);
   var pending = false;
+  var appHeader = document.querySelector("body > header");
+  function sizeHeader() {
+    document.documentElement.style.setProperty("--app-header-height",
+      (appHeader ? appHeader.getBoundingClientRect().height : 0) + "px");
+  }
   function update() {
     pending = false;
+    var top = appHeader ? Math.max(0, appHeader.getBoundingClientRect().bottom) : 0;
     var headers = Array.from(main.querySelectorAll(".scroll > table > thead, .homes > .h.head"));
     var chosen = null;
     headers.forEach(function (head) {
       var rect = head.getBoundingClientRect();
       var container = head.closest(".scroll, .homes");
       var bounds = container.getBoundingClientRect();
-      if (rect.width && rect.height && rect.top < 0 && bounds.bottom > 0
+      if (rect.width && rect.height && rect.top < top && bounds.bottom > top
           && bounds.right > 0 && bounds.left < window.innerWidth) {
         chosen = {head: head, rect: rect, container: container, bounds: bounds};
       }
@@ -72,7 +78,7 @@
     var right = Math.min(window.innerWidth, bounds.right);
     floating.style.left = left + "px";
     floating.style.width = Math.max(0, right - left) + "px";
-    floating.style.top = Math.min(0, bounds.bottom - rect.height) + "px";
+    floating.style.top = Math.min(top, bounds.bottom - rect.height) + "px";
     var copy;
     if (head.tagName === "THEAD") {
       var table = head.closest("table");
@@ -103,7 +109,11 @@
   }
   // Capture catches horizontal scrolling inside tables as well as page scrolling.
   document.addEventListener("scroll", schedule, {capture: true, passive: true});
-  window.addEventListener("resize", schedule);
+  window.addEventListener("resize", function () { sizeHeader(); schedule(); });
+  sizeHeader();
+  if (appHeader && window.ResizeObserver) {
+    new ResizeObserver(function () { sizeHeader(); schedule(); }).observe(appHeader);
+  }
   if (window.ResizeObserver) new ResizeObserver(schedule).observe(main);
   new MutationObserver(schedule).observe(main, {childList: true, subtree: true, attributes: true});
   schedule();

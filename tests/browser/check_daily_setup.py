@@ -37,6 +37,8 @@ with sync_playwright() as p:
         page.locator('[name=daily_summer]').fill('74')
         page.locator('[aria-label="Help: Summer: lowest reasonable cooling setting (°F)"]').click()
         assert page.locator('.field-help[open]').is_visible()
+        assert abs(page.locator('body > header').bounding_box()['y']) < 1
+        assert page.get_by_role('navigation', name='Main navigation').is_visible()
         bar = page.locator('.save-bar')
         bar.get_by_role('button', name='Save daily temperature settings', exact=True).click()
         assert page.evaluate('window.submissions[0].id') == 'save-daily-temperature-settings'
