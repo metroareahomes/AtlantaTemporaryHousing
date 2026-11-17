@@ -566,7 +566,7 @@ class ClimateManager:
         if fails >= 3:  # retried every few minutes; three misses in a row is worth a person's attention
             await self.alert(f"Thermostat not responding: {t['property_name']}",
                              f"{t['name']} could not be set after {fails} tries ({error}).",
-                             key=f"therm_fail:{t['id']}:{now.date()}")
+                             key=f"therm_fail:{t['id']}:{now.date()}", category="thermostats", property_id=t["property_id"])
 
     async def _offline_alerts(self, now: datetime, cfg: dict[str, int]) -> None:
         for t in self.db.query(
@@ -577,7 +577,7 @@ class ClimateManager:
                 await self.alert(
                     f"Thermostat offline: {t['property_name']}",
                     f"{t['name']} has been offline since {down.astimezone(self.s.tz):%a %b %d, %I:%M %p}.",
-                    key=f"therm_offline:{t['id']}:{t['offline_since']}")
+                    key=f"therm_offline:{t['id']}:{t['offline_since']}", category="thermostats", property_id=t["property_id"])
 
     # ---- lock batteries --------------------------------------------------------
 
@@ -599,5 +599,5 @@ class ClimateManager:
                 await self.alert(
                     f"Lock battery low: {lock['property_name'] or lock['name']}",
                     f"{lock['name']} is at {level}%. Replace the batteries.",
-                    key=f"battery:{lock['id']}:{week.year}-W{week.week}")
+                    key=f"battery:{lock['id']}:{week.year}-W{week.week}", category="battery", property_id=lock["property_id"])
         return low

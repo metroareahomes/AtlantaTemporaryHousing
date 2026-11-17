@@ -4,6 +4,14 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Stays</title>
+  {% if active == 'status' %}<script>
+  // Stable email links enter through HA's authenticated ingress panel. The proxy may omit Referer.
+  try {
+    var alertEntry = new URL(document.referrer);
+    if (alertEntry.origin === location.origin && alertEntry.pathname.indexOf('/hassio/ingress/') === 0
+        && alertEntry.searchParams.get('stay_page') === 'properties') location.replace('properties');
+  } catch (e) { /* Direct access has no parent referrer. */ }
+  </script>{% endif %}
   <link rel="stylesheet" href="static/style.css?v={{ css_v }}">
   <script src="static/scrolling.js?v={{ css_v }}" defer></script>
 </head>

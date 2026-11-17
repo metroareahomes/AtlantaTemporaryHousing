@@ -36,7 +36,7 @@
   <tr class="home {{ '' if p.active else 'inactive' }}" id="home-{{ p.id }}" data-name="{{ p.name|lower }}">
     <td class="h-main">
       <input name="name_{{ p.id }}" value="{{ p.name }}" aria-label="Name">
-      <div class="sub">{{ p.hostaway_name }} · #{{ p.hostaway_listing_id }}</div>
+      <div class="sub">{{ p.hostaway_name }} · #{{ p.hostaway_listing_id }} · Owner: {{ p.owner_scope or 'not confirmed — check Hostaway tags' }}</div>
       {% if p.daily_pause %}<div class="sub warn" title="{{ p.daily_pause.reason }}">✓ Daily temperature reset paused for this stay<br>Clears at checkout · {{ p.daily_pause.source }}{% if p.daily_ntc_pending %}<br>NTC not yet saved in Hostaway{% endif %}</div>{% endif %}
     </td>
     <td class="devs">

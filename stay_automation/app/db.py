@@ -1,4 +1,5 @@
 """SQLite storage. One connection, guarded by a lock; the app is mostly single-threaded asyncio."""
+import os
 import sqlite3
 import threading
 from datetime import datetime, timezone
@@ -69,6 +70,23 @@ CREATE TABLE IF NOT EXISTS guest_notices (
     message TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS staff_alert_events (
+    event_key TEXT PRIMARY KEY,
+    payload TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS staff_alert_deliveries (
+    id INTEGER PRIMARY KEY,
+    event_key TEXT NOT NULL,
+    recipient_id INTEGER,
+    channel TEXT NOT NULL,
+    destination TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    attempts INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at TEXT NOT NULL,
+    sent_at TEXT,
+    last_error TEXT,
+    UNIQUE(event_key,channel,destination)
+);
 CREATE TABLE IF NOT EXISTS alerts_sent (
     key TEXT PRIMARY KEY,
     at TEXT NOT NULL
@@ -142,6 +160,11 @@ CREATE TABLE IF NOT EXISTS thermostats (
 
 # Columns added after the first release; applied to existing databases on start.
 MIGRATIONS = {
+    "alert_recipients": {
+        "email": "TEXT NOT NULL DEFAULT ''",
+        "owners": "TEXT NOT NULL DEFAULT 'Mike,Kurt'",
+        "alert_types": "TEXT NOT NULL DEFAULT 'all'",
+    },
     "thermostats": {
         "min_temp": "REAL",        # the range Home Assistant says the device accepts
         "max_temp": "REAL",
@@ -149,9 +172,11 @@ MIGRATIONS = {
         "last_reservation_id": "INTEGER",  # stay we last set occupied for; a new booking after 3pm still gets 72°
     },
     "reservations": {
+        "owner_scope": "TEXT NOT NULL DEFAULT ''",
         "override_code": "TEXT",   # a code staff typed for the guest; replaces Hostaway's and survives syncs
     },
     "properties": {
+        "owner_scope": "TEXT NOT NULL DEFAULT ''",
         "backup_code": "TEXT",
         "backup_used_by": "INTEGER",
         "address": "TEXT",
@@ -176,6 +201,10 @@ class DB:
         if path != ":memory:":
             Path(path).parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(path, check_same_thread=False, isolation_level=None)
+        if path != ':memory:':
+            for protected in (path, str(path) + '-wal', str(path) + '-shm'):
+                if Path(protected).exists():
+                    os.chmod(protected, 0o600)
         self._conn.row_factory = sqlite3.Row
         self._lock = threading.Lock()
         with self._lock:

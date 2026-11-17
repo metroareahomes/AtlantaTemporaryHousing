@@ -177,12 +177,12 @@ class StayTemperaturePauses:
                             continue
                         match = complaint(msg.get('body', ''))
                         if match and self._pause(rid, 'Guest message', match):
-                            home = self.db.one('SELECT name FROM properties WHERE hostaway_listing_id=?', (fresh['listing_id'],))
+                            home = self.db.one('SELECT id, name FROM properties WHERE hostaway_listing_id=?', (fresh['listing_id'],))
                             label = home['name'] if home else f'Reservation {rid}'
                             try:
                                 await self.alert('Daily temperature reset paused',
                                                  f"{label} · reservation {rid}: {match}. Paused until checkout.",
-                                                 key=f'temperature_pause:{rid}')
+                                                 key=f'temperature_pause:{rid}', category="temperature_pauses", property_id=home["id"] if home else None)
                             except Exception:
                                 self.db.log('thermostat.pause_alert_failed', 'Could not send the pause alert; the pause is saved.',
                                             level='warning', reservation_id=rid)

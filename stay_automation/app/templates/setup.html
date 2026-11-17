@@ -110,6 +110,17 @@ Changes are staggered, with at least the selected gap between thermostat command
   <button class="primary">Save extra thermostats</button>
 </form>
 </section>
+<section class="panel"><h2>Email server for staff alerts</h2>
+<p class="sub">Use your email provider’s SMTP settings. Some providers need an app password.</p>
+<form method="post" action="smtp-settings-save" id="save-email-settings" data-save-label="Save email settings" class="stack cols">
+{{ checkbox('smtp_enabled', smtp_enabled) }}
+{% for key in ['smtp_host','smtp_from','smtp_username','alert_properties_url'] %}{{ text(key, smtp_values[key]) }}{% endfor %}
+{{ number('smtp_port', smtp_values.smtp_port|int) }}
+<div class="setup-field"><label class="field-title" for="setting-smtp_security">{{ setup_fields.smtp_security.label }}</label>{{ help('smtp_security') }}
+<select id="setting-smtp_security" name="smtp_security" aria-describedby="hint-smtp_security"><option value="starttls" {{ 'selected' if smtp_values.smtp_security == 'starttls' }}>STARTTLS (usually 587)</option><option value="ssl" {{ 'selected' if smtp_values.smtp_security == 'ssl' }}>SSL (usually 465)</option></select><p class="field-hint" id="hint-smtp_security">{{ setup_fields.smtp_security.brief }}</p></div>
+<div class="setup-field"><label class="field-title" for="setting-smtp_password">{{ setup_fields.smtp_password.label }}</label>{{ help('smtp_password') }}
+<input type="password" id="setting-smtp_password" name="smtp_password" value="" autocomplete="new-password" aria-describedby="hint-smtp_password"><p class="field-hint" id="hint-smtp_password">{{ setup_fields.smtp_password.brief }}</p></div>
+<button class="primary">Save email settings</button></form></section>
 <section class="panel">
 <h2>Try your alerts</h2>
 <p class="sub">Save your alert destination above, then send a test. Check your phone to confirm it arrived.</p>
