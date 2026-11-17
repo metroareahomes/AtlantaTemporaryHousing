@@ -76,8 +76,14 @@ def _dt(iso: str) -> datetime:
 
 
 def add_time(r: dict[str, Any], add_hour: int, lead_hours: int, final_minutes: int = 60) -> datetime:
-    """Arrival time minus the configured minutes. Old hour arguments are ignored for compatibility."""
-    return _dt(r["check_in_at"]) - timedelta(minutes=final_minutes)
+    """When the guest code should first go in: 8 AM arrival day, or earlier for morning check-ins.
+    Never later than the final check (1 hour before check-in). A same-day booking made after 3 PM
+    lands in that window; waiting until add_hour would only look at the lock and text the guest."""
+    check_in = _dt(r["check_in_at"])
+    morning = datetime.combine(check_in.date(), time(add_hour), check_in.tzinfo)
+    by_lead = check_in - timedelta(hours=lead_hours)
+    by_final = check_in - timedelta(minutes=final_minutes)
+    return min(morning, by_lead, by_final)
 
 
 def slot_names(reservations: list[dict[str, Any]], add_hour: int, lead_hours: int,
@@ -306,14 +312,18 @@ class LockManager:
         due.sort(key=lambda l: (l["property_id"] not in self._urgent,
                                 l["next_check_at"] or ""))
         due = due[:self.max_per_tick]
+        processed = 0
         for lock in due:
             await self.reconcile(lock, self.s.now())
+            processed += 1
             await asyncio.sleep(self.gap)
+            if self._wake.is_set():
+                break  # pick newly urgent homes before continuing routine maintenance
         for pid in list(self._urgent):
             if not self.db.one("SELECT 1 FROM locks WHERE property_id=? AND next_check_at IS NULL", (pid,)):
                 self._urgent.discard(pid)
         await self.daily_report(self.s.now())
-        return len(due)
+        return processed
 
     async def reconcile(self, lock: dict[str, Any], now: datetime) -> bool:
         async with self._reconcile_lock:
@@ -339,6 +349,9 @@ class LockManager:
             return await self._failed(lock, now, reservations, claim, self._why("could not read the lock"), None)
         now = self.s.now()
         reservations = self.s.reservations_for(lock["property_id"])
+        prop_now = self.db.one("SELECT active,lock_automation FROM properties WHERE id=?", (lock["property_id"],))
+        if not prop_now or not prop_now["active"] or not prop_now["lock_automation"]:
+            return False
         desired = self._desired(lock, reservations, now, actual, cfg)
 
         first = plan(desired, actual, managed)
@@ -572,6 +585,8 @@ class LockManager:
         if self.db.one("SELECT 1 FROM guest_notices WHERE reservation_id = ?", (r["id"],)):
             return
         prop = self.db.one("SELECT * FROM properties WHERE id = ?", (lock["property_id"],))
+        if not prop or not prop["active"] or not prop["lock_automation"]:
+            return
         arrival = _dt(r["check_in_at"]).astimezone(self.s.tz).strftime("%I:%M %p").lstrip("0")
         staff = f"{r['guest_name'] or 'Guest'} arrives at {prop['name']} at {arrival}: {reason}."
 

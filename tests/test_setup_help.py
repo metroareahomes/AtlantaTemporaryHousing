@@ -52,7 +52,7 @@ def page(syncer):
 
 def test_every_setup_control_has_named_help_and_a_visible_hint(syncer):
     html, parsed = page(syncer)
-    expected = (set(LOCK_DEFAULTS) - {"add_hour", "early_lead_hours", "afternoon_check_hour"}) | set(CLIMATE_DEFAULTS) | {
+    expected = (set(LOCK_DEFAULTS) - {"afternoon_check_hour"}) | set(CLIMATE_DEFAULTS) | {
         "public_url", "addon_slug", "register_hostaway", "alert_service",
         "backup_codes_enabled", "guest_messages_enabled", "guest_message"}
     assert set(SETUP_FIELDS) == expected == set(parsed.controls)
@@ -71,15 +71,15 @@ def test_every_setup_control_has_named_help_and_a_visible_hint(syncer):
 
 def test_help_preserves_saved_values_and_does_not_write_settings(syncer):
     db = syncer.db
-    db.set_setting("final_check_minutes", "90")
+    db.set_setting("add_hour", "14")
     db.set_setting("occ_summer", "74")
     db.set_setting("alert_service", "notify.mobile_app_kurts_iphone")
     db.set_setting("backup_codes_enabled", "1")
     db.set_setting("guest_messages_enabled", "0")
     before = db.query("SELECT * FROM settings ORDER BY key")
     html, parsed = page(syncer)
-    assert parsed.controls["final_check_minutes"]["value"] == "90"
-    assert "add_hour" not in parsed.controls
+    assert parsed.controls["add_hour"]["value"] == "14"
+    assert "Current choice: 2 PM." in html
     assert parsed.controls["occ_summer"]["value"] == "74"
     assert parsed.controls["alert_service"]["value"] == "notify.mobile_app_kurts_iphone"
     assert "checked" in parsed.controls["backup_codes_enabled"]

@@ -19,16 +19,28 @@ SETUP_FIELDS = {
         "more": "Checking this box and saving registers the connection in Hostaway. Without live updates, the regular reservation checks still run.",
         "example": "Turn this on when first connecting live booking updates."
     },
+    "add_hour": {
+        "label": "Add guest codes at this hour (0–23)",
+        "brief": "Start trying to install today’s guest codes at this hour.",
+        "more": "Failed installations are retried at the interval under More lock timing options. For early arrivals, installation can start earlier. The final access check is separately tied to the guest’s check-in time.",
+        "example": "8 = 8 AM; 14 = 2 PM. A guest arriving today normally gets a code added at 8 AM when this is 8."
+    },
+    "early_lead_hours": {
+        "label": "Hours before an early arrival",
+        "brief": "Give an early-arriving guest their code this many hours before check-in.",
+        "more": "The app uses whichever code-installation time comes first: the usual hour, this many hours before arrival, or the final safety check.",
+        "example": "3 means a guest checking in at 9 AM can have their code added at 6 AM."
+    },
     "final_check_minutes": {
-        "label": "Check guest access this many minutes before check-in",
-        "brief": "Always count back from this guest’s current check-in time.",
-        "more": "At this time, check the code the guest was given. If it is missing, try installing it once and read the lock again. If access still cannot be confirmed, use your backup-code message settings. A booking change that makes the check due wakes the scheduler as soon as the app receives it; slow lock services can delay completion.",
-        "example": "60 with a 4 PM check-in means a 3 PM check. Move check-in to 2 PM and the check moves to 1 PM. If it is already 1:30 PM, check as soon as the change arrives."
+        "label": "Final access check: minutes before check-in",
+        "brief": "After the morning installation attempts, make this final check before the guest arrives.",
+        "more": "This check follows the guest’s current check-in time. If the personal code is still missing, try installing it once more and read the lock again. If access still cannot be confirmed, use the backup-code message settings. A changed check-in that makes this check due wakes the scheduler as soon as the app receives it. Slow lock services can delay completion.",
+        "example": "60 with a 4 PM check-in means a 3 PM final check. If check-in changes to 2 PM when it is already 1:30 PM, check as soon as the change arrives."
     },
     "retry_minutes": {
         "label": "Minutes between failed lock checks",
         "brief": "Wait this long before trying a failed lock operation again.",
-        "more": "This controls lock checks and code changes. It is not the wait between sending phone alerts.",
+        "more": "This controls retries of failed morning code installations and lock maintenance. At the final access check, the guest code gets one last installation attempt before the backup is used.",
         "example": "15 means try the lock again about 15 minutes later."
     },
     "daily_check_hour": {

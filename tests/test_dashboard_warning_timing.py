@@ -19,24 +19,24 @@ def reservation(checkin):
 
 @pytest.mark.parametrize("clock,expected", [
     ("2030-01-09T18:00", False),  # day before arrival
-    ("2030-01-10T14:59", False),  # not yet scheduled
-    ("2030-01-10T15:00", False),  # code just became due
-    ("2030-01-10T15:14", False),  # grace period
-    ("2030-01-10T15:15", True),   # warning becomes actionable
-    ("2030-01-10T16:00", True),
+    ("2030-01-10T07:59", False),  # not yet scheduled
+    ("2030-01-10T08:00", False),  # code just became due
+    ("2030-01-10T08:14", False),  # grace period
+    ("2030-01-10T08:15", True),   # warning becomes actionable
+    ("2030-01-10T09:00", True),
 ])
 def test_normal_checkin(clock, expected):
     assert missing_code_warning_due(reservation("2030-01-10T16:00"), at(clock), 8, 3, 60) is expected
 
 
 @pytest.mark.parametrize("clock,expected", [
-    ("2030-01-10T07:59", False),
-    ("2030-01-10T08:14", False),
-    ("2030-01-10T08:15", True),
+    ("2030-01-10T05:59", False),
+    ("2030-01-10T06:14", False),
+    ("2030-01-10T06:15", True),
 ])
 def test_early_checkin(clock, expected):
-    # 9 AM check-in means code is scheduled at 8 AM, one hour before arrival.
-    assert missing_code_warning_due(reservation("2030-01-10T16:00"), at(clock), 8, 3, 60) is expected
+    # 9 AM check-in means code is scheduled at 6 AM, not 8 AM.
+    assert missing_code_warning_due(reservation("2030-01-10T09:00"), at(clock), 8, 3, 60) is expected
 
 
 def test_custom_schedule_and_final_check_limit():
@@ -46,4 +46,4 @@ def test_custom_schedule_and_final_check_limit():
 
 
 def test_no_upcoming_reservation():
-    assert not missing_code_warning_due(None, at("2030-01-10T15:30"), 8, 3, 60)
+    assert not missing_code_warning_due(None, at("2030-01-10T08:30"), 8, 3, 60)

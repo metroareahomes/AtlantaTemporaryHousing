@@ -46,8 +46,8 @@ CODE_LABELS = {
 BOARD_SHOWS = {"attention", "arriving", "departing", "occupied", "vacant", "all"}
 MONTH_NAMES = ["", "January", "February", "March", "April", "May", "June",
                "July", "August", "September", "October", "November", "December"]
-LOCK_GUEST_KEYS = ("final_check_minutes",)
-LOCK_ADVANCED_KEYS = ("retry_minutes", "daily_check_hour", "report_hour", "stale_check_minutes")
+LOCK_GUEST_KEYS = ("add_hour", "final_check_minutes",)
+LOCK_ADVANCED_KEYS = ("early_lead_hours", "retry_minutes", "daily_check_hour", "report_hour", "stale_check_minutes")
 CLIMATE_GUEST_KEYS = ("occ_summer", "occ_winter", "vac_summer", "vac_winter", "therm_lead_hours", "therm_lag_hours")
 CLIMATE_MONTH_KEYS = ("summer_start_month", "summer_end_month")
 CLIMATE_ADVANCED_KEYS = (
@@ -556,6 +556,8 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None) 
 
     def recheck_locks(property_id: int) -> None:
         db.execute("UPDATE locks SET next_check_at = NULL WHERE property_id = ?", (property_id,))
+        if syncer.on_locks:
+            syncer.on_locks(property_id)
 
     @app.post("/code-override")
     async def code_override(reservation_id: int = Form(...), code: str = Form(""),
@@ -579,6 +581,10 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None) 
                     raise HTTPException(400, f"{row['pname']}: {code} already opens this lock under another name "
                                              "(Master, a cleaner...). Pick a different one")
         db.execute("UPDATE reservations SET override_code = ? WHERE id = ?", (code or None, reservation_id))
+        if (code or None) != row["override_code"]:
+            # An explicit staff code change authorizes a fresh attempt, even when reverting to an old code.
+            db.execute("DELETE FROM guest_code_attempts WHERE reservation_id=?", (reservation_id,))
+            db.execute("DELETE FROM guest_access_checks WHERE reservation_id=?", (reservation_id,))
         recheck_locks(row["pid"])
         db.log("code.override" if code else "code.override_cleared",
                f"Guest code for {row['guest_name'] or reservation_id} "
