@@ -74,6 +74,19 @@ class HAClient:
             "max_temp": a.get("max_temp"),
         }
 
+    async def lyric_entity_ids(self) -> set[str]:
+        """Read Lyric entity membership from HA locally; do not refresh the cloud."""
+        raw = await self._post("/api/template", {
+            "template": "{{ integration_entities('lyric') | select('match', 'climate[.]') | list | tojson }}"})
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                raise HAError("Could not read Lyric entities") from exc
+        if not isinstance(raw, list):
+            raise HAError("Invalid Lyric entity discovery response")
+        return {eid for eid in raw if isinstance(eid, str)}
+
     async def _climate_entity_ids(self, extras: set[str] | None = None) -> set[str]:
         """Native Resideo entities plus explicitly selected Lyric entities only."""
         extras = extras if extras is not None else set(self._extra_climate_entities())

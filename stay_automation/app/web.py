@@ -822,6 +822,12 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None) 
         entities = sorted(set(lyric_climate_entities.replace(",", " ").split()))
         if len(entities) > 10 or any(not re.fullmatch(r"climate\.[a-z0-9_]+", eid) for eid in entities):
             raise HTTPException(400, "Enter up to 10 climate entity IDs, separated by spaces or commas")
+        try:
+            known_lyric = await syncer.ha.lyric_entity_ids()
+        except Exception as exc:
+            raise HTTPException(502, "Could not verify Lyric devices in Home Assistant; selection was not changed") from exc
+        if any(eid not in known_lyric for eid in entities):
+            raise HTTPException(400, "Each extra thermostat must be a climate entity from Honeywell Lyric")
         old = set((db.get_setting("lyric_climate_entities", "") or "").split())
         db.set_setting("lyric_climate_entities", " ".join(entities))
         for eid in old - set(entities):

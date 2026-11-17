@@ -16,6 +16,13 @@ from test_climate import cm, at, tick
 CREEK = "climate.livingroom_thermostat"
 
 
+@pytest.fixture(autouse=True)
+def lyric_membership(syncer):
+    async def entities():
+        return {CREEK}
+    syncer.ha.lyric_entity_ids = entities
+
+
 def state(eid):
     return {"entity_id": eid, "state": "cool",
             "attributes": {"friendly_name": eid, "temperature": 72, "current_temperature": 74}}
@@ -99,7 +106,7 @@ def test_selected_thermostat_requires_manual_assignment_before_control(cm):
     assert any(call[0] == CREEK for call in cm.ha.sets)
 
 
-def test_saving_selection_is_normalized_but_does_not_assign_or_call_ha(syncer):
+def test_saving_selection_is_normalized_without_assignment_or_cloud_control(syncer):
     client = TestClient(create_app(syncer), follow_redirects=False)
     response = client.post("/additional-thermostats-save",
                            data={"lyric_climate_entities": f"{CREEK}, {CREEK}"})
@@ -127,3 +134,22 @@ def test_removing_selected_lyric_device_removes_its_control_row_only(syncer):
     assert response.status_code == 303
     assert syncer.db.one("SELECT * FROM thermostats WHERE entity_id=?", (CREEK,)) is None
     assert syncer.db.one("SELECT * FROM thermostats WHERE entity_id='climate.keep'")
+
+
+def test_extra_selection_rejects_a_native_resideo_entity(syncer):
+    syncer.db.set_setting("lyric_climate_entities", CREEK)
+    response = TestClient(create_app(syncer)).post(
+        "/additional-thermostats-save", data={"lyric_climate_entities": "climate.resideo_main"})
+    assert response.status_code == 400
+    assert syncer.db.get_setting("lyric_climate_entities") == CREEK
+
+
+def test_failed_membership_lookup_does_not_change_selection(syncer):
+    async def broken():
+        raise RuntimeError("HA unavailable")
+    syncer.ha.lyric_entity_ids = broken
+    syncer.db.set_setting("lyric_climate_entities", CREEK)
+    response = TestClient(create_app(syncer)).post(
+        "/additional-thermostats-save", data={"lyric_climate_entities": ""})
+    assert response.status_code == 502
+    assert syncer.db.get_setting("lyric_climate_entities") == CREEK
