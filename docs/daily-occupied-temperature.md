@@ -1,4 +1,4 @@
-# Daily occupied temperature limits (development)
+# Daily occupied temperature limits (0.6.18)
 
 Optional and OFF by default. Enable in Setup under “Daily temperature check while guests are staying”.
 
@@ -36,4 +36,4 @@ Create a **private reservation text field**, for example “Pause daily temperat
 
 The custom field remains an optional alternative; NTC in Guest Notes needs no field ID or extra setup. Reservation reads request `includeResources=1`, which Hostaway requires for custom fields in reservation lists. Message reads use `/conversations?reservationId=...` and `/conversations/{id}/messages`, and verify account/reservation identity.
 
-No production release or Home Assistant deployment is included in this branch.
+Released as 0.6.18 after owner deployment approval. Installation and feature activation are separate; follow docs/deploy-0.6.18.md.
