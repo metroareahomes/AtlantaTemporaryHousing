@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.6.19 — menu stays visible while scrolling
+
+- Keep the main menu and sync controls at the top while scrolling.
+- Position floating column headers directly beneath the menu, including wrapped phone layouts.
+- Reposition column headers automatically when the menu height changes.
+- Keep the System dropdown above table headers and preserve the fixed bottom Save actions.
+- Keep printed pages in their normal layout.
+
+Interface-only update: automation, settings, guest access, database and thermostat rules are unchanged.
+The confirmed working 0.6.18 source is preserved at stable-0.6.18-before-sticky-menu.
+
 ## 0.6.18 — occupied temperature limits and NTC pauses
 
 - Add optional daily occupied temperature limits: winter 70°F, summer 73°F, with an editable 10 AM start.
