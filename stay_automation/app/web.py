@@ -748,10 +748,15 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None) 
         return _done("staff", "Alert recipients saved")
 
     @app.post("/recipient-test")
-    async def recipient_test(recipient_id: int = Form(...)):
-        if locks is None or not db.one('SELECT 1 FROM alert_recipients WHERE id=? AND active=1', (recipient_id,)):
-            raise HTTPException(400, "Choose an active saved recipient")
-        await locks.alert_service.test_recipient(recipient_id)
+    async def recipient_test(recipient_id: str = Form('')):
+        if not re.fullmatch(r'[1-9][0-9]{0,17}', recipient_id):
+            return _done('staff', 'Choose a saved active recipient before sending a test. Add your name and email, check Active, and press Save recipients first.')
+        saved_id = int(recipient_id)
+        if not db.one("SELECT 1 FROM alert_recipients WHERE id=? AND active=1 AND (email<>'' OR target<>'')", (saved_id,)):
+            return _done('staff', 'That recipient is no longer active or has no destination. Save an active recipient, then select them again.')
+        if locks is None:
+            return _done('staff', 'The alert service is unavailable. No test was queued.')
+        await locks.alert_service.test_recipient(saved_id)
         return _done('staff', 'Test alert queued for that recipient; check their inbox or phone')
 
     @app.post("/alert-delivery-retry")

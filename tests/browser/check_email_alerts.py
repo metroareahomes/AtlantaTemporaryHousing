@@ -14,6 +14,8 @@ s = Syncer(DB(':memory:'), SETTINGS, FakeHostaway(), FakeHA())
 s.db.set_setting('smtp_password','never-show-this-secret')
 c = TestClient(create_app(s))
 pages = {p:c.get(p).text for p in ('/staff','/setup','/','/properties')}
+s.db.execute("INSERT INTO alert_recipients(name,target,email,active) VALUES('Saved recipient','','saved@example.com',1)")
+pages['/staff-saved'] = c.get('/staff').text
 static = root / 'stay_automation' / 'app' / 'static'
 with sync_playwright() as p:
     browser = p.chromium.launch(headless=True)
@@ -27,6 +29,8 @@ with sync_playwright() as p:
                 r.fulfill(body=pages.get(path,pages['/']),content_type='text/html')
         page.route('https://ha.example.com/**',route)
         page.goto('https://ha.example.com/staff')
+        assert page.get_by_text('No active recipients saved yet.',exact=False).is_visible()
+        assert page.get_by_role('button',name='Send recipient test',exact=True).count()==0
         page.evaluate("window.sent=[];document.addEventListener('submit',e=>{e.preventDefault();window.sent.push({id:e.target.id,values:Object.fromEntries(new FormData(e.target))})})")
         page.locator('[name=rname_new]').fill('Kurt battery manager')
         page.locator('[name=remail_new]').fill('manager@example.com')
@@ -42,6 +46,13 @@ with sync_playwright() as p:
         assert saved['values']['rtype_new_battery']=='on' and 'rtype_new_locks' not in saved['values']
         assert 'smtp_password' not in saved['values']
         assert page.evaluate('document.documentElement.scrollWidth') <= width
+        page.goto('https://ha.example.com/staff-saved')
+        page.evaluate("window.tests=[];document.addEventListener('submit',e=>{e.preventDefault();window.tests.push(Object.fromEntries(new FormData(e.target)))})")
+        page.get_by_role('button',name='Send recipient test',exact=True).click()
+        assert page.evaluate('window.tests.length')==0  # native required selection blocks an empty request
+        page.get_by_role('combobox',name='Recipient to test').select_option('1')
+        page.get_by_role('button',name='Send recipient test',exact=True).click()
+        assert page.evaluate('window.tests[0].recipient_id')=='1'
         page.goto('https://ha.example.com/setup')
         assert 'never-show-this-secret' not in page.content()
         assert page.locator('[name=smtp_password]').input_value()==''
@@ -59,4 +70,4 @@ with sync_playwright() as p:
         assert page.get_by_role('heading',name='Properties',exact=True).is_visible()
         page.close()
     browser.close()
-print('PASS: owner/category recipient forms, SMTP secret masking, separate Save actions and ingress Properties link on desktop/phone')
+print('PASS: owner/category recipient forms and empty-test protection, SMTP secret masking, separate Save actions and ingress Properties link on desktop/phone')
