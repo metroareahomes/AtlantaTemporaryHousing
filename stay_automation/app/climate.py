@@ -155,6 +155,7 @@ class ClimateManager:
         self.ha = syncer.ha
         self.alert = alert  # LockManager.alert: same recipients, same once-only keys
         self.verify_delay = VERIFY_DELAY_SECONDS
+        self.verify_recheck_delay = 40
         self._run_lock = asyncio.Lock()
         self._daily_cursor = 0
         self.daily_pauses = StayTemperaturePauses(syncer, alert)
@@ -178,6 +179,15 @@ class ClimateManager:
             return await self.ha.climate_state(entity_id)
         states = await self.ha.climate_states()
         return next((c for c in states if c["entity_id"] == entity_id), None)
+
+    async def _verify_temperature(self, entity_id: str, call: dict[str, float]) -> dict[str, Any] | None:
+        """Allow a delayed HA reading to catch up, without another cloud command or forced refresh."""
+        await asyncio.sleep(self.verify_delay)
+        fresh = await self._read(entity_id)
+        if fresh is not None and fresh.get("state") not in OFFLINE_STATES and not took_effect(call, fresh):
+            await asyncio.sleep(self.verify_recheck_delay)
+            fresh = await self._read(entity_id)
+        return fresh
 
     async def refresh(self) -> int:
         """Find Resideo thermostats in Home Assistant, store readings, and drop leftovers from the old account."""
@@ -358,16 +368,14 @@ class ClimateManager:
         except Exception as exc:
             # Lyric often returns HTTP 500/429 on the POST even when Honeywell already applied the
             # change (cancel → vacant on CC4). Re-read before counting a failure.
-            await asyncio.sleep(self.verify_delay)
-            fresh = await self._read(t["entity_id"])
+            fresh = await self._verify_temperature(t["entity_id"], call)
             if fresh is None or fresh.get("state") in OFFLINE_STATES or took_effect(call, fresh):
                 self._recorded(t, mode, target, summer, already=False,
                                reservation_id=occupying["id"] if occupying else None)
                 return "write"
             await self._failed(t, now, str(exc) or type(exc).__name__)
             return "skip"
-        await asyncio.sleep(self.verify_delay)
-        fresh = await self._read(t["entity_id"])
+        fresh = await self._verify_temperature(t["entity_id"], call)
         # Lyric refreshes the whole account after a set. A 429 makes every climate.* go
         # unavailable; that is not proof this write failed.
         if fresh is None or fresh.get("state") in OFFLINE_STATES:
