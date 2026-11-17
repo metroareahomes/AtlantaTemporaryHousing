@@ -1,0 +1,39 @@
+{% macro help(key) -%}
+<details class="field-help">
+  <summary aria-label="Help: {{ setup_fields[key].label }}">?</summary>
+  <div class="field-help-text">
+    <p>{{ setup_fields[key].more }}</p>
+    <p><strong>Example:</strong> {{ setup_fields[key].example }}</p>
+  </div>
+</details>
+{%- endmacro %}
+{% macro number(key, value) -%}
+<div class="setup-field">
+  <label class="field-title" for="setting-{{ key }}">{{ setup_fields[key].label }}</label>
+  {{ help(key) }}
+  <input id="setting-{{ key }}" name="{{ key }}" value="{{ value }}" inputmode="numeric" aria-describedby="hint-{{ key }}">
+  <p class="field-hint" id="hint-{{ key }}">{{ setup_fields[key].brief }}
+    {% if key in ['add_hour', 'afternoon_check_hour', 'daily_check_hour', 'report_hour', 'vacant_reset_hour'] and value >= 0 and value <= 23 %}
+    <span class="saved-time">Current choice: {{ value % 12 or 12 }} {{ 'AM' if value < 12 else 'PM' }}.</span>
+    {% endif %}
+  </p>
+</div>
+{%- endmacro %}
+{% macro text(key, value, placeholder='') -%}
+<div class="setup-field">
+  <label class="field-title" for="setting-{{ key }}">{{ setup_fields[key].label }}</label>
+  {{ help(key) }}
+  <input id="setting-{{ key }}" name="{{ key }}" value="{{ value }}" placeholder="{{ placeholder }}" aria-describedby="hint-{{ key }}">
+  <p class="field-hint" id="hint-{{ key }}">{{ setup_fields[key].brief }}</p>
+</div>
+{%- endmacro %}
+{% macro checkbox(key, checked=false) -%}
+<div class="setup-field wide">
+  <label class="field-title checkbox-title" for="setting-{{ key }}">
+    <input type="checkbox" id="setting-{{ key }}" name="{{ key }}" {{ 'checked' if checked }} aria-describedby="hint-{{ key }}">
+    <span>{{ setup_fields[key].label }}</span>
+  </label>
+  {{ help(key) }}
+  <p class="field-hint" id="hint-{{ key }}">{{ setup_fields[key].brief }}</p>
+</div>
+{%- endmacro %}

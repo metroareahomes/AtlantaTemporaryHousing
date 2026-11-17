@@ -23,6 +23,7 @@ from .hostaway import HostawayError
 from .locks import DEFAULT_GUEST_MESSAGE, DEFAULTS, LockManager, _utc, add_time, new_backup_code
 from .reservations import code_status, property_state, within
 from .sync import Syncer
+from .setup_help import SETUP_FIELDS
 
 HERE = Path(__file__).parent
 templates = Jinja2Templates(directory=HERE / "templates")
@@ -774,6 +775,7 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None) 
             ha_ok, automation = False, False
         return page(
             request, "setup.html",
+            setup_fields=SETUP_FIELDS,
             ha_ok=ha_ok, automation=automation, public_url=public_url,
             addon_slug=db.get_setting("addon_slug", "local_stay_automation"),
             webhook_url=f"{public_url}/api/webhook/{webhook_id[:6]}…" if webhook_id else "",

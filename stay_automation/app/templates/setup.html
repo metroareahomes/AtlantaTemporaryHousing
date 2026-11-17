@@ -1,6 +1,7 @@
 {% extends "base.html" %}{% set active = 'setup' %}
+{% from "_setup_fields.html" import help, number, text, checkbox with context %}
 {% block body %}
-<div class="page-head"><h1>Setup</h1><p>Connections, real-time updates, and the rules the automations follow.</p></div>
+<div class="page-head"><h1>Setup</h1><p>Choose when guest codes are added, where alerts go, and how each home is kept comfortable.</p></div>
 <div class="narrow">
 <section class="panel">
 <h2>Connections</h2>
@@ -15,14 +16,13 @@
 </ul>
 </section>
 <section class="panel">
-<h2>Real-time updates from Hostaway</h2>
-<p class="sub">Hostaway posts each booking change to your public Home Assistant address, which hands it to this add-on.
-  Without it, changes still arrive on the regular sync.</p>
+<h2>Get booking changes from Hostaway</h2>
+<p class="sub">This connection lets the app hear about new bookings and changes sooner. If it is not connected, the app still checks bookings on its regular schedule.</p>
 <form method="post" action="setup-webhook" class="stack cols">
-  <label>Public Home Assistant address <input name="public_url" value="{{ public_url }}"></label>
-  <label>Add-on slug <input name="addon_slug" value="{{ addon_slug }}"></label>
-  <label><input type="checkbox" name="register_hostaway"> Also register the webhook with Hostaway</label>
-  <button class="primary">Save webhook</button>
+  {{ text("public_url", public_url, "https://your-home-assistant.example.com") }}
+  {{ text("addon_slug", addon_slug) }}
+  {{ checkbox("register_hostaway") }}
+  <button class="primary">Save booking connection</button>
 </form>
 </section>
 <section class="panel">
@@ -32,24 +32,26 @@
   nothing else is touched. Staff codes and alert recipients are on the Staff page.</p>
 <form method="post" action="settings-save" class="stack cols">
   {% for key, label, value in lock_guest %}
-  <label>{{ label }} <input name="{{ key }}" value="{{ value }}" inputmode="numeric"></label>
+  {{ number(key, value) }}
   {% endfor %}
-  <label>Alert also through (optional HA notify service, e.g. notify.mobile_app_kurts_iphone)
-    <input name="alert_service" value="{{ alert_service }}" placeholder="notify.…"></label>
-  <label><input type="checkbox" name="backup_codes_enabled" {{ 'checked' if backup_codes_enabled }}>
-    Keep a backup code (HA-BACKUP) in every automated lock</label>
-  <label><input type="checkbox" name="guest_messages_enabled" {{ 'checked' if guest_messages_enabled }}>
-    Send the backup code to the guest through Hostaway when their code is not confirmed an hour before check-in
-    (off: staff are alerted instead)</label>
-  <label>Guest message ({guest}, {property}, {code})
-    <textarea name="guest_message" rows="3">{{ guest_message }}</textarea></label>
+  {{ text("alert_service", alert_service, "notify.mobile_app_kurts_iphone") }}
+  {{ checkbox("backup_codes_enabled", backup_codes_enabled) }}
+  {{ checkbox("guest_messages_enabled", guest_messages_enabled) }}
+  <div class="setup-field wide">
+    <label class="field-title" for="setting-guest_message">{{ setup_fields.guest_message.label }}</label>
+    {{ help("guest_message") }}
+    <textarea id="setting-guest_message" name="guest_message" rows="3" aria-describedby="hint-guest_message">{{ guest_message }}</textarea>
+    <p class="field-hint" id="hint-guest_message">{{ setup_fields.guest_message.brief }}</p>
+  </div>
   <details class="fold">
-    <summary>Advanced lock timing</summary>
+    <summary>More lock timing options</summary>
+    <div class="setup-more-fields">
     {% for key, label, value in lock_advanced %}
-    <label>{{ label }} <input name="{{ key }}" value="{{ value }}" inputmode="numeric"></label>
+    {{ number(key, value) }}
     {% endfor %}
+    </div>
   </details>
-  <button class="primary">Save settings</button>
+  <button class="primary">Save lock and alert settings</button>
 </form>
 </section>
 <section class="panel">
@@ -58,28 +60,34 @@
   winter uses heat. A home goes to the occupied temperature before check-in and the vacant one after check-out.</p>
 <form method="post" action="thermostat-settings-save" class="stack cols">
   {% for key, label, value in climate_guest %}
-  <label>{{ label }} <input name="{{ key }}" value="{{ value }}" inputmode="numeric"></label>
+  {{ number(key, value) }}
   {% endfor %}
   {% for key, label, value in climate_months %}
-  <label>{{ label }}
-    <select name="{{ key }}">
+  <div class="setup-field">
+    <label class="field-title" for="setting-{{ key }}">{{ setup_fields[key].label }}</label>
+    {{ help(key) }}
+    <select id="setting-{{ key }}" name="{{ key }}" aria-describedby="hint-{{ key }}">
       {% for n in range(1, 13) %}
       <option value="{{ n }}" {{ 'selected' if n == value }}>{{ month_names[n] }}</option>
       {% endfor %}
     </select>
-  </label>
+    <p class="field-hint" id="hint-{{ key }}">{{ setup_fields[key].brief }}</p>
+  </div>
   {% endfor %}
   <details class="fold">
-    <summary>Advanced thermostat limits</summary>
+    <summary>More thermostat and battery options</summary>
+    <div class="setup-more-fields">
     {% for key, label, value in climate_advanced %}
-    <label>{{ label }} <input name="{{ key }}" value="{{ value }}" inputmode="numeric"></label>
+    {{ number(key, value) }}
     {% endfor %}
+    </div>
   </details>
   <button class="primary">Save thermostat settings</button>
 </form>
 </section>
 <section class="panel">
-<h2>Alerts</h2>
+<h2>Try your alerts</h2>
+<p class="sub">Save your alert destination above, then send a test. Check your phone to confirm it arrived.</p>
 <form method="post" action="test-alert" class="inline"><button>Send test alert</button></form>
 </section>
 {% if not is_addon %}<p class="sub">Running outside Home Assistant (development mode).</p>{% endif %}
