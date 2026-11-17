@@ -34,10 +34,12 @@ with sync_playwright() as p:
         link=page.get_by_role('link',name='Activity log',exact=True).bounding_box()
         assert page.evaluate('(p)=>document.elementFromPoint(p.x+p.width/2,p.y+p.height/2).closest("a").textContent',link)=='Activity log'
         page.get_by_text('System',exact=True).click()
+        print('after menu', width, page.evaluate('window.scrollY'), page.locator('body > header').bounding_box(), page.locator('.floating-columns').bounding_box(), flush=True)
         # Changing header height while scrolled must move the floating columns too.
         page.evaluate("document.querySelector('header').style.paddingBottom='25px'")
         page.wait_for_timeout(100)
         header=page.locator('body > header').bounding_box()
+        print('after resize', width, page.evaluate('window.scrollY'), header, page.locator('.floating-columns').bounding_box(), flush=True)
         assert abs(page.locator('.floating-columns').bounding_box()['y']-(header['y']+header['height']))<1
         page.evaluate("document.querySelector('.scroll').scrollLeft=220")
         page.wait_for_timeout(100)
