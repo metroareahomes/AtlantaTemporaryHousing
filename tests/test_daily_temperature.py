@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from app.climate import ClimateManager
 from app.daily_temperature import DEFAULTS, complaint, current_stay, daily_call
+from app.hostaway import has_ntc
 from app.web import create_app
 from test_climate import cm, at, res, tick as normal_tick, row
 
@@ -17,9 +18,10 @@ def tick(cm, when):
 
 class Hostaway:
     def __init__(self, reservation):
-        self.raw = dict(reservation, customFieldValues=[])
+        self.raw = dict(reservation, customFieldValues=[], guestNote=None)
         self.messages = []
         self.calls = 0
+        self.note_appends = []
         self.fail = False
 
     async def reservation(self, rid):
@@ -30,6 +32,15 @@ class Hostaway:
 
     async def guest_messages(self, rid):
         return list(self.messages)
+
+    async def append_ntc_note(self, rid):
+        if self.fail:
+            raise RuntimeError('offline')
+        self.note_appends.append(rid)
+        if not has_ntc(self.raw.get('guestNote')):
+            note = self.raw.get('guestNote') or ''
+            self.raw['guestNote'] = note + ('' if not note or note.endswith('\n') else '\n') + 'NTC'
+        return dict(self.raw)
 
 
 def enable(cm, winter=False):
@@ -214,7 +225,7 @@ def test_checkout_indicator_clears_new_guest_is_unpaused(cm):
     assert '✓ Daily temperature reset paused for this stay' in client.get('/properties').text
     cm.s.now = lambda: at('2030-06-15T10:00')
     assert '✓ Daily temperature reset paused for this stay' not in client.get('/properties').text
-    h.raw = dict(res(id=2, arrival='2030-06-15', departure='2030-06-18'), customFieldValues=[])
+    h.raw = dict(res(id=2, arrival='2030-06-15', departure='2030-06-18'), customFieldValues=[], guestNote=None)
     h.messages = []
     cm.s.upsert_reservation(h.raw)
     tick(cm, at('2030-06-15T17:00'))
@@ -491,3 +502,101 @@ def test_one_failed_candidate_does_not_starve_the_next_thermostat(cm):
     assert queue_tick(cm, at('2030-06-13T10:00')) == 0
     assert queue_tick(cm, at('2030-06-13T10:00:15')) == 1
     assert cm.ha.sets == [('climate.second', 73.0, None, None)]
+
+
+def test_manual_ntc_in_guest_notes_pauses_without_a_guest_complaint(cm):
+    h = enable(cm)
+    h.raw['guestNote'] = 'Early arrival approved.\nNTC\nPlease leave the package.'
+    cm.s.upsert_reservation(h.raw)
+    assert cm.daily_pauses.paused(1)
+    queue_tick(cm, at('2030-06-13T10:00'))
+    assert cm.ha.sets == [] and h.calls == 0
+    assert not cm.db.one('SELECT 1 FROM thermostat_note_updates')
+
+
+def test_complaint_enqueues_ntc_and_appends_existing_notes_once(cm):
+    h = enable(cm)
+    h.raw['guestNote'] = 'Late arrival; bring crib.'
+    h.messages = [msg('Please stop changing the thermostat.')]
+    tick(cm, at('2030-06-13T11:00'))
+    assert cm.daily_pauses.paused(1)
+    assert cm.db.one('SELECT synced_at FROM thermostat_note_updates')['synced_at'] is None
+    assert asyncio.run(cm.daily_pauses.flush_note_updates()) == 1
+    assert h.raw['guestNote'] == 'Late arrival; bring crib.\nNTC'
+    assert cm.db.one('SELECT synced_at FROM thermostat_note_updates')['synced_at'] is not None
+    assert asyncio.run(cm.daily_pauses.flush_note_updates()) == 0
+    assert h.note_appends == [1]
+
+
+def test_ntc_retry_is_durable_and_keeps_local_pause_during_hostaway_failure(cm):
+    h = enable(cm)
+    h.messages = [msg('It is too hot.')]
+    tick(cm, at('2030-06-13T11:00'))
+    h.fail = True
+    assert asyncio.run(cm.daily_pauses.flush_note_updates()) == 0
+    assert cm.daily_pauses.paused(1)
+    job = cm.db.one('SELECT * FROM thermostat_note_updates')
+    assert job['attempts'] == 1 and job['synced_at'] is None
+    restarted = ClimateManager(cm.s, cm.alert)
+    assert asyncio.run(restarted.daily_pauses.flush_note_updates()) == 0  # retry delay
+    h.fail = False
+    cm.s.now = lambda: at('2030-06-13T11:01')
+    assert asyncio.run(restarted.daily_pauses.flush_note_updates()) == 1
+    assert h.raw['guestNote'] == 'NTC'
+
+
+def test_pending_ntc_recovers_pause_if_process_stopped_before_local_pause_insert(cm):
+    h = enable(cm)
+    cm.s.now = lambda: at('2030-06-13T11:00')
+    cm.db.execute('INSERT INTO thermostat_note_updates(reservation_id,next_attempt_at) VALUES(1,?)',
+                  (cm.s.now().astimezone(timezone.utc).isoformat(timespec='seconds'),))
+    assert cm.daily_pauses.paused(1)
+    assert queue_tick(cm, at('2030-06-13T11:00')) == 0
+    assert asyncio.run(cm.daily_pauses.flush_note_updates()) == 1
+    assert cm.db.one('SELECT 1 FROM thermostat_stay_pauses')
+
+
+def test_pending_note_finishes_even_after_feature_disabled(cm):
+    h = enable(cm)
+    cm.s.now = lambda: at('2030-06-13T11:00')
+    cm.daily_pauses._pause(1, 'Guest message', 'Too hot')
+    cm.db.set_setting('occupied_reset_enabled', '0')
+    assert asyncio.run(cm.daily_pauses.flush_note_updates()) == 1
+    assert h.raw['guestNote'] == 'NTC'
+
+
+def test_missing_guest_notes_skips_daily_instead_of_ignoring_possible_ntc(cm):
+    h = enable(cm)
+    del h.raw['guestNote']
+    assert queue_tick(cm, at('2030-06-13T11:00')) == 0
+    assert cm.ha.sets == []
+
+
+@pytest.mark.parametrize('patch', [{'isIncoming': 0}, {'sentUsingHostaway': 1},
+                                  {'communicationType': 'internal'}, {'communicationEvent': 'checkIn'}])
+def test_staff_and_automated_messages_cannot_pause_or_enqueue_ntc(cm, patch):
+    h = enable(cm)
+    h.messages = [msg('Stop changing the thermostat.', **patch)]
+    queue_tick(cm, at('2030-06-13T11:00'))
+    assert not cm.daily_pauses.paused(1)
+    assert not cm.db.one('SELECT 1 FROM thermostat_note_updates')
+
+
+def test_properties_shows_pending_ntc_until_it_is_confirmed(cm):
+    h = enable(cm)
+    cm.s.now = lambda: at('2030-06-13T11:00')
+    cm.daily_pauses._pause(1, 'Guest message', 'Too hot')
+    client = TestClient(create_app(cm.s))
+    assert 'NTC not yet saved in Hostaway' in client.get('/properties').text
+    asyncio.run(cm.daily_pauses.flush_note_updates())
+    html = client.get('/properties').text
+    assert 'NTC not yet saved in Hostaway' not in html
+    assert '✓ Daily temperature reset paused for this stay' in html
+
+
+def test_staff_notes_are_not_keyword_analyzed_without_explicit_ntc(cm):
+    h = enable(cm)
+    h.raw['guestNote'] = 'Staff note: thermostat keeps resetting; house is too hot.'
+    queue_tick(cm, at('2030-06-13T11:00'))
+    assert not cm.daily_pauses.paused(1)
+    assert len(cm.ha.sets) == 1

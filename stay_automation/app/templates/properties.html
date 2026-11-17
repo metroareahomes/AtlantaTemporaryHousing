@@ -37,7 +37,7 @@
     <td class="h-main">
       <input name="name_{{ p.id }}" value="{{ p.name }}" aria-label="Name">
       <div class="sub">{{ p.hostaway_name }} · #{{ p.hostaway_listing_id }}</div>
-      {% if p.daily_pause %}<div class="sub warn" title="{{ p.daily_pause.reason }}">✓ Daily temperature reset paused for this stay<br>Clears at checkout · {{ p.daily_pause.source }}</div>{% endif %}
+      {% if p.daily_pause %}<div class="sub warn" title="{{ p.daily_pause.reason }}">✓ Daily temperature reset paused for this stay<br>Clears at checkout · {{ p.daily_pause.source }}{% if p.daily_ntc_pending %}<br>NTC not yet saved in Hostaway{% endif %}</div>{% endif %}
     </td>
     <td class="devs">
       {% for l in p.lock_list %}<div>Lock · {{ l.name }} <span class="sub">{{ l.state }}{% if l.battery is not none %} · {{ l.battery }}%{% endif %}</span></div>{% endfor %}

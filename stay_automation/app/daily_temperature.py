@@ -3,7 +3,9 @@ import asyncio
 import html
 import math
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+
+from .hostaway import has_ntc
 from zoneinfo import ZoneInfo
 
 DEFAULTS = {"daily_winter": 70, "daily_summer": 73, "occupied_reset_hour": 10, "occupied_reset_spacing_seconds": 90,
@@ -86,9 +88,12 @@ class StayTemperaturePauses:
         self._lock = asyncio.Lock()
 
     def paused(self, reservation_id):
-        return bool(self.db.one('SELECT 1 FROM thermostat_stay_pauses WHERE reservation_id = ?', (reservation_id,)))
+        return bool(self.db.one('SELECT 1 FROM thermostat_stay_pauses WHERE reservation_id = ?', (reservation_id,)) or
+                    self.db.one('SELECT 1 FROM thermostat_note_updates WHERE reservation_id=? AND synced_at IS NULL', (reservation_id,)))
 
     def remember_field(self, raw):
+        if has_ntc(raw.get('guestNote')):
+            self._pause(int(raw['id']), 'Guest Notes', 'NTC in Hostaway Guest Notes: daily occupied adjustment paused for this stay.')
         field_id = self.db.get_int('temperature_pause_field_id', 0)
         if not field_id:
             return
@@ -97,12 +102,45 @@ class StayTemperaturePauses:
                 self._pause(int(raw['id']), 'Hostaway field', 'Staff paused daily temperature resets in Hostaway.')
 
     def _pause(self, rid, source, reason):
-        if self.paused(rid):
+        # Queue before the local pause: either side can recover the other after a process interruption.
+        if source != 'Guest Notes':
+            self.db.execute('INSERT OR IGNORE INTO thermostat_note_updates(reservation_id, next_attempt_at) VALUES(?, ?)',
+                            (rid, self.s.now().astimezone(timezone.utc).isoformat(timespec='seconds')))
+        if self.db.one('SELECT 1 FROM thermostat_stay_pauses WHERE reservation_id=?', (rid,)):
             return False
         self.db.execute('INSERT OR IGNORE INTO thermostat_stay_pauses(reservation_id, source, reason, paused_at) VALUES(?, ?, ?, ?)',
                         (rid, source, reason, self.s.now().isoformat()))
         self.db.log('thermostat.stay_paused', reason, reservation_id=rid)
         return True
+
+    async def flush_note_updates(self):
+        """One durable Guest Notes update per pass, including when daily resets were since disabled."""
+        now = self.s.now().astimezone(timezone.utc)
+        stamp = now.isoformat(timespec='seconds')
+        job = self.db.one('SELECT * FROM thermostat_note_updates WHERE synced_at IS NULL AND next_attempt_at <= ? ORDER BY next_attempt_at, reservation_id LIMIT 1', (stamp,))
+        if not job:
+            return 0
+        rid = job['reservation_id']
+        lease = (now + timedelta(minutes=5)).isoformat(timespec='seconds')
+        job = self.db.one('UPDATE thermostat_note_updates SET attempts=attempts+1, next_attempt_at=? WHERE reservation_id=? AND synced_at IS NULL AND next_attempt_at <= ? RETURNING *', (lease, rid, stamp))
+        if not job:
+            return 0
+        try:
+            fresh = await self.s.hostaway.append_ntc_note(rid)
+            if str(fresh.get('id')) != str(rid) or not has_ntc(fresh.get('guestNote')):
+                raise ValueError('NTC not confirmed')
+            self.s.upsert_reservation(fresh)
+            self.db.execute('UPDATE thermostat_note_updates SET synced_at=?, last_error=NULL WHERE reservation_id=?',
+                            (self.s.now().astimezone(timezone.utc).isoformat(timespec='seconds'), rid))
+            self.db.log('thermostat.ntc_saved', 'NTC confirmed in Hostaway Guest Notes.', reservation_id=rid)
+            return 1
+        except Exception as exc:
+            delay = min(3600, 60 * 2 ** min(job['attempts'] - 1, 6))
+            due = (self.s.now().astimezone(timezone.utc) + timedelta(seconds=delay)).isoformat(timespec='seconds')
+            self.db.execute('UPDATE thermostat_note_updates SET next_attempt_at=?, last_error=? WHERE reservation_id=?',
+                            (due, type(exc).__name__, rid))
+            self.db.log('thermostat.ntc_retry', 'NTC Guest Notes update could not be confirmed; local pause remains active and the note will retry.', level='warning', reservation_id=rid)
+            return 0
 
     async def check(self, reservation, *, force=False):
         """Fail closed for daily resets only. Successful scans are cached five minutes."""
@@ -122,6 +160,8 @@ class StayTemperaturePauses:
                     raise ValueError('Reservation account mismatch')
                 if int(raw['id']) != rid:
                     raise ValueError('Reservation ID mismatch')
+                if 'guestNote' not in raw or raw['guestNote'] is not None and not isinstance(raw['guestNote'], str):
+                    raise ValueError('Hostaway did not supply Guest Notes')
                 self.s.upsert_reservation(raw)
                 if self.db.get_int('temperature_pause_field_id', 0) and not isinstance(raw.get('customFieldValues'), list):
                     raise ValueError('Hostaway did not supply custom fields')
@@ -160,6 +200,10 @@ class StayTemperaturePauses:
                 return False
 
     def _inbound(self, msg, reservation, now):
+        if msg.get('sentUsingHostaway') in (1, True, '1') or msg.get('communicationEvent'):
+            return False
+        if msg.get('communicationType') not in (None, 'channel', 'email', 'sms', 'whatsapp'):
+            return False
         if msg.get('isIncoming') not in (1, True, '1') or msg.get('status', 'sent') != 'sent':
             return False
         if str(msg.get('reservationId')) != str(reservation['id']):

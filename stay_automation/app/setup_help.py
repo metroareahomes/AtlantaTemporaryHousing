@@ -211,13 +211,13 @@ SETUP_FIELDS.update({
     "temperature_complaints_enabled": {
         "label": "Pause daily resets when a guest complains about temperature",
         "brief": "Read incoming messages for temperature complaints, without AI tokens.",
-        "more": "Keyword rules are imperfect. A match pauses only this reservation's daily reset until checkout, including extensions. Staff and outgoing messages are ignored. New guests start fresh.",
+        "more": "Keyword rules are imperfect. A match pauses only this reservation’s daily reset until checkout, including extensions, and adds NTC to its Guest Notes. Staff can also enter NTC in Guest Notes to pause the stay. Staff and outgoing messages are ignored. New guests start fresh.",
         "example": "The thermostat keeps resetting, please stop changing it."
     },
     "temperature_pause_field_id": {
-        "label": "Hostaway field number for pausing daily resets",
-        "brief": "Optional: enter the ID of a private reservation field. Use 0 to leave it unconnected.",
-        "more": "Create a private reservation text field in Hostaway named Pause daily temperature reset. Put YES in it to pause this stay. Use its numeric field ID here, not its name. The app reads this field; complaint pauses are saved inside this app. Once paused, a stay remains paused through checkout.",
+        "label": "Optional extra Hostaway pause field number",
+        "brief": "NTC in Guest Notes works without this. Leave 0 unless you also use a custom field.",
+        "more": "Create a private reservation text field in Hostaway named Pause daily temperature reset. Put YES in it to pause this stay. Use its numeric field ID here, not its name. The app reads this optional field too; automatic pauses are saved locally and add NTC to Guest Notes. Once paused, a stay remains paused through checkout.",
         "example": "If the field ID is 167, enter 167 here. Staff can then enter YES on a reservation."
     }
 })

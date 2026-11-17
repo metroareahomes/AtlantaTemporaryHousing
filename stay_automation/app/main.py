@@ -99,6 +99,7 @@ def build():
             every(settings.lock_discovery_minutes, "lock_discovery", discover, db),
             every(LOCK_TICK_MINUTES, "lock_automation", locks.tick, db),
             every(CLIMATE_TICK_MINUTES, "thermostats", climate.tick, db),
+            every(1, "temperature_guest_notes", climate.daily_pauses.flush_note_updates, db),
             every(0.25, "daily_temperature_queue", climate.daily_tick, db),
             every(CLIMATE_TICK_MINUTES, "temperature_complaints", climate.daily_pauses.monitor, db),
             every(BATTERY_CHECK_MINUTES, "batteries", climate.check_batteries, db),

@@ -405,6 +405,9 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None) 
         for prop in props:
             stay = current_stay(syncer.reservations_for(prop["id"]), syncer.now())
             prop["daily_pause"] = (db.one("SELECT * FROM thermostat_stay_pauses WHERE reservation_id=?", (stay["id"],)) if stay else None)
+            prop["daily_ntc_pending"] = bool(stay and db.one("SELECT 1 FROM thermostat_note_updates WHERE reservation_id=? AND synced_at IS NULL", (stay["id"],)))
+            if prop["daily_ntc_pending"] and not prop["daily_pause"]:
+                prop["daily_pause"] = {"reason": "Daily adjustment paused; NTC is waiting to save in Hostaway.", "source": "Automatic pause"}
             prop["lock_list"] = by_property.get(prop["id"], [])
             prop["therm_list"] = therm_by_property.get(prop["id"], [])
             if not prop["active"]:

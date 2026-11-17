@@ -1,6 +1,7 @@
 """Hostaway public API client."""
 import asyncio
 import logging
+import re
 from typing import Any, Callable
 
 import httpx
@@ -9,6 +10,10 @@ BASE_URL = "https://api.hostaway.com/v1"
 PAGE_SIZE = 100
 
 log = logging.getLogger(__name__)
+
+
+def has_ntc(note: Any) -> bool:
+    return isinstance(note, str) and bool(re.search(r"(?<!\w)NTC(?!\w)", note, re.I))
 
 
 class HostawayError(Exception):
@@ -25,6 +30,7 @@ class HostawayClient:
         self._load_token = load_token
         self._save_token = save_token
         self._token: str | None = None
+        self._note_lock = asyncio.Lock()
         self._http = http or httpx.AsyncClient(base_url=BASE_URL, timeout=30)
 
     async def close(self) -> None:
@@ -55,7 +61,7 @@ class HostawayClient:
         self._save_token(token)
         return token
 
-    async def _request(self, method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+    async def _request(self, method: str, path: str, *, retry_transient: bool = True, **kwargs: Any) -> dict[str, Any]:
         if self._token is None:
             self._token = self._load_token()
         for attempt in range(4):
@@ -66,8 +72,12 @@ class HostawayClient:
             )
             if resp.status_code in (401, 403):
                 self._token = None
+                if not retry_transient:
+                    raise HostawayError(f"{method} {path}: HTTP {resp.status_code}; retry after a fresh read")
                 continue
             if resp.status_code == 429 or resp.status_code >= 500:
+                if not retry_transient:
+                    raise HostawayError(f"{method} {path}: HTTP {resp.status_code}; retry after a fresh read")
                 await asyncio.sleep(2 ** attempt)
                 continue
             if resp.status_code != 200:
@@ -102,6 +112,31 @@ class HostawayClient:
     async def reservation(self, reservation_id: int) -> dict[str, Any]:
         body = await self._request("GET", f"/reservations/{reservation_id}", params={"includeResources": 1})
         return body["result"]
+
+    async def append_ntc_note(self, reservation_id: int) -> dict[str, Any]:
+        """Read-modify-write Guest Notes only; retries must re-read instead of replaying stale text."""
+        async with self._note_lock:
+            raw = await self.reservation(reservation_id)
+            self._validate_note_reservation(raw, reservation_id)
+            if has_ntc(raw["guestNote"]):
+                return raw
+            note = raw["guestNote"] or ""
+            updated = note + ("" if not note or note.endswith("\n") else "\n") + "NTC"
+            await self._request("PUT", f"/reservations/{reservation_id}", retry_transient=False,
+                                json={"guestNote": updated})
+            fresh = await self.reservation(reservation_id)
+            self._validate_note_reservation(fresh, reservation_id)
+            if not has_ntc(fresh["guestNote"]):
+                raise HostawayError("NTC Guest Notes update was not confirmed")
+            return fresh
+
+    def _validate_note_reservation(self, raw: dict[str, Any], reservation_id: int) -> None:
+        if str(raw.get("id")) != str(reservation_id):
+            raise HostawayError("Reservation ID mismatch while updating Guest Notes")
+        if raw.get("accountId") is not None and str(raw["accountId"]) != str(self._account_id):
+            raise HostawayError("Reservation account mismatch while updating Guest Notes")
+        if "guestNote" not in raw or raw["guestNote"] is not None and not isinstance(raw["guestNote"], str):
+            raise HostawayError("Guest Notes were not returned as text; left unchanged")
 
     async def guest_messages(self, reservation_id: int) -> list[dict[str, Any]]:
         """Read only this reservation's sent messages. Bound work and fail closed if truncated."""

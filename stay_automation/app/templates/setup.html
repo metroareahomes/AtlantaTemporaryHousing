@@ -96,7 +96,8 @@ Changes are staggered, with at least the selected gap between thermostat command
   {% for key, value in daily_values.items() %}{{ number(key, value) }}{% endfor %}
   {{ checkbox("temperature_complaints_enabled", temperature_complaints_enabled) }}
   <p class="sub wide">Complaint checks read incoming Hostaway messages without AI. A pause lasts until this guest checks out.
-  Arrival preparation and vacant-home settings continue. Pauses appear on Properties.
+  Arrival preparation and vacant-home settings continue. Pauses appear on Properties. The app also adds NTC to the reservation Guest Notes.
+  Your concierge can type NTC in Guest Notes to pause the adjustment for that stay.
   If Hostaway cannot be checked, the daily reset waits. Each thermostat gets at most one adjustment attempt per day.</p>
   <button class="primary">Save daily temperature settings</button>
 </form>

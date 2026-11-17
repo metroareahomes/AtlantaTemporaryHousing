@@ -103,6 +103,13 @@ CREATE TABLE IF NOT EXISTS thermostat_stay_pauses (
     reason TEXT NOT NULL,
     paused_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS thermostat_note_updates (
+    reservation_id INTEGER PRIMARY KEY,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at TEXT NOT NULL,
+    synced_at TEXT,
+    last_error TEXT
+);
 CREATE TABLE IF NOT EXISTS thermostat_daily_checks (
     thermostat_id INTEGER NOT NULL,
     reservation_id INTEGER NOT NULL,
