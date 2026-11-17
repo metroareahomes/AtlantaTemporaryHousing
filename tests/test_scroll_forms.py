@@ -29,7 +29,8 @@ class Forms(HTMLParser):
     ("/staff", [("save-staff", "staff-save", "Save staff", "post"),
                 ("save-recipients", "recipients-save", "Save recipients", "post")]),
     ("/setup", [("save-lock-settings", "settings-save", "Save lock settings", "post"),
-                ("save-thermostat-settings", "thermostat-settings-save", "Save thermostat settings", "post")]),
+                ("save-thermostat-settings", "thermostat-settings-save", "Save thermostat settings", "post"),
+                ("save-daily-temperature-settings", "daily-temperature-settings-save", "Save daily temperature settings", "post")]),
     ("/events", []),
 ])
 def test_save_actions_keep_form_ownership(syncer, path, expected):

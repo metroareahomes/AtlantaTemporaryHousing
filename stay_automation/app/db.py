@@ -97,6 +97,20 @@ CREATE TABLE IF NOT EXISTS preview_codes (
     created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS thermostat_stay_pauses (
+    reservation_id INTEGER PRIMARY KEY,
+    source TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    paused_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS thermostat_daily_checks (
+    thermostat_id INTEGER NOT NULL,
+    reservation_id INTEGER NOT NULL,
+    local_date TEXT NOT NULL,
+    result TEXT NOT NULL,
+    PRIMARY KEY(thermostat_id, reservation_id, local_date)
+);
+
 CREATE TABLE IF NOT EXISTS thermostats (
     id INTEGER PRIMARY KEY,
     entity_id TEXT NOT NULL UNIQUE,

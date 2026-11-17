@@ -18,6 +18,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from .matching import match_lock
+from .daily_temperature import DEFAULTS as DAILY_DEFAULTS, StayTemperaturePauses, current_stay, daily_call
 
 log = logging.getLogger(__name__)
 
@@ -154,6 +155,9 @@ class ClimateManager:
         self.ha = syncer.ha
         self.alert = alert  # LockManager.alert: same recipients, same once-only keys
         self.verify_delay = VERIFY_DELAY_SECONDS
+        self._run_lock = asyncio.Lock()
+        self.daily_pauses = StayTemperaturePauses(syncer, alert)
+        syncer.temperature_pauses = self.daily_pauses
 
     def cfg(self) -> dict[str, int]:
         return {k: self.db.get_int(k, v) for k, v in DEFAULTS.items()}
@@ -245,6 +249,10 @@ class ClimateManager:
         return await self._run(property_id)
 
     async def _run(self, property_id: int | None) -> int:
+        async with self._run_lock:
+            return await self._run_locked(property_id)
+
+    async def _run_locked(self, property_id: int | None) -> int:
         await self.refresh()
         now = self.s.now()
         cfg = self.cfg()
@@ -290,7 +298,7 @@ class ClimateManager:
             self._remember_occupied(t, occupying["id"])
             self.db.log("thermostat.adopted", f"{t['name']}: stay already under way, left as it is",
                         property_id=t["property_id"])
-            return "skip"
+            return await self._daily(t, now, allow_write)
         # This stay was already set (including the 3 hours before check-in). A settings save used to
         # clear last_mode and the next pass then switched occupied homes to cool and rewrote the
         # temperature. Never send mode or temperature again for a reservation we already handled.
@@ -299,7 +307,7 @@ class ClimateManager:
                 self._remember_occupied(t, occupying["id"])
                 self.db.log("thermostat.adopted", f"{t['name']}: stay already under way, left as it is",
                             property_id=t["property_id"])
-            return "skip"
+            return await self._daily(t, now, allow_write)
         if not should_apply(mode, t["last_mode"], last_applied, now, cfg["vacant_reset_hour"],
                             occupying["id"] if occupying else None, t.get("last_reservation_id")):
             return "skip"
@@ -370,6 +378,80 @@ class ClimateManager:
         self._recorded(t, mode, target, summer, already=False,
                        reservation_id=occupying["id"] if occupying else None)
         return "write"
+
+    async def _daily(self, t: dict[str, Any], now: datetime, allow_write: bool) -> str:
+        if not self.db.get_bool("occupied_reset_enabled"):
+            return "skip"
+        r = current_stay(self.s.reservations_for(t["property_id"]), now)
+        hour = self.db.get_int("occupied_reset_hour", DAILY_DEFAULTS["occupied_reset_hour"])
+        scheduled = now.replace(hour=hour, minute=0, second=0, microsecond=0)
+        # Guests arriving after today's reset time first qualify tomorrow; arrival comfort is separate.
+        if not r or now < scheduled or datetime.fromisoformat(r["check_in_at"]) > scheduled:
+            return "skip"
+        key = (t["id"], r["id"], now.date().isoformat())
+        if self.db.one("SELECT 1 FROM thermostat_daily_checks WHERE thermostat_id=? AND reservation_id=? AND local_date=?", key):
+            return "skip"
+        if self.daily_pauses.paused(r["id"]):
+            return "skip"
+        cfg = self.cfg()
+        summer = is_summer(now.date(), cfg["summer_start_month"], cfg["summer_end_month"])
+        name = "daily_summer" if summer else "daily_winter"
+        target = self.db.get_int(name, DAILY_DEFAULTS[name])
+        call = daily_call(t, target, summer)
+        if call and not allow_write:
+            return "skip"
+        if call and t.get("retry_after") and datetime.fromisoformat(t["retry_after"]) > now:
+            return "skip"
+        if not await self.daily_pauses.check(r, force=bool(call)):
+            return "skip"
+        # Recheck assignment, automation, reservation and pause after Hostaway I/O.
+        home = self.db.one("SELECT active, thermostat_automation FROM properties WHERE id=?", (t["property_id"],))
+        live = self.db.one("SELECT property_id FROM thermostats WHERE id=?", (t["id"],))
+        active = current_stay(self.s.reservations_for(t["property_id"]), self.s.now())
+        if (not home or not home["active"] or not home["thermostat_automation"] or not live
+                or live["property_id"] != t["property_id"] or not active or active["id"] != r["id"]
+                or self.daily_pauses.paused(r["id"]) or not self.db.get_bool("occupied_reset_enabled")):
+            return "skip"
+        if call:
+            try:
+                fresh = await self._read(t["entity_id"])
+            except Exception:
+                return "skip"  # one failing HA read must not prevent other homes' normal control
+            if not fresh or fresh.get("state") in OFFLINE_STATES:
+                return "skip"
+            call = daily_call(fresh, target, summer)  # respect guest changes while checking Hostaway
+        active = current_stay(self.s.reservations_for(t["property_id"]), self.s.now())
+        home = self.db.one("SELECT active, thermostat_automation FROM properties WHERE id=?", (t["property_id"],))
+        live = self.db.one("SELECT property_id FROM thermostats WHERE id=?", (t["id"],))
+        if (not active or active["id"] != r["id"] or self.daily_pauses.paused(r["id"])
+                or not home or not home["active"] or not home["thermostat_automation"]
+                or not live or live["property_id"] != t["property_id"]
+                or not self.db.get_bool("occupied_reset_enabled")
+                or self.db.get_int(name, DAILY_DEFAULTS[name]) != target):
+            return "skip"
+        if not call:
+            self.db.execute("INSERT OR IGNORE INTO thermostat_daily_checks VALUES(?, ?, ?, 'left alone')", key)
+            self.db.log("thermostat.daily_unchanged", f"{t['name']}: daily check left the guest's setting alone.",
+                        property_id=t["property_id"], reservation_id=r["id"])
+            return "record"
+        # Persist BEFORE sending: restart/timeout must not result in another adjustment that day.
+        self.db.execute("INSERT INTO thermostat_daily_checks VALUES(?, ?, ?, 'attempted')", key)
+        error = None
+        try:
+            await self.ha.set_temperature(t["entity_id"], **call)
+        except Exception as exc:
+            error = type(exc).__name__
+        await asyncio.sleep(self.verify_delay)
+        try:
+            fresh = await self._read(t["entity_id"])
+            confirmed = bool(fresh and fresh.get("state") not in OFFLINE_STATES and took_effect(call, fresh))
+        except Exception:
+            confirmed = False
+        result = "confirmed" if confirmed else "unconfirmed"
+        self.db.execute("UPDATE thermostat_daily_checks SET result=? WHERE thermostat_id=? AND reservation_id=? AND local_date=?", (result, *key))
+        self.db.log("thermostat.daily_reset", f"{t['name']}: daily {'summer' if summer else 'winter'} limit {target}°F; {result}" + (f" ({error})" if error else ""),
+                    level="info" if confirmed else "warning", property_id=t["property_id"], reservation_id=r["id"])
+        return "write"  # includes uncertain attempts: they consume the same cloud-write budget
 
     def _remember_occupied(self, t: dict[str, Any], reservation_id: int) -> None:
         self.db.execute(

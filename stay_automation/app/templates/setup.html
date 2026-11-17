@@ -86,6 +86,21 @@
 </form>
 </section>
 <section class="panel">
+<h2>Daily temperature check while guests are staying</h2>
+<p class="sub">Optional. Once a day, lower heating that is too high or raise cooling that is too low.
+Already reasonable settings are left alone. Uses the summer and winter months above.
+Guests who arrive after the daily check time first qualify the next day.</p>
+<form method="post" action="daily-temperature-settings-save" id="save-daily-temperature-settings" data-save-label="Save daily temperature settings" class="stack cols">
+  {{ checkbox("occupied_reset_enabled", occupied_reset_enabled) }}
+  {% for key, value in daily_values.items() %}{{ number(key, value) }}{% endfor %}
+  {{ checkbox("temperature_complaints_enabled", temperature_complaints_enabled) }}
+  <p class="sub wide">Complaint checks read incoming Hostaway messages without AI. A pause lasts until this guest checks out.
+  Arrival preparation and vacant-home settings continue. Pauses appear on Properties.
+  If Hostaway cannot be checked, the daily reset waits. Each thermostat gets at most one adjustment attempt per day.</p>
+  <button class="primary">Save daily temperature settings</button>
+</form>
+</section>
+<section class="panel">
 <h2>Include a thermostat from Honeywell Lyric</h2>
 <p class="sub">Choose individual devices here. They will need a manual property assignment before this app controls them.</p>
 <form method="post" action="additional-thermostats-save" class="stack cols">

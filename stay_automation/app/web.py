@@ -19,6 +19,7 @@ from .climate import (
     DEFAULTS as CLIMATE_DEFAULTS, LABELS as CLIMATE_LABELS, RANGES as CLIMATE_RANGES,
     TOLERANCE, is_summer, occupancy, occupying_reservation, setpoint,
 )
+from .daily_temperature import DEFAULTS as DAILY_DEFAULTS, RANGES as DAILY_RANGES, current_stay
 from .hostaway import HostawayError
 from .locks import DEFAULT_GUEST_MESSAGE, DEFAULTS, LockManager, _utc, add_time, new_backup_code
 from .reservations import code_status, property_state, within
@@ -402,6 +403,8 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None) 
                 therm_by_property.setdefault(t["property_id"], []).append(t)
         gaps = []
         for prop in props:
+            stay = current_stay(syncer.reservations_for(prop["id"]), syncer.now())
+            prop["daily_pause"] = (db.one("SELECT * FROM thermostat_stay_pauses WHERE reservation_id=?", (stay["id"],)) if stay else None)
             prop["lock_list"] = by_property.get(prop["id"], [])
             prop["therm_list"] = therm_by_property.get(prop["id"], [])
             if not prop["active"]:
@@ -785,6 +788,9 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None) 
             is_addon=syncer.settings.is_addon,
             lock_guest=[(k, SETTING_LABELS[k], db.get_int(k, DEFAULTS[k])) for k in LOCK_GUEST_KEYS],
             lock_advanced=[(k, SETTING_LABELS[k], db.get_int(k, DEFAULTS[k])) for k in LOCK_ADVANCED_KEYS],
+            daily_values={k: db.get_int(k, v) for k, v in DAILY_DEFAULTS.items()},
+            occupied_reset_enabled=db.get_bool("occupied_reset_enabled"),
+            temperature_complaints_enabled=db.get_bool("temperature_complaints_enabled", True),
             climate_guest=[(k, CLIMATE_LABELS[k], db.get_int(k, CLIMATE_DEFAULTS[k])) for k in CLIMATE_GUEST_KEYS],
             climate_months=[(k, CLIMATE_LABELS[k], db.get_int(k, CLIMATE_DEFAULTS[k])) for k in CLIMATE_MONTH_KEYS],
             climate_advanced=[(k, CLIMATE_LABELS[k], db.get_int(k, CLIMATE_DEFAULTS[k])) for k in CLIMATE_ADVANCED_KEYS],
@@ -834,6 +840,25 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None) 
             db.execute("DELETE FROM thermostats WHERE entity_id=?", (eid,))
         db.log("settings.saved", "Extra thermostat selection saved; manual property assignment required")
         return _done("setup", "Extra thermostat selection saved. Assign new devices on Properties.")
+
+    @app.post("/daily-temperature-settings-save")
+    async def daily_temperature_settings_save(request: Request):
+        form = await request.form()
+        values = {}
+        for key, (low, high) in DAILY_RANGES.items():
+            raw = str(form.get(key, "")).strip()
+            if not raw.isdigit() or not low <= int(raw) <= high:
+                raise HTTPException(400, f"{SETUP_FIELDS[key]['label']}: enter a whole number from {low} to {high}")
+            values[key] = int(raw)
+        if values["daily_winter"] >= values["daily_summer"]:
+            raise HTTPException(400, "Winter heating must be lower than summer cooling")
+        for key, value in values.items():
+            db.set_setting(key, str(value))
+        db.set_setting("temperature_complaints_enabled", "1" if "temperature_complaints_enabled" in form else "0")
+        # Enable last, after all validated settings have been saved. Existing daily records and pauses stay.
+        db.set_setting("occupied_reset_enabled", "1" if "occupied_reset_enabled" in form else "0")
+        db.log("settings.saved", "Daily occupied temperature settings saved")
+        return _done("setup", "Daily temperature settings saved")
 
     @app.post("/thermostat-settings-save")
     async def thermostat_settings_save(request: Request):

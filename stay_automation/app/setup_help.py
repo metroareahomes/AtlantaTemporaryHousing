@@ -182,3 +182,42 @@ SETUP_FIELDS = {
         "example": "climate.livingroom_thermostat"
     }
 }
+
+SETUP_FIELDS.update({
+    "occupied_reset_enabled": {
+        "label": "Check occupied-home temperatures once a day",
+        "brief": "Turn this on to gently limit high heating or low cooling while guests are staying.",
+        "more": "Off by default. Each thermostat is checked once per day after the hour below. A reasonable setting is left alone. This does not change arrival or vacant temperatures.",
+        "example": "Summer cooling at 68°F becomes 73°F; cooling at 75°F stays at 75°F."
+    },
+    "daily_winter": {
+        "label": "Winter: highest reasonable heating setting (°F)",
+        "brief": "Lower the heating setting to this number only when it is higher. Default: 70°F.",
+        "more": "This is the thermostat setting, not the measured room temperature. Uses your winter months. Settings at or below this number are left alone.",
+        "example": "At 70°F: heating set to 75°F becomes 70°F; heating set to 68°F stays 68°F."
+    },
+    "daily_summer": {
+        "label": "Summer: lowest reasonable cooling setting (°F)",
+        "brief": "Raise the cooling setting to this number only when it is lower. Default: 73°F.",
+        "more": "This is the thermostat setting, not the measured room temperature. Uses your summer months. Settings at or above this number are left alone.",
+        "example": "At 73°F: cooling set to 68°F becomes 73°F; cooling set to 75°F stays 75°F."
+    },
+    "occupied_reset_hour": {
+        "label": "Daily occupied-home check hour (0–23)",
+        "brief": "Choose a whole hour using the local schedule. Default: 11 AM.",
+        "more": "The next normal thermostat pass after this hour checks homes already occupied at this hour. Guests arriving later first qualify tomorrow. Saving again does not repeat today's adjustment.",
+        "example": "11 = 11 AM; 14 = 2 PM."
+    },
+    "temperature_complaints_enabled": {
+        "label": "Pause daily resets when a guest complains about temperature",
+        "brief": "Read incoming messages for temperature complaints, without AI tokens.",
+        "more": "Keyword rules are imperfect. A match pauses only this reservation's daily reset until checkout, including extensions. Staff and outgoing messages are ignored. New guests start fresh.",
+        "example": "The thermostat keeps resetting, please stop changing it."
+    },
+    "temperature_pause_field_id": {
+        "label": "Hostaway field number for pausing daily resets",
+        "brief": "Optional: enter the ID of a private reservation field. Use 0 to leave it unconnected.",
+        "more": "Create a private reservation text field in Hostaway named Pause daily temperature reset. Put YES in it to pause this stay. Use its numeric field ID here, not its name. The app reads this field; complaint pauses are saved inside this app. Once paused, a stay remains paused through checkout.",
+        "example": "If the field ID is 167, enter 167 here. Staff can then enter YES on a reservation."
+    }
+})

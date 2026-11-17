@@ -97,11 +97,35 @@ class HostawayClient:
 
     async def reservations(self, departing_from: str) -> list[dict[str, Any]]:
         """All reservations that depart on or after the given date (YYYY-MM-DD)."""
-        return await self._paged("/reservations", {"departureStartDate": departing_from})
+        return await self._paged("/reservations", {"departureStartDate": departing_from, "includeResources": 1})
 
     async def reservation(self, reservation_id: int) -> dict[str, Any]:
-        body = await self._request("GET", f"/reservations/{reservation_id}")
+        body = await self._request("GET", f"/reservations/{reservation_id}", params={"includeResources": 1})
         return body["result"]
+
+    async def guest_messages(self, reservation_id: int) -> list[dict[str, Any]]:
+        """Read only this reservation's sent messages. Bound work and fail closed if truncated."""
+        found = await self._request("GET", "/conversations", params={"reservationId": reservation_id, "limit": 100})
+        conversations = found.get("result") or []
+        if len(conversations) >= 100:
+            raise HostawayError("Too many conversations to safely scan")
+        messages = []
+        for c in conversations:
+            if str(c.get("reservationId")) != str(reservation_id):
+                continue
+            if str(c.get("accountId")) != str(self._account_id):
+                raise HostawayError("Conversation account mismatch")
+            for offset in range(0, 1000, 100):
+                await asyncio.sleep(0.25)  # pace read-only requests across occupied homes
+                body = await self._request("GET", f"/conversations/{int(c['id'])}/messages",
+                                           params={"limit": 100, "offset": offset, "includeScheduledMessages": 0})
+                page = body.get("result") or []
+                messages.extend(page)
+                if len(page) < 100:
+                    break
+            else:
+                raise HostawayError("Message scan reached its safety limit")
+        return messages
 
     async def send_guest_message(self, reservation_id: int, body: str) -> None:
         """Post a message into the guest's conversation (goes out on the booking channel)."""

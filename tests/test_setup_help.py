@@ -4,6 +4,7 @@ from html.parser import HTMLParser
 from fastapi.testclient import TestClient
 
 from app.setup_help import SETUP_FIELDS
+from app.daily_temperature import DEFAULTS as DAILY_DEFAULTS
 from app.web import create_app
 from app.locks import DEFAULTS as LOCK_DEFAULTS
 from app.climate import DEFAULTS as CLIMATE_DEFAULTS
@@ -52,7 +53,8 @@ def page(syncer):
 
 def test_every_setup_control_has_named_help_and_a_visible_hint(syncer):
     html, parsed = page(syncer)
-    expected = set(LOCK_DEFAULTS) | set(CLIMATE_DEFAULTS) | {
+    expected = set(LOCK_DEFAULTS) | set(CLIMATE_DEFAULTS) | set(DAILY_DEFAULTS) | {
+        "occupied_reset_enabled", "temperature_complaints_enabled",
         "public_url", "addon_slug", "register_hostaway", "alert_service",
         "backup_codes_enabled", "guest_messages_enabled", "guest_message", "lyric_climate_entities"}
     assert set(SETUP_FIELDS) == expected == set(parsed.controls)
@@ -91,8 +93,8 @@ def test_help_keeps_existing_form_routes_and_does_not_add_submit_buttons(syncer)
     html, parsed = page(syncer)
     assert parsed.forms == [
         ("post", "sync"), ("post", "setup-webhook"), ("post", "settings-save"),
-        ("post", "thermostat-settings-save"), ("post", "additional-thermostats-save"), ("post", "test-alert")]
-    assert html.count("<button") == 6
+        ("post", "thermostat-settings-save"), ("post", "daily-temperature-settings-save"), ("post", "additional-thermostats-save"), ("post", "test-alert")]
+    assert html.count("<button") == 7
     assert html.count('class="field-help"') == len(SETUP_FIELDS)
     assert "Save your alert destination above" in html
 
