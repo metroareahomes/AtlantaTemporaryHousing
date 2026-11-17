@@ -415,3 +415,12 @@ def test_one_outbound_ha_target_does_not_recreate_the_admin_notice():
     c = HAClient('https://mock','token',http=httpx.AsyncClient(base_url='https://mock',transport=httpx.MockTransport(handler)))
     run(c.notify_target('Title','body','notify.mobile_app_kurt'))
     assert calls == ['/api/services/notify/mobile_app_kurt']
+
+
+def test_unrelated_home_assistant_reauth_is_not_a_rental_owner_alert(service):
+    recipient(service,'Mike,Kurt',types='integration')
+    async def entries():
+        return [{'entry_id':'music','flow_id':'f','domain':'spotify','title':'Personal music','entities':[]}]
+    service.ha.reauthorization_entries=entries
+    run(service.integrations())
+    assert not service.db.one('SELECT 1 FROM staff_alert_events')

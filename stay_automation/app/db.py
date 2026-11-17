@@ -87,6 +87,7 @@ CREATE TABLE IF NOT EXISTS staff_alert_deliveries (
     last_error TEXT,
     UNIQUE(event_key,channel,destination)
 );
+CREATE INDEX IF NOT EXISTS staff_alert_due ON staff_alert_deliveries(status,channel,next_attempt_at);
 CREATE TABLE IF NOT EXISTS alerts_sent (
     key TEXT PRIMARY KEY,
     at TEXT NOT NULL

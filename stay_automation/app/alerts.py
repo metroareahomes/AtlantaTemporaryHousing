@@ -263,6 +263,8 @@ class AlertService:
                     r = self.db.one(f'SELECT property_id FROM {table} WHERE entity_id=?', (eid,))
                     if r and r['property_id']:
                         pids.add(r['property_id'])
+            if not pids and entry['domain'] not in ('schlage', 'resideo', 'lyric'):
+                continue
             await self.emit(f"Reauthorize {entry['domain']}: {entry['title']}",
                             f"Home Assistant requests reauthorization for integration account {entry['title']} ({entry['domain']}, entry {entry['entry_id']}). Open Settings > Devices & services and reauthorize that account. Affected homes and owner scope are listed below.",
                             key=f"reauth:{entry['entry_id']}:{entry['flow_id']}", category='integration', property_ids=sorted(pids))
