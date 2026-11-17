@@ -424,3 +424,24 @@ def test_unrelated_home_assistant_reauth_is_not_a_rental_owner_alert(service):
     service.ha.reauthorization_entries=entries
     run(service.integrations())
     assert not service.db.one('SELECT 1 FROM staff_alert_events')
+
+
+def test_hostaway_listing_reads_attach_tag_resources():
+    from app.hostaway import HostawayClient
+    calls = []
+    def handler(req):
+        calls.append(req)
+        return httpx.Response(200,json={'status':'success','result':[]})
+    c = HostawayClient('1','unused',load_token=lambda:'cached',http=httpx.AsyncClient(base_url='https://mock',transport=httpx.MockTransport(handler)))
+    run(c.listings())
+    assert len(calls)==1 and calls[0].url.params['includeResources']=='1'
+
+
+def test_configuration_database_and_wal_are_private(tmp_path):
+    import os
+    path = tmp_path / 'stay.db'
+    db = DB(str(path))
+    db.set_setting('smtp_password','local-test-only')
+    for candidate in (path, tmp_path/'stay.db-wal',tmp_path/'stay.db-shm'):
+        if candidate.exists():
+            assert os.stat(candidate).st_mode & 0o077 == 0

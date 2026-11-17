@@ -146,7 +146,8 @@ class AlertService:
         if not testing and not event['items'] and recipient is not None and not self._allowed(recipient, event['category'], ''):
             return None
         message = event['message'] if event['category'] != 'arrivals' else f'{len(items)} arrivals today for your selected homes.'
-        lines = [event['title'], f"Category: {CATEGORIES[event['category']]}", f"Reported: {event['at']}", '', message]
+        scope = ', '.join(sorted({item['owner'] for item in items if item['owner']})) or 'System / unconfirmed owner'
+        lines = [event['title'], f'Owner scope: {scope}', f"Category: {CATEGORIES[event['category']]}", f"Reported: {event['at']}", '', message]
         for item in items:
             lines += ['', *item['lines']]
             if item.get('detail'):
