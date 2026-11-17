@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.21 — email test validation and delayed thermostat verification
+
+- Show a helpful message when no saved active recipient is selected instead of a raw validation error.
+- Require a saved recipient selection before sending a test.
+- Recheck a mismatched thermostat target after another 40 seconds (about one minute total) before recording failure; send no additional temperature command or forced cloud refresh.
+- Preserve existing retry timing, lock scheduling and guest access behavior.
+
+Known issue: the reauthorization monitor can exceed the WebSocket response-size limit on large inventories. This release does not change that monitor.
+
+
 ## 0.6.20 — owner-scoped staff email alerts
 
 - Add recipient names, email addresses, Mike/Kurt/both selections, interruption categories and individual tests.
