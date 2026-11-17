@@ -2,7 +2,7 @@
 {% block body %}
 <div class="page-head"><h1>Staff</h1><p>Lock codes for staff, visitors, and who gets alerted.</p></div>
 <div class="narrow">
-<form method="post" action="staff-save">
+<form method="post" action="staff-save" id="save-staff" data-save-label="Save staff">
 <section class="panel">
 <h2>Staff lock codes</h2>
 <p class="sub">Permanent 4-digit codes pushed to every home with lock automation on.
@@ -10,7 +10,7 @@
   Names must not start with HA-.</p>
 <div class="scroll">
 <table>
-  <thead><tr><th>Name</th><th>Code</th><th>Active</th></tr></thead>
+  <thead><tr><th scope="col">Name</th><th scope="col">Code</th><th scope="col">Active</th></tr></thead>
   <tbody>
   {% for s in staff %}
     <tr>
@@ -37,7 +37,7 @@
   automatically when the time is up. Leave the code blank to have one picked. Only homes with Lock automation ticked are listed.</p>
 <div class="scroll">
 <table>
-  <thead><tr><th>Home</th><th>Visitor</th><th>Code</th><th>Expires</th><th></th></tr></thead>
+  <thead><tr><th scope="col">Home</th><th scope="col">Visitor</th><th scope="col">Code</th><th scope="col">Expires</th><th scope="col"></th></tr></thead>
   <tbody>
   {% for v in previews %}
     <tr>
@@ -62,7 +62,7 @@
 </form>
 </section>
 
-<form method="post" action="recipients-save">
+<form method="post" action="recipients-save" id="save-recipients" data-save-label="Save recipients">
 <section class="panel">
 <h2>Alert recipients</h2>
 <p class="sub">Extra Home Assistant notify targets for lock failures, missing guest codes and the daily arrivals report.
@@ -70,7 +70,7 @@
   set up in Home Assistant first). The optional Setup “Alert also through” service is included too.</p>
 <div class="scroll">
 <table>
-  <thead><tr><th>Name</th><th>Notify target</th><th>Active</th></tr></thead>
+  <thead><tr><th scope="col">Name</th><th scope="col">Notify target</th><th scope="col">Active</th></tr></thead>
   <tbody>
   {% for r in recipients %}
     <tr>

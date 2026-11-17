@@ -1,6 +1,6 @@
 {% extends "base.html" %}{% set active = 'properties' %}
 {% block body %}
-<form method="post" action="properties-save" class="narrow">
+<form method="post" action="properties-save" class="narrow" id="save-properties" data-save-label="Save properties">
 <div class="page-head">
   <h1>Properties</h1>
   <p>Lock automation is on for {{ automation.locks }} of {{ automation.homes }} homes.
@@ -30,7 +30,7 @@
 <input id="find-home" type="search" placeholder="Search homes" aria-label="Search homes">
 <div class="scroll">
 <table class="homes-table">
-  <thead><tr><th>Home</th><th>Devices</th><th class="c">Lock auto</th><th class="c">Thermostat auto</th><th>Backup code</th><th class="c">Active</th></tr></thead>
+  <thead><tr><th scope="col">Home</th><th scope="col">Devices</th><th scope="col" class="c">Lock auto</th><th scope="col" class="c">Thermostat auto</th><th scope="col">Backup code</th><th scope="col" class="c">Active</th></tr></thead>
   <tbody>
   {% for p in properties %}
   <tr class="home {{ '' if p.active else 'inactive' }}" id="home-{{ p.id }}" data-name="{{ p.name|lower }}">
@@ -75,7 +75,7 @@
 {% if open_locks or open_thermostats %}
 <div class="scroll">
 <table>
-  <thead><tr><th>Device</th><th>State</th><th>Property</th></tr></thead>
+  <thead><tr><th scope="col">Device</th><th scope="col">State</th><th scope="col">Property</th></tr></thead>
   <tbody>
   {% for l in open_locks %}
     <tr class="problem">
@@ -111,7 +111,7 @@
   <p class="sub">Correct a match here. Your choice sticks.</p>
   <div class="scroll">
   <table>
-    <thead><tr><th>Device</th><th>State</th><th>Property</th><th>Matched</th></tr></thead>
+    <thead><tr><th scope="col">Device</th><th scope="col">State</th><th scope="col">Property</th><th scope="col">Matched</th></tr></thead>
     <tbody>
     {% for l in locks if l.property_id %}
       <tr>

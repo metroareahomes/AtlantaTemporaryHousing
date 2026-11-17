@@ -30,7 +30,7 @@
 <p class="sub">Applies to the {{ automated }} homes with Lock automation ticked on Properties. Hostaway's own lock automation
   stays on, and a code it already put in the lock counts as present. Codes we add are named HA-&lt;guest name&gt;;
   nothing else is touched. Staff codes and alert recipients are on the Staff page.</p>
-<form method="post" action="settings-save" class="stack cols">
+<form method="post" action="settings-save" id="save-lock-settings" data-save-label="Save lock settings" class="stack cols">
   {% for key, label, value in lock_guest %}
   {{ number(key, value) }}
   {% endfor %}
@@ -58,7 +58,7 @@
 <h2>Thermostat automation</h2>
 <p class="sub">Applies to the {{ thermostat_homes }} homes with Thermostat automation ticked on Properties. Summer uses cool,
   winter uses heat. A home goes to the occupied temperature before check-in and the vacant one after check-out.</p>
-<form method="post" action="thermostat-settings-save" class="stack cols">
+<form method="post" action="thermostat-settings-save" id="save-thermostat-settings" data-save-label="Save thermostat settings" class="stack cols">
   {% for key, label, value in climate_guest %}
   {{ number(key, value) }}
   {% endfor %}
