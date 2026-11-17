@@ -46,8 +46,8 @@ CODE_LABELS = {
 BOARD_SHOWS = {"attention", "arriving", "departing", "occupied", "vacant", "all"}
 MONTH_NAMES = ["", "January", "February", "March", "April", "May", "June",
                "July", "August", "September", "October", "November", "December"]
-LOCK_GUEST_KEYS = ("add_hour", "early_lead_hours", "final_check_minutes")
-LOCK_ADVANCED_KEYS = ("afternoon_check_hour", "retry_minutes", "daily_check_hour", "report_hour", "stale_check_minutes")
+LOCK_GUEST_KEYS = ("final_check_minutes",)
+LOCK_ADVANCED_KEYS = ("retry_minutes", "daily_check_hour", "report_hour", "stale_check_minutes")
 CLIMATE_GUEST_KEYS = ("occ_summer", "occ_winter", "vac_summer", "vac_winter", "therm_lead_hours", "therm_lag_hours")
 CLIMATE_MONTH_KEYS = ("summer_start_month", "summer_end_month")
 CLIMATE_ADVANCED_KEYS = (
@@ -799,7 +799,10 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None) 
     @app.post("/settings-save")
     async def settings_save(request: Request):
         form = await request.form()
-        for key, default in DEFAULTS.items():
+        lead = str(form.get("final_check_minutes", "")).strip()
+        if not lead.isdigit() or not 0 <= int(lead) <= 1440:
+            raise HTTPException(400, "Check guest access before arrival: enter 0 to 1440 minutes")
+        for key in LOCK_GUEST_KEYS + LOCK_ADVANCED_KEYS:
             value = str(form.get(key, "")).strip()
             if value.isdigit():
                 db.set_setting(key, value)
@@ -813,6 +816,9 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None) 
             raise HTTPException(400, "Guest message may only use {guest}, {property} and {code}")
         db.set_setting("guest_message", message)
         db.execute("UPDATE locks SET next_check_at = NULL")
+        if syncer.on_locks:
+            for row in db.query("SELECT id FROM properties WHERE active=1 AND lock_automation=1"):
+                syncer.on_locks(row["id"])
         db.log("settings.saved", "Lock automation settings saved")
         return _done("setup", "Lock settings saved")
 

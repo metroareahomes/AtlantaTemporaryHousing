@@ -76,14 +76,8 @@ def _dt(iso: str) -> datetime:
 
 
 def add_time(r: dict[str, Any], add_hour: int, lead_hours: int, final_minutes: int = 60) -> datetime:
-    """When the guest code should first go in: 8 AM arrival day, or earlier for morning check-ins.
-    Never later than the final check (1 hour before check-in). A same-day booking made after 3 PM
-    lands in that window; waiting until add_hour would only look at the lock and text the guest."""
-    check_in = _dt(r["check_in_at"])
-    morning = datetime.combine(check_in.date(), time(add_hour), check_in.tzinfo)
-    by_lead = check_in - timedelta(hours=lead_hours)
-    by_final = check_in - timedelta(minutes=final_minutes)
-    return min(morning, by_lead, by_final)
+    """Arrival time minus the configured minutes. Old hour arguments are ignored for compatibility."""
+    return _dt(r["check_in_at"]) - timedelta(minutes=final_minutes)
 
 
 def slot_names(reservations: list[dict[str, Any]], add_hour: int, lead_hours: int,
@@ -104,8 +98,12 @@ def slot_names(reservations: list[dict[str, Any]], add_hour: int, lead_hours: in
     for r in live:
         start, end = add_time(r, add_hour, lead_hours, final_minutes), _dt(r["check_out_at"])
         legacy = f"{PREFIX}{r['id']}"
+        existing = next((n for n, c in (actual or {}).items() if c == r["door_code"]
+                         and n.startswith(PREFIX) and n != BACKUP_NAME and not n.startswith("HA-Preview")), None)
         if actual is not None and actual.get(legacy) == r["door_code"]:
             names[r["id"]] = legacy
+        elif existing:
+            names[r["id"]] = existing
         else:
             taken = {n for n, s, e in windows if s < end and start < e}
             names[r["id"]] = code_name(r, taken)
@@ -122,7 +120,9 @@ def desired_codes(reservations: list[dict[str, Any]], now: datetime, add_hour: i
     names = slot_names(reservations, add_hour, lead_hours, actual, final_minutes)
     for r in reservations:
         if (r["active"] and r["door_code"]
-                and add_time(r, add_hour, lead_hours, final_minutes) <= now < _dt(r["check_out_at"])):
+                and now < _dt(r["check_out_at"])
+                and (add_time(r, add_hour, lead_hours, final_minutes) <= now
+                     or (actual or {}).get(names[r["id"]]) == r["door_code"])):
             out[names[r["id"]]] = r["door_code"]
     if backup_code:
         out[BACKUP_NAME] = backup_code
@@ -203,15 +203,12 @@ def next_check(reservations: list[dict[str, Any]], now: datetime, cfg: dict[str,
         if not r["active"]:
             continue
         check_in = _dt(r["check_in_at"])
-        afternoon = datetime.combine(check_in.date(), time(cfg["afternoon_check_hour"]), check_in.tzinfo)
         times = [
             add_time(r, cfg["add_hour"], cfg["early_lead_hours"], cfg["final_check_minutes"]),
             check_in - timedelta(minutes=cfg["final_check_minutes"]),
             _dt(r["check_out_at"]),
             _dt(r["check_out_at"]) + timedelta(minutes=cfg["stale_check_minutes"]),
         ]
-        if afternoon < check_in:
-            times.append(afternoon)
         candidates += [t for t in times if t > now]
     candidates += [t for t in extra or [] if t > now]
     return min(candidates)
@@ -219,7 +216,7 @@ def next_check(reservations: list[dict[str, Any]], now: datetime, cfg: dict[str,
 
 def in_final_window(r: dict[str, Any], now: datetime, final_minutes: int) -> bool:
     check_in = _dt(r["check_in_at"])
-    return r["active"] and check_in - timedelta(minutes=final_minutes) <= now < check_in + timedelta(hours=6)
+    return r["active"] and check_in - timedelta(minutes=final_minutes) <= now < _dt(r["check_out_at"])
 
 
 def new_backup_code(taken: Callable[[str], bool]) -> str:
@@ -243,6 +240,10 @@ class LockManager:
         self.gap = GAP_BETWEEN_LOCKS_SECONDS
         self.max_per_tick = MAX_LOCKS_PER_TICK
         self.read_error = ""
+        self._wake = asyncio.Event()
+        self._urgent: set[int] = set()
+        self._reconcile_lock = asyncio.Lock()
+        self._fallback_lock = asyncio.Lock()
 
     def cfg(self) -> dict[str, int]:
         return {k: self.db.get_int(k, v) for k, v in DEFAULTS.items()}
@@ -259,6 +260,35 @@ class LockManager:
 
     # ---- main loop ----------------------------------------------------------
 
+    def wake_property(self, property_id: int) -> None:
+        self._urgent.add(property_id)
+        self._wake.set()
+
+    async def run(self) -> None:
+        """Wake at the next scheduled check, or immediately when Hostaway changes a stay."""
+        while True:
+            self._wake.clear()
+            try:
+                await self.tick()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("lock automation failed")
+                self.db.log("lock_automation.failed", "Lock automation failed; next pass will retry", level="error")
+            now = self.s.now()
+            next_row = self.db.one(
+                "SELECT MIN(l.next_check_at) AS next_at FROM locks l JOIN properties p ON p.id=l.property_id "
+                "WHERE p.active=1 AND p.lock_automation=1 AND l.next_check_at > ?", (_utc(now),))
+            delay = 300.0
+            if next_row and next_row["next_at"]:
+                delay = min(delay, max(1, (_dt(next_row["next_at"]) - now).total_seconds()))
+            if self._urgent:
+                delay = 1
+            try:
+                await asyncio.wait_for(self._wake.wait(), timeout=delay)
+            except asyncio.TimeoutError:
+                pass
+
     async def tick(self) -> int:
         now = self.s.now()
         self._prepare_backup_codes(now)
@@ -273,14 +303,29 @@ class LockManager:
             "AND (l.next_check_at IS NULL OR l.next_check_at <= ?) ORDER BY l.next_check_at",
             (_utc(now),),
         )
+        due.sort(key=lambda l: (l["property_id"] not in self._urgent,
+                                l["next_check_at"] or ""))
         due = due[:self.max_per_tick]
         for lock in due:
             await self.reconcile(lock, self.s.now())
             await asyncio.sleep(self.gap)
+        for pid in list(self._urgent):
+            if not self.db.one("SELECT 1 FROM locks WHERE property_id=? AND next_check_at IS NULL", (pid,)):
+                self._urgent.discard(pid)
         await self.daily_report(self.s.now())
         return len(due)
 
     async def reconcile(self, lock: dict[str, Any], now: datetime) -> bool:
+        async with self._reconcile_lock:
+            current = self.db.one(
+                "SELECT l.*, p.name AS property_name, p.backup_code, p.backup_used_by, "
+                "p.lock_automation=1 AND p.active=1 AS automated FROM locks l "
+                "JOIN properties p ON p.id=l.property_id WHERE l.id=?", (lock["id"],))
+            if not current or not current["automated"]:
+                return False
+            return await self._reconcile(current, self.s.now())
+
+    async def _reconcile(self, lock: dict[str, Any], now: datetime) -> bool:
         cfg = self.cfg()
         managed = self.managed_names()
         # Claim the lock until a retry would be due. A reservation change during the slow lock calls clears
@@ -292,9 +337,30 @@ class LockManager:
         actual = await self._read(lock)
         if actual is None:
             return await self._failed(lock, now, reservations, claim, self._why("could not read the lock"), None)
+        now = self.s.now()
+        reservations = self.s.reservations_for(lock["property_id"])
         desired = self._desired(lock, reservations, now, actual, cfg)
 
         first = plan(desired, actual, managed)
+        names = slot_names(reservations, cfg["add_hour"], cfg["early_lead_hours"], actual,
+                           cfg["final_check_minutes"])
+        guests = {names[r["id"]]: r for r in reservations if r["id"] in names
+                  and in_final_window(r, now, cfg["final_check_minutes"])}
+        guest_names = set(guests)
+        for name in list(first.add):
+            r = guests.get(name)
+            if r is None:
+                continue
+            args = (lock["id"], r["id"], r["check_in_at"], self.s.code_hash(r["door_code"]))
+            if self.db.one("SELECT 1 FROM guest_code_attempts WHERE lock_id=? AND reservation_id=? "
+                           "AND check_in_at=? AND code_hash=?", args):
+                del first.add[name]
+                first.delete = [n for n in first.delete if n != name]
+            else:
+                # Save intent before a Schlage timeout or restart can make delivery ambiguous.
+                self.db.execute("INSERT INTO guest_code_attempts "
+                                "(lock_id,reservation_id,check_in_at,code_hash,attempted_at) VALUES(?,?,?,?,?)",
+                                (*args, utcnow()))
         if BACKUP_NAME in first.elsewhere:
             self._retire_backup(lock)
         if BACKUP_NAME in first.delete and BACKUP_NAME in first.add:
@@ -320,6 +386,13 @@ class LockManager:
                 self.db.log("code.removed", f"{name} removed from {lock['name']} (verified)",
                             property_id=lock["property_id"])
         self._log_present_elsewhere(lock, final.elsewhere, reservations, cfg)
+
+        if not final.ok and set(final.add).issubset(guest_names) and not final.delete:
+            error = "Guest code not confirmed after the single installation attempt"
+            self._finish(lock, claim, self._next(lock, reservations, now, cfg), 1, error)
+            self.db.log("guest.code_unconfirmed", error, level="warning", property_id=lock["property_id"])
+            await self._final_checks(lock, self.s.now(), self.s.reservations_for(lock["property_id"]), actual, error)
+            return False
 
         if not final.ok:
             problems = [f"missing {n}" for n in final.add] + [f"still has {n}" for n in final.delete]
@@ -448,10 +521,18 @@ class LockManager:
         if not lock["automated"]:
             return
         final_minutes = self.cfg()["final_check_minutes"]
+        fresh = {r["id"]: r for r in self.s.reservations_for(lock["property_id"])}
         for r in reservations:
+            r = fresh.get(r["id"], r)
             if not in_final_window(r, now, final_minutes):
                 continue
+            signature = (lock["id"], r["id"], r["check_in_at"], self.s.code_hash(r["door_code"] or ""))
+            if self.db.one("SELECT 1 FROM guest_access_checks WHERE lock_id=? AND reservation_id=? "
+                           "AND check_in_at=? AND code_hash=?", signature):
+                continue
             if actual is not None and code_present(r, actual):
+                self.db.execute("INSERT OR IGNORE INTO guest_access_checks VALUES(?,?,?,?,?)",
+                                (*signature, utcnow()))
                 continue
             if not r["door_code"]:
                 reason = "Hostaway has no door code for this booking"
@@ -460,6 +541,8 @@ class LockManager:
             else:
                 reason = "the code is not in the lock"
             await self.fallback(r, lock, reason)
+            self.db.execute("INSERT OR IGNORE INTO guest_access_checks VALUES(?,?,?,?,?)",
+                            (*signature, utcnow()))
         if actual is not None:
             await self._stale_checks(lock, now, reservations, actual)
 
@@ -482,6 +565,10 @@ class LockManager:
                     key=f"stale:{r['id']}:{lock['id']}")
 
     async def fallback(self, r: dict[str, Any], lock: dict[str, Any], reason: str) -> None:
+        async with self._fallback_lock:
+            await self._fallback(r, lock, reason)
+
+    async def _fallback(self, r: dict[str, Any], lock: dict[str, Any], reason: str) -> None:
         if self.db.one("SELECT 1 FROM guest_notices WHERE reservation_id = ?", (r["id"],)):
             return
         prop = self.db.one("SELECT * FROM properties WHERE id = ?", (lock["property_id"],))

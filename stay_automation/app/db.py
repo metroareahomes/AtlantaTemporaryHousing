@@ -61,6 +61,24 @@ CREATE TABLE IF NOT EXISTS settings (
     value TEXT
 );
 
+CREATE TABLE IF NOT EXISTS guest_access_checks (
+    lock_id INTEGER NOT NULL REFERENCES locks(id) ON DELETE CASCADE,
+    reservation_id INTEGER NOT NULL,
+    check_in_at TEXT NOT NULL,
+    code_hash TEXT NOT NULL,
+    checked_at TEXT NOT NULL,
+    PRIMARY KEY(lock_id,reservation_id,check_in_at,code_hash)
+);
+
+CREATE TABLE IF NOT EXISTS guest_code_attempts (
+    lock_id INTEGER NOT NULL REFERENCES locks(id) ON DELETE CASCADE,
+    reservation_id INTEGER NOT NULL,
+    check_in_at TEXT NOT NULL,
+    code_hash TEXT NOT NULL,
+    attempted_at TEXT NOT NULL,
+    PRIMARY KEY(lock_id, reservation_id, check_in_at, code_hash)
+);
+
 CREATE TABLE IF NOT EXISTS guest_notices (
     reservation_id INTEGER PRIMARY KEY,
     property_id INTEGER,
