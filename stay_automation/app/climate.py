@@ -156,6 +156,7 @@ class ClimateManager:
         self.alert = alert  # LockManager.alert: same recipients, same once-only keys
         self.verify_delay = VERIFY_DELAY_SECONDS
         self._run_lock = asyncio.Lock()
+        self._daily_cursor = 0
         self.daily_pauses = StayTemperaturePauses(syncer, alert)
         syncer.temperature_pauses = self.daily_pauses
 
@@ -298,7 +299,7 @@ class ClimateManager:
             self._remember_occupied(t, occupying["id"])
             self.db.log("thermostat.adopted", f"{t['name']}: stay already under way, left as it is",
                         property_id=t["property_id"])
-            return await self._daily(t, now, allow_write)
+            return "skip"  # daily resets have their own paced queue
         # This stay was already set (including the 3 hours before check-in). A settings save used to
         # clear last_mode and the next pass then switched occupied homes to cool and rewrote the
         # temperature. Never send mode or temperature again for a reservation we already handled.
@@ -307,7 +308,7 @@ class ClimateManager:
                 self._remember_occupied(t, occupying["id"])
                 self.db.log("thermostat.adopted", f"{t['name']}: stay already under way, left as it is",
                             property_id=t["property_id"])
-            return await self._daily(t, now, allow_write)
+            return "skip"  # daily resets have their own paced queue
         if not should_apply(mode, t["last_mode"], last_applied, now, cfg["vacant_reset_hour"],
                             occupying["id"] if occupying else None, t.get("last_reservation_id")):
             return "skip"
@@ -423,19 +424,16 @@ class ClimateManager:
                     pending.append(t["id"])
             if not pending:
                 return 0  # no extra HA cache reads once today's eligible queue is complete
+            # One candidate per pass bounds Hostaway outage latency and lets other homes take a turn.
+            tid = next((tid for tid in pending if tid > self._daily_cursor), pending[0])
+            self._daily_cursor = tid
             await self.refresh()  # reads HA's local cache, never requests a cloud refresh
-            changed = 0
-            for tid in pending:
-                t = self.db.one("SELECT t.*, p.name AS property_name FROM thermostats t JOIN properties p ON p.id=t.property_id "
-                                "WHERE t.id=? AND p.active=1 AND p.thermostat_automation=1", (tid,))
-                if not t or t["state"] in OFFLINE_STATES:
-                    continue
-                result = await self._daily(t, self.s.now(), True)
-                if result != "skip":
-                    changed += 1
-                if result == "write":
-                    break
-            return changed
+            t = self.db.one("SELECT t.*, p.name AS property_name FROM thermostats t JOIN properties p ON p.id=t.property_id "
+                            "WHERE t.id=? AND p.active=1 AND p.thermostat_automation=1", (tid,))
+            if not t or t["state"] in OFFLINE_STATES:
+                return 0
+            result = await self._daily(t, self.s.now(), True)
+            return int(result != "skip")
 
     async def _daily(self, t: dict[str, Any], now: datetime, allow_write: bool) -> str:
         if not self.db.get_bool("occupied_reset_enabled"):

@@ -7,7 +7,12 @@ from fastapi.testclient import TestClient
 from app.climate import ClimateManager
 from app.daily_temperature import DEFAULTS, complaint, current_stay, daily_call
 from app.web import create_app
-from test_climate import cm, at, res, tick, row
+from test_climate import cm, at, res, tick as normal_tick, row
+
+
+def tick(cm, when):
+    changed = normal_tick(cm, when)
+    return changed + queue_tick(cm, when)
 
 
 class Hostaway:
@@ -394,7 +399,9 @@ def test_reasonable_thermostat_does_not_use_cloud_slot(cm):
     enable(cm)
     second_thermostat(cm)
     cm.ha.climate['climate.maple']['target_temp'] = 75
-    assert queue_tick(cm, at('2030-06-13T10:00')) == 2
+    assert queue_tick(cm, at('2030-06-13T10:00')) == 1
+    assert cm.ha.sets == []
+    assert queue_tick(cm, at('2030-06-13T10:00:15')) == 1
     assert cm.ha.sets == [('climate.second', 73.0, None, None)]
 
 
@@ -463,3 +470,24 @@ def test_setup_spacing_validation_and_default(cm):
         assert c.post('/daily-temperature-settings-save', data=dict(DEFAULTS, occupied_reset_spacing_seconds=invalid)).status_code == 400
     assert c.post('/daily-temperature-settings-save', data=dict(DEFAULTS, occupied_reset_spacing_seconds=180)).status_code == 303
     assert cm.db.get_int('occupied_reset_spacing_seconds', 0) == 180
+
+
+def test_normal_thermostat_pass_does_not_run_hostaway_daily_checks(cm):
+    h = enable(cm)
+    h.fail = True
+    normal_tick(cm, at('2030-06-13T10:00'))
+    assert h.calls == 0 and cm.ha.sets == []
+
+
+def test_one_failed_candidate_does_not_starve_the_next_thermostat(cm):
+    enable(cm)
+    second_thermostat(cm)
+    original = cm.ha.climate_state
+    async def read(eid):
+        if eid == 'climate.maple':
+            raise RuntimeError('unreadable thermostat')
+        return await original(eid)
+    cm.ha.climate_state = read
+    assert queue_tick(cm, at('2030-06-13T10:00')) == 0
+    assert queue_tick(cm, at('2030-06-13T10:00:15')) == 1
+    assert cm.ha.sets == [('climate.second', 73.0, None, None)]
