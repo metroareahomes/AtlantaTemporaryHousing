@@ -26,6 +26,7 @@ from .locks import DEFAULT_GUEST_MESSAGE, DEFAULTS, LockManager, _utc, add_time,
 from .reservations import code_status, property_state, within
 from .sync import Syncer
 from .setup_help import SETUP_FIELDS
+from .property_sheet import PropertySheet, valid_endpoint
 
 HERE = Path(__file__).parent
 templates = Jinja2Templates(directory=HERE / "templates")
@@ -820,6 +821,10 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None) 
             setup_fields=SETUP_FIELDS,
             smtp_values={k: db.get_setting(k, '587' if k == 'smtp_port' else 'starttls' if k == 'smtp_security' else '') or '' for k in SMTP_FIELDS},
             smtp_enabled=db.get_bool('smtp_enabled'),
+            sheet_enabled=db.get_bool("sheet_enabled"),
+            sheet_endpoint=db.get_setting("sheet_endpoint", "") or "",
+            sheet_last_success=db.get_setting("sheet_last_success", "") or "Never",
+            sheet_last_error=db.get_setting("sheet_last_error", "") or "",
             lyric_climate_entities=db.get_setting("lyric_climate_entities", "") or "",
             ha_ok=ha_ok, automation=automation, public_url=public_url,
             addon_slug=db.get_setting("addon_slug", "local_stay_automation"),
@@ -843,6 +848,27 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None) 
             guest_message=db.get_setting("guest_message") or DEFAULT_GUEST_MESSAGE,
             automated=db.one("SELECT COUNT(*) AS n FROM properties WHERE lock_automation = 1")["n"],
         )
+
+    @app.post("/sheet-settings-save")
+    async def sheet_settings_save(request: Request):
+        form = await request.form()
+        endpoint = str(form.get('sheet_endpoint', '')).strip()
+        secret = str(form.get('sheet_secret', '')).strip()
+        enabled = bool(form.get('sheet_enabled'))
+        if endpoint and not valid_endpoint(endpoint):
+            raise HTTPException(400, 'Use the Google Apps Script web app address ending in /exec')
+        if secret and (len(secret) < 32 or len(secret) > 256 or not secret.isascii() or any(c.isspace() for c in secret)):
+            raise HTTPException(400, 'The connection key must contain 32–256 characters with no spaces')
+        if endpoint != (db.get_setting('sheet_endpoint', '') or '') and db.get_setting('sheet_secret') and not secret:
+            raise HTTPException(400, 'Enter the connection key again when changing the receiver address')
+        if enabled and (not endpoint or not (secret or db.get_setting('sheet_secret'))):
+            raise HTTPException(400, 'Add the receiver address and connection key before enabling sheet updates')
+        values = {'sheet_endpoint': endpoint, 'sheet_enabled': '1' if enabled else '0'}
+        if secret:
+            values['sheet_secret'] = secret
+        db.set_settings(values)
+        db.log('sheet.settings_saved', 'Property sheet connection settings saved (key hidden)')
+        return _done('setup', 'Sheet connection saved; enabled updates run every five minutes')
 
     @app.post("/smtp-settings-save")
     async def smtp_settings_save(request: Request):
