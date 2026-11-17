@@ -52,7 +52,7 @@ def page(syncer):
 
 def test_every_setup_control_has_named_help_and_a_visible_hint(syncer):
     html, parsed = page(syncer)
-    expected = set(LOCK_DEFAULTS) | set(CLIMATE_DEFAULTS) | {
+    expected = (set(LOCK_DEFAULTS) - {"afternoon_check_hour"}) | set(CLIMATE_DEFAULTS) | {
         "public_url", "addon_slug", "register_hostaway", "alert_service",
         "backup_codes_enabled", "guest_messages_enabled", "guest_message"}
     assert set(SETUP_FIELDS) == expected == set(parsed.controls)

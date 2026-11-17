@@ -21,8 +21,8 @@ SETUP_FIELDS = {
     },
     "add_hour": {
         "label": "Add guest codes at this hour (0–23)",
-        "brief": "The usual time to put today’s guest codes into the locks.",
-        "more": "Use a whole hour on a 24-hour clock. Early arrivals and the final safety check can make the app add a code sooner.",
+        "brief": "Start trying to install today’s guest codes at this hour.",
+        "more": "Failed installations are retried at the interval under More lock timing options. For early arrivals, installation can start earlier. The final access check is separately tied to the guest’s check-in time.",
         "example": "8 = 8 AM; 14 = 2 PM. A guest arriving today normally gets a code added at 8 AM when this is 8."
     },
     "early_lead_hours": {
@@ -32,22 +32,16 @@ SETUP_FIELDS = {
         "example": "3 means a guest checking in at 9 AM can have their code added at 6 AM."
     },
     "final_check_minutes": {
-        "label": "Check guest access this many minutes before arrival",
-        "brief": "Make a final check that the guest’s code is in the lock.",
-        "more": "If access cannot be confirmed, the app follows your backup-code and guest-message choices below. Checks happen on the app’s next scheduled pass, so this is not an exact-to-the-minute promise.",
-        "example": "60 means start the final check one hour before check-in."
+        "label": "Final access check: minutes before check-in",
+        "brief": "After the morning installation attempts, make this final check before the guest arrives.",
+        "more": "This check follows the guest’s current check-in time. If the personal code is still missing, try installing it once more and read the lock again. If access still cannot be confirmed, use the backup-code message settings. A changed check-in that makes this check due wakes the scheduler as soon as the app receives it. Slow lock services can delay completion.",
+        "example": "60 with a 4 PM check-in means a 3 PM final check. If check-in changes to 2 PM when it is already 1:30 PM, check as soon as the change arrives."
     },
     "retry_minutes": {
         "label": "Minutes between failed lock checks",
         "brief": "Wait this long before trying a failed lock operation again.",
-        "more": "This controls lock checks and code changes. It is not the wait between sending phone alerts.",
+        "more": "This controls retries of failed morning code installations and lock maintenance. At the final access check, the guest code gets one last installation attempt before the backup is used.",
         "example": "15 means try the lock again about 15 minutes later."
-    },
-    "afternoon_check_hour": {
-        "label": "Afternoon lock check hour (0–23)",
-        "brief": "Check guest codes again later in the day.",
-        "more": "Use a whole hour on a 24-hour clock. This is another chance to catch a missing code before arrival.",
-        "example": "14 = 2 PM."
     },
     "daily_check_hour": {
         "label": "Daily lock check hour (0–23)",

@@ -28,6 +28,7 @@ class Syncer:
         self.ha = ha
         self.tz = ZoneInfo(settings.timezone)
         self._code_key = self._secret("code_hash_key")
+        self.on_locks = None  # synchronous scheduler wake callback; never waits on Schlage
         self.on_thermostats = None  # ClimateManager.tick_property; set from main
         self._thermostat_wake: set[int] = set()
 
@@ -207,6 +208,8 @@ class Syncer:
                 self.db.execute("UPDATE locks SET next_check_at = NULL WHERE property_id = ?", (home["id"],))
                 self.db.execute("UPDATE thermostats SET retry_after = NULL WHERE property_id = ?", (home["id"],))
                 self._thermostat_wake.add(home["id"])
+                if self.on_locks:
+                    self.on_locks(home["id"])
             prop = next((h for h in homes if h["hostaway_listing_id"] == new["listing_id"]), None)
             self.db.log(
                 "reservation." + what[0],

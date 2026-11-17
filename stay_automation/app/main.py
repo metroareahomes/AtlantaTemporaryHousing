@@ -75,6 +75,7 @@ def build():
     ha = HAClient(settings.ha_url, settings.ha_token)
     syncer = Syncer(db, settings, hostaway, ha)
     locks = LockManager(syncer)
+    syncer.on_locks = locks.wake_property
     climate = ClimateManager(syncer, locks.alert)
     syncer.on_thermostats = climate.tick_property
 
@@ -96,7 +97,7 @@ def build():
         await asyncio.gather(
             every(settings.sync_minutes, "sync", syncer.sync_reservations, db),
             every(settings.lock_discovery_minutes, "lock_discovery", discover, db),
-            every(LOCK_TICK_MINUTES, "lock_automation", locks.tick, db),
+            locks.run(),
             every(CLIMATE_TICK_MINUTES, "thermostats", climate.tick, db),
             every(BATTERY_CHECK_MINUTES, "batteries", climate.check_batteries, db),
         )

@@ -81,7 +81,7 @@ def test_next_check_picks_the_nearest_event():
     cfg = dict(DEFAULTS)
     assert next_check(r, at("2030-01-09T12:00"), cfg) == at("2030-01-10T06:00")  # daily check
     assert next_check(r, at("2030-01-10T07:00"), cfg) == at("2030-01-10T08:00")  # add
-    assert next_check(r, at("2030-01-10T08:05"), cfg) == at("2030-01-10T14:00")  # afternoon
+    assert next_check(r, at("2030-01-10T08:05"), cfg) == at("2030-01-10T15:00")  # final check; no fixed afternoon re-check
     assert next_check(r, at("2030-01-10T14:05"), cfg) == at("2030-01-10T15:00")  # final check
     assert next_check(r, at("2030-01-15T07:00"), cfg) == at("2030-01-15T10:00")  # checkout
 
