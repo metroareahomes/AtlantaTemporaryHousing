@@ -90,9 +90,9 @@ def test_help_preserves_saved_values_and_does_not_write_settings(syncer):
 def test_help_keeps_existing_form_routes_and_does_not_add_submit_buttons(syncer):
     html, parsed = page(syncer)
     assert parsed.forms == [
-        ("post", "setup-webhook"), ("post", "settings-save"),
+        ("post", "sync"), ("post", "setup-webhook"), ("post", "settings-save"),
         ("post", "thermostat-settings-save"), ("post", "test-alert")]
-    assert html.count("<button") == 4
+    assert html.count("<button") == 5
     assert html.count('class="field-help"') == len(SETUP_FIELDS)
     assert "Save your alert destination above" in html
 
