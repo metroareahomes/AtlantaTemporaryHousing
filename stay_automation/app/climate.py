@@ -18,7 +18,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from .matching import match_lock
-from .daily_temperature import DEFAULTS as DAILY_DEFAULTS, StayTemperaturePauses, current_stay, daily_call
+from .daily_temperature import DEFAULTS as DAILY_DEFAULTS, StayTemperaturePauses, intermediate_stay, daily_call
 
 log = logging.getLogger(__name__)
 
@@ -352,6 +352,7 @@ class ClimateManager:
                            reservation_id=occupying["id"] if occupying else None)
             return "record"
         try:
+            self._note_cloud_attempt()
             await self.ha.set_temperature(t["entity_id"], **call)
         except Exception as exc:
             # Lyric often returns HTTP 500/429 on the POST even when Honeywell already applied the
@@ -379,14 +380,71 @@ class ClimateManager:
                        reservation_id=occupying["id"] if occupying else None)
         return "write"
 
+    def _daily_slot_ready(self, now: datetime) -> bool:
+        spacing = self.db.get_int("occupied_reset_spacing_seconds", DAILY_DEFAULTS["occupied_reset_spacing_seconds"])
+        for key in ("daily_temperature_next_write_at", "thermostat_last_cloud_attempt_at"):
+            raw = self.db.get_setting(key)
+            if not raw:
+                continue
+            try:
+                due = datetime.fromisoformat(raw)
+                if key == "thermostat_last_cloud_attempt_at":
+                    due += timedelta(seconds=spacing)
+                if due > now:
+                    return False
+            except (ValueError, TypeError):
+                return False  # corrupt pacing state must not release a burst of cloud commands
+        return True
+
+    def _note_cloud_attempt(self) -> None:
+        # Normal arrival/vacant commands retain their priority and schedule. Daily resets yield to them.
+        self.db.set_setting("thermostat_last_cloud_attempt_at", self.s.now().astimezone(timezone.utc).isoformat())
+
+    async def daily_tick(self) -> int:
+        """Short local queue pass. At most ONE thermostat write, paced across all homes/accounts."""
+        if not self.db.get_bool("occupied_reset_enabled"):
+            return 0
+        async with self._run_lock:
+            now = self.s.now()
+            hour = self.db.get_int("occupied_reset_hour", DAILY_DEFAULTS["occupied_reset_hour"])
+            if now.hour < hour or not self._daily_slot_ready(now):
+                return 0
+            rows = self.db.query(
+                "SELECT t.*, p.name AS property_name, p.hostaway_listing_id FROM thermostats t "
+                "JOIN properties p ON p.id=t.property_id WHERE p.active=1 AND p.thermostat_automation=1 "
+                "ORDER BY t.id")
+            pending = []
+            for t in rows:
+                r = intermediate_stay(self.s.reservations_for(t["property_id"]), now)
+                if not r or self.daily_pauses.paused(r["id"]):
+                    continue
+                if not self.db.one("SELECT 1 FROM thermostat_daily_checks WHERE thermostat_id=? AND reservation_id=? AND local_date=?",
+                                   (t["id"], r["id"], now.date().isoformat())):
+                    pending.append(t["id"])
+            if not pending:
+                return 0  # no extra HA cache reads once today's eligible queue is complete
+            await self.refresh()  # reads HA's local cache, never requests a cloud refresh
+            changed = 0
+            for tid in pending:
+                t = self.db.one("SELECT t.*, p.name AS property_name FROM thermostats t JOIN properties p ON p.id=t.property_id "
+                                "WHERE t.id=? AND p.active=1 AND p.thermostat_automation=1", (tid,))
+                if not t or t["state"] in OFFLINE_STATES:
+                    continue
+                result = await self._daily(t, self.s.now(), True)
+                if result != "skip":
+                    changed += 1
+                if result == "write":
+                    break
+            return changed
+
     async def _daily(self, t: dict[str, Any], now: datetime, allow_write: bool) -> str:
         if not self.db.get_bool("occupied_reset_enabled"):
             return "skip"
-        r = current_stay(self.s.reservations_for(t["property_id"]), now)
+        r = intermediate_stay(self.s.reservations_for(t["property_id"]), now)
         hour = self.db.get_int("occupied_reset_hour", DAILY_DEFAULTS["occupied_reset_hour"])
         scheduled = now.replace(hour=hour, minute=0, second=0, microsecond=0)
-        # Guests arriving after today's reset time first qualify tomorrow; arrival comfort is separate.
-        if not r or now < scheduled or datetime.fromisoformat(r["check_in_at"]) > scheduled:
+        # Every arrival/departure date is excluded, even early check-in or late checkout.
+        if not r or now < scheduled:
             return "skip"
         key = (t["id"], r["id"], now.date().isoformat())
         if self.db.one("SELECT 1 FROM thermostat_daily_checks WHERE thermostat_id=? AND reservation_id=? AND local_date=?", key):
@@ -398,7 +456,7 @@ class ClimateManager:
         name = "daily_summer" if summer else "daily_winter"
         target = self.db.get_int(name, DAILY_DEFAULTS[name])
         call = daily_call(t, target, summer)
-        if call and not allow_write:
+        if call and (not allow_write or not self._daily_slot_ready(self.s.now())):
             return "skip"
         if call and t.get("retry_after") and datetime.fromisoformat(t["retry_after"]) > now:
             return "skip"
@@ -407,7 +465,7 @@ class ClimateManager:
         # Recheck assignment, automation, reservation and pause after Hostaway I/O.
         home = self.db.one("SELECT active, thermostat_automation FROM properties WHERE id=?", (t["property_id"],))
         live = self.db.one("SELECT property_id FROM thermostats WHERE id=?", (t["id"],))
-        active = current_stay(self.s.reservations_for(t["property_id"]), self.s.now())
+        active = intermediate_stay(self.s.reservations_for(t["property_id"]), self.s.now())
         if (not home or not home["active"] or not home["thermostat_automation"] or not live
                 or live["property_id"] != t["property_id"] or not active or active["id"] != r["id"]
                 or self.daily_pauses.paused(r["id"]) or not self.db.get_bool("occupied_reset_enabled")):
@@ -420,24 +478,31 @@ class ClimateManager:
             if not fresh or fresh.get("state") in OFFLINE_STATES:
                 return "skip"
             call = daily_call(fresh, target, summer)  # respect guest changes while checking Hostaway
-        active = current_stay(self.s.reservations_for(t["property_id"]), self.s.now())
+        active = intermediate_stay(self.s.reservations_for(t["property_id"]), self.s.now())
         home = self.db.one("SELECT active, thermostat_automation FROM properties WHERE id=?", (t["property_id"],))
         live = self.db.one("SELECT property_id FROM thermostats WHERE id=?", (t["id"],))
         if (not active or active["id"] != r["id"] or self.daily_pauses.paused(r["id"])
                 or not home or not home["active"] or not home["thermostat_automation"]
                 or not live or live["property_id"] != t["property_id"]
                 or not self.db.get_bool("occupied_reset_enabled")
-                or self.db.get_int(name, DAILY_DEFAULTS[name]) != target):
+                or self.db.get_int(name, DAILY_DEFAULTS[name]) != target
+                or self.s.now().date() != now.date() or self.s.now().hour < hour
+                or self.db.get_int("occupied_reset_hour", DAILY_DEFAULTS["occupied_reset_hour"]) != hour):
             return "skip"
         if not call:
             self.db.execute("INSERT OR IGNORE INTO thermostat_daily_checks VALUES(?, ?, ?, 'left alone')", key)
             self.db.log("thermostat.daily_unchanged", f"{t['name']}: daily check left the guest's setting alone.",
                         property_id=t["property_id"], reservation_id=r["id"])
             return "record"
-        # Persist BEFORE sending: restart/timeout must not result in another adjustment that day.
+        if not self._daily_slot_ready(self.s.now()):
+            return "skip"
+        # Persist BOTH the attempt and account-wide slot before sending; restart cannot cause a burst.
+        spacing = self.db.get_int("occupied_reset_spacing_seconds", DAILY_DEFAULTS["occupied_reset_spacing_seconds"])
+        self.db.set_setting("daily_temperature_next_write_at", (self.s.now() + timedelta(seconds=spacing)).isoformat())
         self.db.execute("INSERT INTO thermostat_daily_checks VALUES(?, ?, ?, 'attempted')", key)
         error = None
         try:
+            self._note_cloud_attempt()
             await self.ha.set_temperature(t["entity_id"], **call)
         except Exception as exc:
             error = type(exc).__name__
@@ -448,6 +513,10 @@ class ClimateManager:
         except Exception:
             confirmed = False
         result = "confirmed" if confirmed else "unconfirmed"
+        if error or not confirmed:
+            until = self.s.now() + timedelta(minutes=cfg["therm_retry_minutes"])
+            self.db.set_setting("daily_temperature_next_write_at", until.isoformat())
+            self.db.log("thermostat.daily_backoff", f"Daily reset queue paused until {until.isoformat()} after an uncertain or failed cloud command.", level="warning")
         self.db.execute("UPDATE thermostat_daily_checks SET result=? WHERE thermostat_id=? AND reservation_id=? AND local_date=?", (result, *key))
         self.db.log("thermostat.daily_reset", f"{t['name']}: daily {'summer' if summer else 'winter'} limit {target}°F; {result}" + (f" ({error})" if error else ""),
                     level="info" if confirmed else "warning", property_id=t["property_id"], reservation_id=r["id"])
@@ -476,6 +545,7 @@ class ClimateManager:
         if t["state"] == want:
             return t
         try:
+            self._note_cloud_attempt()
             await self.ha.set_hvac_mode(t["entity_id"], want)
             await asyncio.sleep(self.verify_delay)
             fresh = await self._read(t["entity_id"])

@@ -31,6 +31,8 @@ with sync_playwright() as p:
         page.evaluate("window.submissions=[]; document.addEventListener('submit', e=>{e.preventDefault(); window.submissions.push({id:e.target.id, values:Object.fromEntries(new FormData(e.target))});})")
         assert page.locator('[name=daily_winter]').input_value() == '70'
         assert page.locator('[name=daily_summer]').input_value() == '73'
+        assert page.locator('[name=occupied_reset_hour]').input_value() == '10'
+        assert page.locator('[name=occupied_reset_spacing_seconds]').input_value() == '90'
         assert not page.locator('[name=occupied_reset_enabled]').is_checked()
         page.locator('[name=daily_summer]').fill('74')
         page.locator('[aria-label="Help: Summer: lowest reasonable cooling setting (°F)"]').click()
@@ -45,4 +47,4 @@ with sync_playwright() as p:
         assert page.evaluate('document.documentElement.scrollWidth') <= width
         page.close()
     browser.close()
-print('PASS: real Setup on desktop/phone, 70/73 defaults, opt-in, help and independent fixed Save action')
+print('PASS: real Setup on desktop/phone, 70/73 limits, 10 AM start, 90-second spacing, opt-in, help and independent fixed Save action')

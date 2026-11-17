@@ -35,7 +35,7 @@ async def run_logged(name: str, job: Callable[[], Awaitable[object]], db: DB) ->
         db.log(f"{name}.failed", f"{name} failed: {exc}", level="error")
 
 
-async def every(minutes: int, name: str, job: Callable[[], Awaitable[object]], db: DB) -> None:
+async def every(minutes: float, name: str, job: Callable[[], Awaitable[object]], db: DB) -> None:
     while True:
         await asyncio.sleep(minutes * 60)
         await run_logged(name, job, db)
@@ -99,6 +99,7 @@ def build():
             every(settings.lock_discovery_minutes, "lock_discovery", discover, db),
             every(LOCK_TICK_MINUTES, "lock_automation", locks.tick, db),
             every(CLIMATE_TICK_MINUTES, "thermostats", climate.tick, db),
+            every(0.25, "daily_temperature_queue", climate.daily_tick, db),
             every(CLIMATE_TICK_MINUTES, "temperature_complaints", climate.daily_pauses.monitor, db),
             every(BATTERY_CHECK_MINUTES, "batteries", climate.check_batteries, db),
         )

@@ -6,15 +6,22 @@ import re
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-DEFAULTS = {"daily_winter": 70, "daily_summer": 73, "occupied_reset_hour": 11,
+DEFAULTS = {"daily_winter": 70, "daily_summer": 73, "occupied_reset_hour": 10, "occupied_reset_spacing_seconds": 90,
             "temperature_pause_field_id": 0}
-RANGES = {"daily_winter": (50, 90), "daily_summer": (50, 90), "occupied_reset_hour": (0, 23),
+RANGES = {"daily_winter": (50, 90), "daily_summer": (50, 90), "occupied_reset_hour": (0, 23), "occupied_reset_spacing_seconds": (30, 3600),
           "temperature_pause_field_id": (0, 2147483647)}
 
 
 def current_stay(reservations, now):
     return next((r for r in reservations if r["active"] and
                  datetime.fromisoformat(r["check_in_at"]) <= now < datetime.fromisoformat(r["check_out_at"])), None)
+
+
+def intermediate_stay(reservations, now):
+    """Daily policy only: exclude the entire local arrival and departure dates."""
+    r = current_stay(reservations, now)
+    today = now.date().isoformat()
+    return r if r and r["arrival_date"] < today < r["departure_date"] else None
 
 
 def complaint(body):

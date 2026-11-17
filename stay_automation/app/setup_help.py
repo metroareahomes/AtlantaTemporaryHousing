@@ -187,7 +187,7 @@ SETUP_FIELDS.update({
     "occupied_reset_enabled": {
         "label": "Check occupied-home temperatures once a day",
         "brief": "Turn this on to gently limit high heating or low cooling while guests are staying.",
-        "more": "Off by default. Each thermostat is checked once per day after the hour below. A reasonable setting is left alone. This does not change arrival or vacant temperatures.",
+        "more": "Off by default. Applies to active homes already marked for thermostat automation, on full days between arrival and departure. Each thermostat is checked once per day after the hour below. A reasonable setting is left alone. This does not change arrival or vacant temperatures.",
         "example": "Summer cooling at 68°F becomes 73°F; cooling at 75°F stays at 75°F."
     },
     "daily_winter": {
@@ -204,9 +204,9 @@ SETUP_FIELDS.update({
     },
     "occupied_reset_hour": {
         "label": "Daily occupied-home check hour (0–23)",
-        "brief": "Choose a whole hour using the local schedule. Default: 11 AM.",
-        "more": "The next normal thermostat pass after this hour checks homes already occupied at this hour. Guests arriving later first qualify tomorrow. Saving again does not repeat today's adjustment.",
-        "example": "11 = 11 AM; 14 = 2 PM."
+        "brief": "Choose a whole hour using the local schedule. Default: 10 AM.",
+        "more": "The queue starts after this hour on full days between arrival and departure. Arrival and checkout days never qualify, even with early check-in or late checkout. Homes are staggered rather than changed together. Saving again does not repeat a completed check.",
+        "example": "10 = 10 AM; 14 = 2 PM."
     },
     "temperature_complaints_enabled": {
         "label": "Pause daily resets when a guest complains about temperature",
@@ -221,3 +221,10 @@ SETUP_FIELDS.update({
         "example": "If the field ID is 167, enter 167 here. Staff can then enter YES on a reservation."
     }
 })
+
+SETUP_FIELDS["occupied_reset_spacing_seconds"] = {
+    "label": "Seconds between daily thermostat adjustments",
+    "brief": "Spread changes across all homes. Default: at least 90 seconds between thermostat commands.",
+    "more": "One thermostat at a time, including homes with multiple thermostats. A setting that is already reasonable needs no cloud command. Daily resets also wait after arrival or vacant-home commands. A failed or uncertain daily adjustment pauses the queue using the existing thermostat retry delay. Other apps and the integration may still make their own cloud requests.",
+    "example": "90 = one adjustment about every 1½ minutes. Use 180 or 300 for a slower rollout."
+}

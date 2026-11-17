@@ -95,7 +95,7 @@ def test_disabled_has_no_hostaway_reads_or_midstay_changes(cm):
 def test_summer_once_per_day_even_after_guest_changes_and_restart(cm):
     enable(cm)
     cm.ha.climate['climate.maple']['target_temp'] = 68
-    assert tick(cm, at('2030-06-13T10:59')) == 0
+    assert tick(cm, at('2030-06-13T09:59')) == 0
     assert tick(cm, at('2030-06-13T11:00')) == 1
     assert cm.ha.sets == [('climate.maple', 73, None, None)]
     cm.ha.climate['climate.maple']['target_temp'] = 68
@@ -306,7 +306,7 @@ def test_default_setup_temperatures_and_disabled_feature(cm):
     html = TestClient(create_app(cm.s)).get('/setup').text
     assert 'name="daily_winter" value="70"' in html
     assert 'name="daily_summer" value="73"' in html
-    assert 'name="occupied_reset_hour" value="11"' in html
+    assert 'name="occupied_reset_hour" value="10"' in html
     assert 'name="occupied_reset_enabled"  aria-describedby' in html
 
 
@@ -328,3 +328,138 @@ def test_unreadable_fresh_ha_state_skips_daily_without_consuming_attempt(cm):
     cm.ha.climate_state = fail
     tick(cm, at('2030-06-13T11:00'))
     assert cm.ha.sets == [] and not cm.db.one('SELECT 1 FROM thermostat_daily_checks')
+
+
+def queue_tick(cm, when):
+    cm.s.now = lambda: when
+    return asyncio.run(cm.daily_tick())
+
+
+def second_thermostat(cm):
+    cm.ha.climate['climate.second'] = dict(cm.ha.climate['climate.maple'], entity_id='climate.second', name='Second')
+    cm.db.execute("INSERT INTO thermostats(entity_id,name,property_id,match_source,last_mode,last_applied_at,last_reservation_id) VALUES('climate.second','Second',1,'manual','occupied',?,1)", (at('2030-06-12T13:00').isoformat(),))
+
+
+@pytest.mark.parametrize('when,checkin,checkout', [
+    ('2030-06-12T11:00', 6, 10),  # even an early arrival never qualifies on arrival day
+    ('2030-06-12T23:00', 6, 10),
+    ('2030-06-15T09:00', 16, 10),
+    ('2030-06-15T11:00', 16, 23),  # late checkout must not qualify
+    ('2030-06-15T22:00', 16, 23),
+])
+def test_entire_arrival_and_departure_dates_are_excluded(cm, when, checkin, checkout):
+    h = enable(cm)
+    h.raw.update(checkInTime=checkin, checkOutTime=checkout)
+    cm.s.upsert_reservation(h.raw)
+    assert queue_tick(cm, at(when)) == 0
+    tick(cm, at(when))
+    assert cm.ha.sets == []
+    assert h.calls == 0
+
+
+def test_custom_start_time_is_honored(cm):
+    enable(cm)
+    cm.db.set_setting('occupied_reset_hour', '14')
+    assert queue_tick(cm, at('2030-06-13T13:59')) == 0
+    assert queue_tick(cm, at('2030-06-13T14:00')) == 1
+
+
+def test_queue_resumes_at_90_seconds_across_restart_even_for_same_home(cm):
+    enable(cm)
+    second_thermostat(cm)
+    assert queue_tick(cm, at('2030-06-13T10:00')) == 1
+    assert queue_tick(cm, at('2030-06-13T10:01:29')) == 0
+    restarted = ClimateManager(cm.s, cm.alert)
+    restarted.verify_delay = 0
+    assert queue_tick(restarted, at('2030-06-13T10:01:29')) == 0
+    assert queue_tick(restarted, at('2030-06-13T10:01:30')) == 1
+    assert len(cm.ha.sets) == 2
+
+
+def test_spacing_is_adjustable_and_large_pass_cap_cannot_bypass_it(cm):
+    enable(cm)
+    second_thermostat(cm)
+    cm.db.set_setting('occupied_reset_spacing_seconds', '180')
+    cm.db.set_setting('therm_max_per_tick', '20')
+    cm.db.set_setting('therm_gap_seconds', '0')
+    tick(cm, at('2030-06-13T10:00'))
+    assert len(cm.ha.sets) == 1
+    tick(cm, at('2030-06-13T10:02:59'))
+    assert len(cm.ha.sets) == 1
+    tick(cm, at('2030-06-13T10:03'))
+    assert len(cm.ha.sets) == 2
+
+
+def test_reasonable_thermostat_does_not_use_cloud_slot(cm):
+    enable(cm)
+    second_thermostat(cm)
+    cm.ha.climate['climate.maple']['target_temp'] = 75
+    assert queue_tick(cm, at('2030-06-13T10:00')) == 2
+    assert cm.ha.sets == [('climate.second', 73.0, None, None)]
+
+
+def test_normal_cloud_command_delays_daily_queue_without_changing_normal_schedule(cm):
+    enable(cm)
+    cm.s.now = lambda: at('2030-06-13T09:59:30')
+    cm._note_cloud_attempt()
+    assert queue_tick(cm, at('2030-06-13T10:00')) == 0
+    assert queue_tick(cm, at('2030-06-13T10:01')) == 1
+
+
+def test_failure_backs_off_entire_daily_queue_and_survives_restart(cm):
+    enable(cm)
+    second_thermostat(cm)
+    original = cm.ha.set_temperature
+    async def fail(*args, **kw):
+        cm.ha.sets.append('failed')
+        raise RuntimeError('HTTP 429')
+    cm.ha.set_temperature = fail
+    queue_tick(cm, at('2030-06-13T10:00'))
+    cm.ha.set_temperature = original
+    restarted = ClimateManager(cm.s, cm.alert)
+    restarted.verify_delay = 0
+    assert queue_tick(restarted, at('2030-06-13T10:02')) == 0
+    assert cm.ha.sets == ['failed']
+    assert queue_tick(restarted, at('2030-06-13T11:00')) == 1
+    assert len(cm.ha.sets) == 2
+
+
+def test_slot_is_persisted_before_sending_command(cm):
+    enable(cm)
+    original = cm.ha.set_temperature
+    async def send(*args, **kw):
+        assert not cm._daily_slot_ready(cm.s.now())
+        assert cm.db.one('SELECT result FROM thermostat_daily_checks')['result'] == 'attempted'
+        await original(*args, **kw)
+    cm.ha.set_temperature = send
+    assert queue_tick(cm, at('2030-06-13T10:00')) == 1
+
+
+def test_completed_queue_does_not_keep_reading_ha(cm):
+    enable(cm)
+    queue_tick(cm, at('2030-06-13T10:00'))
+    async def fail():
+        raise AssertionError('Queue is complete: no cache read needed')
+    cm.ha.climate_states = fail
+    assert queue_tick(cm, at('2030-06-13T10:02')) == 0
+
+
+def test_crossing_midnight_during_preflight_cannot_write_on_departure_day(cm):
+    enable(cm)
+    original = cm.ha.climate_state
+    async def read(eid):
+        cm.s.now = lambda: at('2030-06-15T00:00')
+        return await original(eid)
+    cm.ha.climate_state = read
+    queue_tick(cm, at('2030-06-14T23:59'))
+    assert cm.ha.sets == []
+
+
+def test_setup_spacing_validation_and_default(cm):
+    c = TestClient(create_app(cm.s), follow_redirects=False)
+    html = c.get('/setup').text
+    assert 'name="occupied_reset_spacing_seconds" value="90"' in html
+    for invalid in ('0', '29', '3601', 'abc'):
+        assert c.post('/daily-temperature-settings-save', data=dict(DEFAULTS, occupied_reset_spacing_seconds=invalid)).status_code == 400
+    assert c.post('/daily-temperature-settings-save', data=dict(DEFAULTS, occupied_reset_spacing_seconds=180)).status_code == 303
+    assert cm.db.get_int('occupied_reset_spacing_seconds', 0) == 180
