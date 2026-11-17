@@ -211,7 +211,7 @@ class ClimateManager:
                  c["hvac_action"], c["fan_mode"], since, self._stamp(), c.get("min_temp"), c.get("max_temp"),
                  row["id"]),
             )
-            if not offline and row["match_source"] is None:
+            if not offline and row["match_source"] is None and not c.get("manual_assignment_required"):
                 property_id = match_lock(c["name"], properties)
                 if property_id is not None:
                     self.db.execute("UPDATE thermostats SET property_id = ?, match_source = 'auto' WHERE id = ?",
