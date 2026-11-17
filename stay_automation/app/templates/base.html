@@ -5,20 +5,21 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Stays</title>
   <link rel="stylesheet" href="static/style.css?v={{ css_v }}">
+  <script src="static/scrolling.js?v={{ css_v }}" defer></script>
 </head>
 <body>
   <header>
     <div class="bar-left">
       <div class="brand">Stays</div>
-      <nav>
+      <nav aria-label="Main navigation">
         <a href="." class="{{ 'on' if active == 'status' }}" {{ 'aria-current=page' if active == 'status' }}>Status</a>
-        <a href="events" class="{{ 'on' if active == 'events' }}">Log</a>
-        <details class="menu {{ 'on' if active in ['properties', 'staff', 'setup'] }}">
-          <summary>Settings</summary>
+        <a href="properties" class="{{ 'on' if active == 'properties' }}" {{ 'aria-current=page' if active == 'properties' }}>Properties</a>
+        <a href="staff" class="{{ 'on' if active == 'staff' }}" {{ 'aria-current=page' if active == 'staff' }}>Staff &amp; access</a>
+        <details class="menu {{ 'on' if active in ['setup', 'events'] }}">
+          <summary>System</summary>
           <div class="menu-panel">
-            <a href="properties" class="{{ 'on' if active == 'properties' }}">Properties</a>
-            <a href="staff" class="{{ 'on' if active == 'staff' }}">Staff</a>
-            <a href="setup" class="{{ 'on' if active == 'setup' }}">Setup</a>
+            <a href="setup" class="{{ 'on' if active == 'setup' }}" {{ 'aria-current=page' if active == 'setup' }}>Setup &amp; rules</a>
+            <a href="events" class="{{ 'on' if active == 'events' }}" {{ 'aria-current=page' if active == 'events' }}>Activity log</a>
           </div>
         </details>
       </nav>
@@ -34,7 +35,7 @@
   {% if notice %}<div class="notice" role="status">{{ notice }}</div>{% endif %}
   {% block body %}{% endblock %}</main>
 <script>
-  // tidy: drop the one-time notice from the address bar, close the Settings menu on outside click / Escape
+  // tidy: drop the one-time notice from the address bar, close the System menu on outside click / Escape
   if (location.search.indexOf("notice=") > -1 && history.replaceState) {
     var u = new URL(location.href); u.searchParams.delete("notice"); history.replaceState(null, "", u);
   }

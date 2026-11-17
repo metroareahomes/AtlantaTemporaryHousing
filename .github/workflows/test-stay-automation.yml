@@ -24,3 +24,19 @@ jobs:
         run: python -m pip install -r requirements-dev.txt
       - name: Run tests
         run: python -m pytest -q
+
+  scrolling:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install browser test tools
+        run: python -m pip install playwright
+      - name: Install Chromium
+        run: python -m playwright install --with-deps chromium
+      - name: Check scrolling and Save actions on desktop and phone
+        run: python tests/browser/check_scrolling.py
