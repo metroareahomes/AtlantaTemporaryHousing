@@ -239,3 +239,25 @@ SETUP_FIELDS.update({
     'smtp_from': dict(label='Send alerts from this email address', brief='The sender address your SMTP account is allowed to use.', more='The From address can differ from the login only if your provider permits it.', example='alerts@example.com'),
     'alert_properties_url': dict(label='Permanent link to the Properties list', brief='The HTTPS link recipients should open for more information.', more='Use a permanent authenticated link, never a temporary /api/hassio_ingress/ session URL. For Home Assistant use its external address followed by /hassio/ingress/APP_SLUG?stay_page=properties. Recipients still need their own Home Assistant access.', example='https://your-ha.example.com/hassio/ingress/1777083f_stay_automation?stay_page=properties')
 })
+
+
+SETUP_FIELDS.update({
+    "sheet_enabled": {
+        "label": "Keep the shared sheet up to date",
+        "brief": "Send a view-only copy of property status to Google every five minutes.",
+        "more": "This uses saved readings. It does not change a home or ask devices to refresh. Turn it off to stop future updates; existing sheet rows remain.",
+        "example": "Turn this on after adding the Google receiver address and connection key."
+    },
+    "sheet_endpoint": {
+        "label": "Where should this app send the sheet updates?",
+        "brief": "Paste the web app address from the Google setup script, ending in /exec.",
+        "more": "This is the receiver address from Deploy in Apps Script. It is different from the Google spreadsheet link you share with people.",
+        "example": "https://script.google.com/macros/s/your-deployment/exec"
+    },
+    "sheet_secret": {
+        "label": "Secret connection key from Google",
+        "brief": "Copy CONNECTION_KEY from the script’s Project Settings. Leave blank to keep your saved key.",
+        "more": "The key proves that updates came from this app. Keep it private. Enter it again if you change the receiver address; it is never shown after saving.",
+        "example": "Paste the full connection key here, never into a shared sheet cell."
+    }
+})

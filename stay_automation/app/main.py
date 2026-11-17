@@ -14,6 +14,7 @@ from .db import DB
 from .ha import HAClient
 from .hostaway import HostawayClient
 from .locks import LockManager
+from .property_sheet import PropertySheet
 from .sync import Syncer
 from .web import create_app
 
@@ -77,6 +78,7 @@ def build():
     syncer = Syncer(db, settings, hostaway, ha)
     locks = LockManager(syncer)
     climate = ClimateManager(syncer, locks.alert)
+    property_sheet = PropertySheet(syncer)
     syncer.on_thermostats = climate.tick_property
 
     async def sync_with_alerts():
@@ -112,6 +114,7 @@ def build():
             every(settings.lock_discovery_minutes, "lock_discovery", discover, db),
             every(LOCK_TICK_MINUTES, "lock_automation", locks.tick, db),
             every(CLIMATE_TICK_MINUTES, "thermostats", climate.tick, db),
+            every(5, "property_sheet", property_sheet.push, db),
             every(1, "staff_alert_delivery", retry_staff_alerts, db),
             every(5, "integration_reauthorization", locks.alert_service.integrations, db),
             every(1, "temperature_guest_notes", climate.daily_pauses.flush_note_updates, db),
