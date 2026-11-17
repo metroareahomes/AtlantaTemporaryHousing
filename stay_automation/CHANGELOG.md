@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.17 — selected Lyric thermostat support
+
+- Add individual Honeywell Lyric thermostats through Setup, while excluding unselected Lyric devices.
+- Verify Lyric entity membership before saving; require manual property assignment before control.
+- Keep native Resideo thermostats as the default and preserve their normal automation rules.
+- Read Home Assistant's cached thermostat state without forcing a cloud refresh during discovery.
+- Prevent empty discovery from importing unrelated climate entities.
+
+Lyric's own account-wide polling and command-triggered refresh behavior remain unchanged. Shared
+cloud rate limits cannot be ruled out. All extras remain excluded until explicitly selected.
+PR #2's reliability work and PR #4's final check-in changes are not included.
+
 ## 0.6.16 — interface improvements
 
 - Put Properties and Staff & access directly in the main menu.
