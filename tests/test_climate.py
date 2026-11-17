@@ -237,20 +237,22 @@ def test_target_outside_the_thermostats_own_limits_is_clamped_and_logged(cm):
     assert "wanted 78" in note and "68-74" in note
 
 
-def test_range_thermostat_in_summer_moves_cooling_bound_only(cm):
-    cm.ha.mode_fails = True  # cannot be switched to cool, so the two-setpoint path is what is left
+def test_mode_failure_withholds_temperature_even_with_valid_bounds(cm):
+    cm.ha.mode_fails = True
     cm.ha.climate["climate.maple"].update(state="heat_cool", target_temp=None, target_low=66, target_high=74)
     tick(cm, at("2030-06-10T12:00"))
-    assert cm.ha.sets == [("climate.maple", None, 66.0, 78.0)]
+    assert cm.ha.sets == []
+    assert row(cm)["fail_count"] == 1
     assert cm.db.one("SELECT 1 FROM events WHERE kind = 'thermostat.mode_failed'")
 
 
-def test_auto_without_bounds_still_sends_both_setpoints(cm):
+def test_mode_failure_without_bounds_does_not_guess_setpoints(cm):
     cm.ha.mode_fails = True
     cm.ha.climate["climate.maple"].update(state="heat_cool", target_temp=None, target_low=None, target_high=None,
                                           min_temp=55, max_temp=90)
     tick(cm, at("2030-06-10T12:00"))
-    assert cm.ha.sets == [("climate.maple", None, 55.0, 78.0)]
+    assert cm.ha.sets == []
+    assert row(cm)["fail_count"] == 1
 
 
 def test_summer_switches_to_cool_first_and_uses_the_cooling_range(cm):
@@ -618,3 +620,22 @@ def test_delayed_verification_waits_only_for_a_mismatched_reading(cm, monkeypatc
     cm.ha.climate["climate.maple"]["target_temp"] = 78
     asyncio.run(cm._verify_temperature("climate.maple", {"temperature": 78}))
     assert sleeps == [20]
+
+
+def test_correct_vacant_winter_reading_clears_old_failure_even_before_daily_reset(cm):
+    cm.ha.climate["climate.maple"].update(state="heat", target_temp=55)
+    cm.db.execute("UPDATE thermostats SET last_mode='vacant', last_applied_at=?, fail_count=1, last_error='did not take', retry_after=?",
+                  (at("2030-12-09T12:00").isoformat(), at("2030-12-10T13:00").isoformat()))
+    tick(cm, at("2030-12-10T01:00"))
+    assert row(cm)["fail_count"] == 0
+    assert row(cm)["last_error"] is None and row(cm)["retry_after"] is None
+    assert cm.ha.sets == [] and cm.ha.modes == []
+
+
+def test_wrong_mode_correct_number_does_not_clear_failure_or_send_temperature(cm):
+    cm.ha.mode_fails = True
+    cm.ha.climate["climate.maple"].update(state="cool", target_temp=55)
+    cm.db.execute("UPDATE thermostats SET fail_count=1, last_error='did not take'")
+    tick(cm, at("2030-12-10T12:00"))
+    assert row(cm)["fail_count"] >= 1
+    assert cm.ha.sets == []

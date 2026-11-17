@@ -84,7 +84,8 @@ def test_keyword_exclusions(body):
 @pytest.mark.parametrize('summer,state,setting,expected', [
     (True, 'cool', 68, 73), (True, 'cool', 73, None), (True, 'cool', 75, None),
     (False, 'heat', 76, 70), (False, 'heat', 70, None), (False, 'heat', 68, None),
-    (True, 'heat', 76, None), (False, 'cool', 68, None), (True, 'off', 68, None),
+    (True, 'heat', 76, None), (False, 'cool', 68, None),
+    (True, 'heat', 68, 73), (False, 'cool', 76, 70), (True, 'off', 68, None),
     (True, 'cool', None, None), (True, 'cool', float('nan'), None),
 ])
 def test_directional_limits(summer, state, setting, expected):
@@ -92,12 +93,12 @@ def test_directional_limits(summer, state, setting, expected):
     assert call == ({'temperature': float(expected)} if expected is not None else None)
 
 
-def test_auto_preserves_other_bound_and_rejects_conflict():
+def test_auto_selects_seasonal_bound_for_single_mode_adjustment():
     t = {'state': 'auto', 'target_low': 65, 'target_high': 69}
-    assert daily_call(t, 73, True) == {'low': 65, 'high': 73}
+    assert daily_call(t, 73, True) == {'temperature': 73.0}
     t.update(target_low=75, target_high=80)
-    assert daily_call(t, 70, False) == {'low': 70, 'high': 80}
-    assert daily_call(dict(t, target_high=69), 73, True) is None
+    assert daily_call(t, 70, False) == {'temperature': 70.0}
+    assert daily_call(dict(t, target_high=69), 73, True) == {'temperature': 73.0}
     assert daily_call({'state': 'cool', 'target_temp': 68, 'max_temp': 72}, 73, True) is None
 
 
@@ -600,3 +601,86 @@ def test_staff_notes_are_not_keyword_analyzed_without_explicit_ntc(cm):
     queue_tick(cm, at('2030-06-13T11:00'))
     assert not cm.daily_pauses.paused(1)
     assert len(cm.ha.sets) == 1
+
+
+@pytest.mark.parametrize('winter,start_mode,initial,wanted', [(True,'cool',76,'heat'),(False,'heat',68,'cool'),(True,'auto',None,'heat')])
+def test_daily_mode_then_temperature_uses_separate_paced_slots(cm, winter, start_mode, initial, wanted):
+    enable(cm, winter=winter)
+    cm.ha.climate['climate.maple'].update(state=start_mode, target_temp=initial, target_low=76, target_high=68)
+    queue_tick(cm, at('2030-06-13T10:00'))
+    assert cm.ha.modes == [('climate.maple',wanted)]
+    assert cm.ha.sets == []
+    assert cm.db.one('SELECT result FROM thermostat_daily_checks')['result'] == 'mode_pending'
+    queue_tick(cm, at('2030-06-13T10:01'))
+    assert cm.ha.sets == []
+    # Auto mode exposes a single target only after Home Assistant catches up.
+    if start_mode == 'auto':
+        cm.ha.climate['climate.maple']['target_temp'] = 76
+    restarted = ClimateManager(cm.s, cm.alert)
+    restarted.verify_delay = 0
+    queue_tick(restarted, at('2030-06-13T10:02'))
+    assert cm.ha.sets == [('climate.maple',70.0 if winter else 73.0,None,None)]
+    assert len(cm.ha.modes) == 1
+    assert cm.db.one('SELECT result FROM thermostat_daily_checks')['result'] == 'confirmed'
+
+
+def test_daily_unconfirmed_mode_never_sends_temperature_or_repeats_mode(cm):
+    enable(cm, winter=True)
+    cm.ha.climate['climate.maple'].update(state='cool',target_temp=76)
+    cm.ha.mode_fails = True
+    queue_tick(cm, at('2030-06-13T10:00'))
+    queue_tick(cm, at('2030-06-13T10:02'))
+    queue_tick(cm, at('2030-06-13T10:06'))
+    assert cm.ha.sets == []
+    assert len(cm.ha.modes) == 1
+    assert cm.db.one('SELECT result FROM thermostat_daily_checks')['result'] == 'unconfirmed'
+
+
+def test_ntc_added_between_mode_and_temperature_blocks_second_command(cm):
+    h = enable(cm, winter=True)
+    cm.ha.climate['climate.maple'].update(state='cool',target_temp=76)
+    queue_tick(cm, at('2030-06-13T10:00'))
+    h.raw['guestNote']='Existing notes NTC concierge'
+    queue_tick(cm, at('2030-06-13T10:02'))
+    assert cm.ha.sets == [] and cm.daily_pauses.paused(1)
+
+
+def test_reasonable_setting_after_mode_switch_is_left_alone(cm):
+    enable(cm, winter=True)
+    cm.ha.climate['climate.maple'].update(state='cool',target_temp=76)
+    queue_tick(cm, at('2030-06-13T10:00'))
+    cm.ha.climate['climate.maple']['target_temp']=68
+    queue_tick(cm, at('2030-06-13T10:02'))
+    assert cm.ha.sets == []
+    assert cm.db.one('SELECT result FROM thermostat_daily_checks')['result'] == 'confirmed'
+
+
+def test_pending_mode_waits_for_single_target_reading(cm):
+    enable(cm, winter=True)
+    cm.ha.climate['climate.maple'].update(state='auto',target_temp=None,target_low=76,target_high=80)
+    queue_tick(cm, at('2030-06-13T10:00'))
+    queue_tick(cm, at('2030-06-13T10:02'))
+    assert cm.db.one('SELECT result FROM thermostat_daily_checks')['result'] == 'mode_pending'
+    assert cm.ha.sets == []
+    cm.ha.climate['climate.maple']['target_temp']=76
+    queue_tick(cm, at('2030-06-13T10:03'))
+    assert cm.ha.sets == [('climate.maple',70.0,None,None)]
+
+
+def test_checkout_day_between_mode_and_target_cannot_write(cm):
+    enable(cm, winter=True)
+    cm.ha.climate['climate.maple'].update(state='cool',target_temp=76)
+    queue_tick(cm, at('2030-06-14T23:58'))
+    queue_tick(cm, at('2030-06-15T00:00'))
+    assert len(cm.ha.modes) == 1 and cm.ha.sets == []
+
+
+def test_confirmed_number_in_wrong_mode_cannot_confirm_daily_target(cm):
+    enable(cm, winter=True)
+    original = cm.ha.set_temperature
+    async def changed_mode(*args, **kwargs):
+        await original(*args, **kwargs)
+        cm.ha.climate['climate.maple']['state']='cool'
+    cm.ha.set_temperature=changed_mode
+    queue_tick(cm, at('2030-06-13T10:00'))
+    assert cm.db.one('SELECT result FROM thermostat_daily_checks')['result'] == 'unconfirmed'

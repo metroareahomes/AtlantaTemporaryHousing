@@ -57,9 +57,9 @@ def complaint(body):
 
 
 def daily_call(t, target, summer):
-    """Only move the seasonal setpoint in the energy-saving direction. Never switch mode."""
+    """Choose a seasonal single-mode target; caller must confirm Heat/Cool before applying it."""
     mode = t.get('state')
-    if mode not in (('cool', 'auto', 'heat_cool') if summer else ('heat', 'auto', 'heat_cool')):
+    if mode not in ('heat', 'cool', 'auto', 'heat_cool'):
         return None
     field = ('target_high' if summer else 'target_low') if mode in ('auto', 'heat_cool') else 'target_temp'
     seen = t.get(field)
@@ -69,14 +69,6 @@ def daily_call(t, target, summer):
         return None
     if t.get('min_temp') is not None and target < t['min_temp'] or t.get('max_temp') is not None and target > t['max_temp']:
         return None  # do not invent a different policy when the device rejects this limit
-    if mode in ('auto', 'heat_cool'):
-        low, high = t.get('target_low'), t.get('target_high')
-        if low is None or high is None:
-            return None
-        low, high = (float(low), float(target)) if summer else (float(target), float(high))
-        if not math.isfinite(low) or not math.isfinite(high) or low >= high:
-            return None
-        return {'low': low, 'high': high}
     return {'temperature': float(target)}
 
 

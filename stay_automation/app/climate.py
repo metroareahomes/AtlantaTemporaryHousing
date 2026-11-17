@@ -14,6 +14,7 @@ adopted as it is, so turning this on never changes a guest's temperature mid-sta
 """
 import asyncio
 import logging
+import math
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
@@ -135,6 +136,11 @@ def target_call(t: dict[str, Any], target: int, summer: bool) -> dict[str, float
             low, high = (high - 1, high) if summer else (low, low + 1)
         return {"high": high, "low": low}
     return {"temperature": float(target)}
+
+
+def _clamped_policy_target(t, wanted):
+    low, high = t.get("min_temp"), t.get("max_temp")
+    return int(min(max(wanted, low), high)) if low is not None and high is not None else wanted
 
 
 def took_effect(call: dict[str, float], t: dict[str, Any]) -> bool:
@@ -301,6 +307,17 @@ class ClimateManager:
         if t["last_applied_at"]:
             last_applied = datetime.fromisoformat(t["last_applied_at"]).astimezone(self.s.tz)
 
+        # A previous failure can remain after the device catches up, even when today's normal
+        # schedule would skip a write. Clear it only from an online reading at the current policy.
+        if t["fail_count"] and t["state"] in ("heat", "cool"):
+            summer = is_summer(now.date(), cfg["summer_start_month"], cfg["summer_end_month"])
+            wanted = setpoint(mode, summer, cfg)
+            wanted = _clamped_policy_target(t, wanted)
+            if t["state"] == ("cool" if summer else "heat") and took_effect(target_call(t, wanted, summer), t):
+                self._recorded(t, mode, wanted, summer, already=True,
+                               reservation_id=occupying["id"] if occupying else None)
+                return "record"
+
         # Automation switched on mid-stay for a guest who arrived on an earlier day: leave their temp.
         # A same-day booking (check-in is usually 3pm, guest often arrives at 8pm, booked after 3pm)
         # is not "mid-stay" — set occupied now.
@@ -356,6 +373,9 @@ class ClimateManager:
             return "skip"
 
         t = await self._set_season_mode(t, want_mode)
+        if t["state"] != want_mode:
+            await self._failed(t, now, f"could not confirm {want_mode} mode; temperature command withheld")
+            return "write"
         target = _clamp(t, wanted)
         call = target_call(t, target, summer)
         if took_effect(call, t):
@@ -427,8 +447,9 @@ class ClimateManager:
                 r = intermediate_stay(self.s.reservations_for(t["property_id"]), now)
                 if not r or self.daily_pauses.paused(r["id"]):
                     continue
-                if not self.db.one("SELECT 1 FROM thermostat_daily_checks WHERE thermostat_id=? AND reservation_id=? AND local_date=?",
-                                   (t["id"], r["id"], now.date().isoformat())):
+                check = self.db.one("SELECT result FROM thermostat_daily_checks WHERE thermostat_id=? AND reservation_id=? AND local_date=?",
+                                    (t["id"], r["id"], now.date().isoformat()))
+                if not check or check["result"] == "mode_pending":
                     pending.append(t["id"])
             if not pending:
                 return 0  # no extra HA cache reads once today's eligible queue is complete
@@ -453,7 +474,9 @@ class ClimateManager:
         if not r or now < scheduled:
             return "skip"
         key = (t["id"], r["id"], now.date().isoformat())
-        if self.db.one("SELECT 1 FROM thermostat_daily_checks WHERE thermostat_id=? AND reservation_id=? AND local_date=?", key):
+        check = self.db.one("SELECT result FROM thermostat_daily_checks WHERE thermostat_id=? AND reservation_id=? AND local_date=?", key)
+        mode_pending = bool(check and check["result"] == "mode_pending")
+        if check and not mode_pending:
             return "skip"
         if self.daily_pauses.paused(r["id"]):
             return "skip"
@@ -461,12 +484,17 @@ class ClimateManager:
         summer = is_summer(now.date(), cfg["summer_start_month"], cfg["summer_end_month"])
         name = "daily_summer" if summer else "daily_winter"
         target = self.db.get_int(name, DAILY_DEFAULTS[name])
+        want_mode = "cool" if summer else "heat"
+        pending_mode = self.db.one("SELECT * FROM thermostat_daily_mode_changes WHERE thermostat_id=? AND reservation_id=? AND local_date=?", key) if mode_pending else None
+        if mode_pending and (not pending_mode or pending_mode["target"] != target or pending_mode["desired_mode"] != want_mode):
+            self.db.execute("UPDATE thermostat_daily_checks SET result='cancelled' WHERE thermostat_id=? AND reservation_id=? AND local_date=?", key)
+            return "skip"
         call = daily_call(t, target, summer)
-        if call and (not allow_write or not self._daily_slot_ready(self.s.now())):
+        if (call or mode_pending) and (not allow_write or not self._daily_slot_ready(self.s.now())):
             return "skip"
-        if call and t.get("retry_after") and datetime.fromisoformat(t["retry_after"]) > now:
+        if (call or mode_pending) and t.get("retry_after") and datetime.fromisoformat(t["retry_after"]) > now:
             return "skip"
-        if not await self.daily_pauses.check(r, force=bool(call)):
+        if not await self.daily_pauses.check(r, force=bool(call or mode_pending)):
             return "skip"
         # Recheck assignment, automation, reservation and pause after Hostaway I/O.
         home = self.db.one("SELECT active, thermostat_automation FROM properties WHERE id=?", (t["property_id"],))
@@ -476,14 +504,26 @@ class ClimateManager:
                 or live["property_id"] != t["property_id"] or not active or active["id"] != r["id"]
                 or self.daily_pauses.paused(r["id"]) or not self.db.get_bool("occupied_reset_enabled")):
             return "skip"
-        if call:
+        if call or mode_pending:
             try:
                 fresh = await self._read(t["entity_id"])
             except Exception:
                 return "skip"  # one failing HA read must not prevent other homes' normal control
             if not fresh or fresh.get("state") in OFFLINE_STATES:
                 return "skip"
+            t = {**t, **fresh}
             call = daily_call(fresh, target, summer)  # respect guest changes while checking Hostaway
+            seen = fresh.get("target_temp")
+            reasonable = (isinstance(seen, (int, float)) and math.isfinite(seen)
+                          and (seen >= target if summer else seen <= target))
+            if mode_pending and (fresh.get("state") != want_mode or (not call and not reasonable)):
+                if self.s.now() - datetime.fromisoformat(pending_mode["requested_at"]) < timedelta(minutes=5):
+                    return "skip"  # wait for HA's cached mode; never resend the mode blindly
+                until = self.s.now() + timedelta(minutes=cfg["therm_retry_minutes"])
+                self.db.set_setting("daily_temperature_next_write_at", until.isoformat())
+                self.db.execute("UPDATE thermostat_daily_checks SET result='unconfirmed' WHERE thermostat_id=? AND reservation_id=? AND local_date=?", key)
+                self.db.log("thermostat.daily_mode_unconfirmed", f"{t['name']}: {want_mode} mode / target reading not confirmed; no temperature command sent.", level="warning", property_id=t["property_id"], reservation_id=r["id"])
+                return "record"
         active = intermediate_stay(self.s.reservations_for(t["property_id"]), self.s.now())
         home = self.db.one("SELECT active, thermostat_automation FROM properties WHERE id=?", (t["property_id"],))
         live = self.db.one("SELECT property_id FROM thermostats WHERE id=?", (t["id"],))
@@ -492,11 +532,15 @@ class ClimateManager:
                 or not live or live["property_id"] != t["property_id"]
                 or not self.db.get_bool("occupied_reset_enabled")
                 or self.db.get_int(name, DAILY_DEFAULTS[name]) != target
+                or is_summer(self.s.now().date(), self.cfg()["summer_start_month"], self.cfg()["summer_end_month"]) != summer
                 or self.s.now().date() != now.date() or self.s.now().hour < hour
                 or self.db.get_int("occupied_reset_hour", DAILY_DEFAULTS["occupied_reset_hour"]) != hour):
             return "skip"
         if not call:
-            self.db.execute("INSERT OR IGNORE INTO thermostat_daily_checks VALUES(?, ?, ?, 'left alone')", key)
+            if mode_pending:
+                self.db.execute("UPDATE thermostat_daily_checks SET result='confirmed' WHERE thermostat_id=? AND reservation_id=? AND local_date=?", key)
+            else:
+                self.db.execute("INSERT OR IGNORE INTO thermostat_daily_checks VALUES(?, ?, ?, 'left alone')", key)
             self.db.log("thermostat.daily_unchanged", f"{t['name']}: daily check left the guest's setting alone.",
                         property_id=t["property_id"], reservation_id=r["id"])
             return "record"
@@ -505,7 +549,20 @@ class ClimateManager:
         # Persist BOTH the attempt and account-wide slot before sending; restart cannot cause a burst.
         spacing = self.db.get_int("occupied_reset_spacing_seconds", DAILY_DEFAULTS["occupied_reset_spacing_seconds"])
         self.db.set_setting("daily_temperature_next_write_at", (self.s.now() + timedelta(seconds=spacing)).isoformat())
-        self.db.execute("INSERT INTO thermostat_daily_checks VALUES(?, ?, ?, 'attempted')", key)
+        if t["state"] != want_mode:
+            self.db.execute("INSERT INTO thermostat_daily_checks VALUES(?, ?, ?, 'mode_pending')", key)
+            self.db.execute("INSERT INTO thermostat_daily_mode_changes VALUES(?, ?, ?, ?, ?, ?)", (*key, want_mode, target, self._stamp()))
+            self._note_cloud_attempt()
+            try:
+                await self.ha.set_hvac_mode(t["entity_id"], want_mode)
+            except Exception:
+                pass  # uncertain commands still consume the slot; a later cache read decides
+            self.db.log("thermostat.daily_mode_requested", f"{t['name']}: requested {want_mode}; temperature waits for mode confirmation and the next command slot.", property_id=t["property_id"], reservation_id=r["id"])
+            return "write"
+        if mode_pending:
+            self.db.execute("UPDATE thermostat_daily_checks SET result='attempted' WHERE thermostat_id=? AND reservation_id=? AND local_date=?", key)
+        else:
+            self.db.execute("INSERT INTO thermostat_daily_checks VALUES(?, ?, ?, 'attempted')", key)
         error = None
         try:
             self._note_cloud_attempt()
@@ -515,7 +572,7 @@ class ClimateManager:
         await asyncio.sleep(self.verify_delay)
         try:
             fresh = await self._read(t["entity_id"])
-            confirmed = bool(fresh and fresh.get("state") not in OFFLINE_STATES and took_effect(call, fresh))
+            confirmed = bool(fresh and fresh.get("state") == want_mode and took_effect(call, fresh))
         except Exception:
             confirmed = False
         result = "confirmed" if confirmed else "unconfirmed"
@@ -555,13 +612,14 @@ class ClimateManager:
             await self.ha.set_hvac_mode(t["entity_id"], want)
             await asyncio.sleep(self.verify_delay)
             fresh = await self._read(t["entity_id"])
-        except Exception as exc:  # the temperature is still attempted; a failure there is judged on its own
+        except Exception as exc:  # never send a seasonal target until the mode is confirmed
             self.db.log("thermostat.mode_failed", f"{t['name']}: could not switch to {want} ({exc or type(exc).__name__})",
                         level="warning", property_id=t["property_id"])
             return t
-        self.db.log("thermostat.mode", f"{t['name']}: switched {t['state']} to {want}", property_id=t["property_id"])
         if fresh is None:
             return t
+        if fresh.get("state") == want:
+            self.db.log("thermostat.mode", f"{t['name']}: switched {t['state']} to {want}", property_id=t["property_id"])
         keep = ("state", "current_temp", "target_temp", "target_low", "target_high", "min_temp", "max_temp")
         return {**t, **{k: fresh.get(k) for k in keep}}
 

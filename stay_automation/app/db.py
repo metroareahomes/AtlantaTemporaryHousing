@@ -137,6 +137,16 @@ CREATE TABLE IF NOT EXISTS thermostat_daily_checks (
     PRIMARY KEY(thermostat_id, reservation_id, local_date)
 );
 
+CREATE TABLE IF NOT EXISTS thermostat_daily_mode_changes (
+    thermostat_id INTEGER NOT NULL,
+    reservation_id INTEGER NOT NULL,
+    local_date TEXT NOT NULL,
+    desired_mode TEXT NOT NULL,
+    target INTEGER NOT NULL,
+    requested_at TEXT NOT NULL,
+    PRIMARY KEY (thermostat_id, reservation_id, local_date)
+);
+
 CREATE TABLE IF NOT EXISTS thermostats (
     id INTEGER PRIMARY KEY,
     entity_id TEXT NOT NULL UNIQUE,

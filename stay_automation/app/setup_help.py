@@ -193,13 +193,13 @@ SETUP_FIELDS.update({
     "daily_winter": {
         "label": "Winter: highest reasonable heating setting (°F)",
         "brief": "Lower the heating setting to this number only when it is higher. Default: 70°F.",
-        "more": "This is the thermostat setting, not the measured room temperature. Uses your winter months. Settings at or below this number are left alone.",
+        "more": "This is the thermostat setting, not the measured room temperature. Uses your winter months. When adjustment is needed, Heat mode is confirmed first. Settings at or below this number are left alone.",
         "example": "At 70°F: heating set to 75°F becomes 70°F; heating set to 68°F stays 68°F."
     },
     "daily_summer": {
         "label": "Summer: lowest reasonable cooling setting (°F)",
         "brief": "Raise the cooling setting to this number only when it is lower. Default: 73°F.",
-        "more": "This is the thermostat setting, not the measured room temperature. Uses your summer months. Settings at or above this number are left alone.",
+        "more": "This is the thermostat setting, not the measured room temperature. Uses your summer months. When adjustment is needed, Cool mode is confirmed first. Settings at or above this number are left alone.",
         "example": "At 73°F: cooling set to 68°F becomes 73°F; cooling set to 75°F stays 75°F."
     },
     "occupied_reset_hour": {
