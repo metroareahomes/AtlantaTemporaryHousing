@@ -639,3 +639,30 @@ def test_wrong_mode_correct_number_does_not_clear_failure_or_send_temperature(cm
     tick(cm, at("2030-12-10T12:00"))
     assert row(cm)["fail_count"] >= 1
     assert cm.ha.sets == []
+
+
+@pytest.mark.parametrize("season,state,low,high,wanted", [
+    ("2030-12-10T01:00", "heat", 55, 85, 55),
+    ("2030-06-10T01:00", "cool", 55, 78, 78),
+])
+def test_lyric_range_reading_clears_stale_failure_without_device_commands(cm, season, state, low, high, wanted):
+    cm.ha.climate["climate.maple"].update(state=state,target_temp=None,target_low=low,target_high=high)
+    cm.db.execute("UPDATE thermostats SET last_mode='vacant', last_applied_at=?, fail_count=1, last_error='did not take'", (at(season).isoformat(),))
+    tick(cm, at(season))
+    assert row(cm)["fail_count"] == 0 and row(cm)["last_error"] is None
+    assert cm.ha.sets == [] and cm.ha.modes == []
+
+
+@pytest.mark.parametrize("state,low,high,expected", [
+    ("heat",55,85,True),("heat",60,55,False),("cool",55,85,False),
+    ("auto",55,85,False),("heat_cool",55,85,False),("off",55,85,False),
+    ("unavailable",55,85,False),("heat",None,55,False),("heat",float('nan'),85,False),
+])
+def test_single_target_verification_uses_only_known_active_bound(state, low, high, expected):
+    from app.climate import took_effect
+    assert took_effect({"temperature":55}, {"state":state,"target_temp":None,"target_low":low,"target_high":high}) is expected
+
+
+def test_explicit_single_target_takes_precedence_over_range_fallback():
+    from app.climate import took_effect
+    assert not took_effect({"temperature":55}, {"state":"heat","target_temp":60,"target_low":55,"target_high":85})
