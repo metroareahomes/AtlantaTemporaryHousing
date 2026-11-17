@@ -776,6 +776,7 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None) 
         return page(
             request, "setup.html",
             setup_fields=SETUP_FIELDS,
+            lyric_climate_entities=db.get_setting("lyric_climate_entities", "") or "",
             ha_ok=ha_ok, automation=automation, public_url=public_url,
             addon_slug=db.get_setting("addon_slug", "local_stay_automation"),
             webhook_url=f"{public_url}/api/webhook/{webhook_id[:6]}…" if webhook_id else "",
@@ -815,6 +816,18 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None) 
         db.execute("UPDATE locks SET next_check_at = NULL")
         db.log("settings.saved", "Lock automation settings saved")
         return _done("setup", "Lock settings saved")
+
+    @app.post("/additional-thermostats-save")
+    async def additional_thermostats_save(lyric_climate_entities: str = Form("")):
+        entities = sorted(set(lyric_climate_entities.replace(",", " ").split()))
+        if len(entities) > 10 or any(not re.fullmatch(r"climate\.[a-z0-9_]+", eid) for eid in entities):
+            raise HTTPException(400, "Enter up to 10 climate entity IDs, separated by spaces or commas")
+        old = set((db.get_setting("lyric_climate_entities", "") or "").split())
+        db.set_setting("lyric_climate_entities", " ".join(entities))
+        for eid in old - set(entities):
+            db.execute("DELETE FROM thermostats WHERE entity_id=?", (eid,))
+        db.log("settings.saved", "Extra thermostat selection saved; manual property assignment required")
+        return _done("setup", "Extra thermostat selection saved. Assign new devices on Properties.")
 
     @app.post("/thermostat-settings-save")
     async def thermostat_settings_save(request: Request):

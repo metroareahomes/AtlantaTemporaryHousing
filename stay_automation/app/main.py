@@ -72,7 +72,8 @@ def build():
         load_token=lambda: db.get_setting("hostaway_token"),
         save_token=lambda token: db.set_setting("hostaway_token", token),
     )
-    ha = HAClient(settings.ha_url, settings.ha_token)
+    ha = HAClient(settings.ha_url, settings.ha_token,
+                  extra_climate_entities=lambda: (db.get_setting("lyric_climate_entities", "") or "").split())
     syncer = Syncer(db, settings, hostaway, ha)
     locks = LockManager(syncer)
     climate = ClimateManager(syncer, locks.alert)

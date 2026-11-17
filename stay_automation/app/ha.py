@@ -1,5 +1,7 @@
 """Home Assistant REST client (Supervisor proxy inside the add-on, direct URL locally)."""
 import json
+import re
+from collections.abc import Callable
 from typing import Any
 
 import httpx
@@ -15,7 +17,9 @@ class HAError(Exception):
 
 
 class HAClient:
-    def __init__(self, base_url: str, token: str, http: httpx.AsyncClient | None = None):
+    def __init__(self, base_url: str, token: str, http: httpx.AsyncClient | None = None, *,
+                 extra_climate_entities: Callable[[], list[str]] = lambda: []):
+        self._extra_climate_entities = extra_climate_entities
         self._http = http or httpx.AsyncClient(
             base_url=base_url.rstrip("/"),
             headers={"Authorization": f"Bearer {token}"},
@@ -70,23 +74,29 @@ class HAClient:
             "max_temp": a.get("max_temp"),
         }
 
-    async def _climate_entity_ids(self) -> set[str]:
-        """Resideo (First Alert) climate entities only. Lyric entities stay out of this list."""
-        raw = await self._post(
-            "/api/template",
-            {"template": "{% set ids = integration_entities('resideo') %}"
-                         "{{ ids | select('match', 'climate[.]') | unique | list | tojson }}"},
-        )
+    async def _climate_entity_ids(self, extras: set[str] | None = None) -> set[str]:
+        """Native Resideo entities plus explicitly selected Lyric entities only."""
+        extras = extras if extras is not None else set(self._extra_climate_entities())
+        extras = {e for e in extras if re.fullmatch(r"climate\.[a-z0-9_]+", e)}
+        template = "{% set ids = integration_entities('resideo') %}"
+        if extras:
+            template += ("{% set allowed = " + json.dumps(sorted(extras)) + " %}"
+                         "{% set ids = ids + (integration_entities('lyric') | select('in', allowed) | list) %}")
+        template += "{{ ids | select('match', 'climate[.]') | unique | list | tojson }}"
+        raw = await self._post("/api/template", {"template": template})
         if isinstance(raw, str):
             try:
                 raw = json.loads(raw)
-            except json.JSONDecodeError:
-                raw = []
-        return {e for e in (raw if isinstance(raw, list) else []) if isinstance(e, str)}
+            except json.JSONDecodeError as exc:
+                raise HAError("Could not identify permitted thermostat entities") from exc
+        if not isinstance(raw, list):
+            raise HAError("Invalid thermostat discovery response")
+        return {eid for eid in raw if isinstance(eid, str) and re.fullmatch(r"climate\.[a-z0-9_]+", eid)}
 
     async def climate_states(self) -> list[dict[str, Any]]:
         """Resideo climate entities with readings. Leftover climate.* from removed devices are ignored."""
-        wanted = await self._climate_entity_ids()
+        extras = set(self._extra_climate_entities())
+        wanted = await self._climate_entity_ids(extras)
         resp = await self._http.get("/api/states")
         resp.raise_for_status()
         out = []
@@ -94,9 +104,11 @@ class HAClient:
             eid = s.get("entity_id") or ""
             if not eid.startswith("climate."):
                 continue
-            if wanted and eid not in wanted:
+            if eid not in wanted:
                 continue
-            out.append(self._climate_from_state(s))
+            item = self._climate_from_state(s)
+            item["manual_assignment_required"] = eid in extras
+            out.append(item)
         return out
 
     async def climate_state(self, entity_id: str) -> dict[str, Any] | None:

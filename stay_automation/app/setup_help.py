@@ -174,5 +174,11 @@ SETUP_FIELDS = {
         "brief": "Get an alert before a lock battery gets too low.",
         "more": "This is a warning level, not the battery’s current charge. Battery readings depend on what Home Assistant reports.",
         "example": "15 means warn when the reported battery is below 15%."
+    },
+    "lyric_climate_entities": {
+        "label": "Extra Lyric thermostats to include",
+        "brief": "Only the listed devices are included. Lyric commands can still refresh its whole cloud account.",
+        "more": "Use exact climate entity IDs, separated by spaces or commas. The thermostat must belong to Honeywell Lyric. Save this list, then assign the device to a property manually. This does not change Lyric’s own polling or guarantee protection from cloud rate limits. Leave blank to exclude all Lyric thermostats.",
+        "example": "climate.livingroom_thermostat"
     }
 }
