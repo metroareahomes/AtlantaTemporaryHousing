@@ -1,6 +1,6 @@
-# Owner-scoped email alerts (development)
+# Owner-scoped email alerts (0.6.20)
 
-Production remains 0.6.19. This branch is not deployed and contains no real SMTP credentials or recipient addresses.
+Published as 0.6.20 after explicit owner deployment approval. No real SMTP credentials or recipient addresses are included in the repository. Installing on the Green and configuring live delivery are separate steps; see docs/deploy-0.6.20.md.
 
 ## Recipients and routing
 

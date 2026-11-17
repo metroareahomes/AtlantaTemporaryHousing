@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.6.20 — owner-scoped staff email alerts
+
+- Add recipient names, email addresses, Mike/Kurt/both selections, interruption categories and individual tests.
+- Add SMTP host, port, SSL/STARTTLS, username, hidden password and permanent Properties link in Setup.
+- Include owner, address, event details, battery percentage/device, occupancy, check-in/out and elapsed/remaining stay in emails.
+- Import exact named Hostaway owner tags and show owner counts/unconfirmed properties for review.
+- Identify actual integration reauthorization flows by account and affected homes/owners; add Hostaway reservation-sync failure alerts.
+- Track delivery per destination with persisted retries, isolating failures from successful recipients.
+- Hold ambiguous SMTP acceptance for inbox review instead of blindly resending; keep secrets out of logs and HTML.
+- Keep existing app notifications and saved automation settings; email stays OFF until configured and enabled.
+
+The 0.6.19 source is preserved at stable-0.6.19-before-owner-email-alerts. Live SMTP acceptance,
+Hostaway tag shape, integration-monitor permissions and the phone link require verification on the Green.
+This overlaps draft PR #2's notification work but does not merge its separate webhook/backup retry changes.
+PR #4 remains excluded. Lock scheduling, backup messaging and thermostat control rules are retained.
+
 ## 0.6.19 — menu stays visible while scrolling
 
 - Keep the main menu and sync controls at the top while scrolling.
