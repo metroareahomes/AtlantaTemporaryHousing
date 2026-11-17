@@ -445,3 +445,12 @@ def test_configuration_database_and_wal_are_private(tmp_path):
     for candidate in (path, tmp_path/'stay.db-wal',tmp_path/'stay.db-shm'):
         if candidate.exists():
             assert os.stat(candidate).st_mode & 0o077 == 0
+
+
+def test_related_smtp_settings_roll_back_together_on_storage_error(service):
+    import sqlite3
+    before = service.db.get_setting('smtp_host')
+    with pytest.raises(sqlite3.ProgrammingError):
+        service.db.set_settings({'smtp_host':'new.example.com','smtp_password':object()})
+    assert service.db.get_setting('smtp_host') == before
+    assert service.db.get_setting('smtp_password') == 'test-secret-123'

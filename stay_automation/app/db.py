@@ -241,6 +241,19 @@ class DB:
             (key, value),
         )
 
+    def set_settings(self, values: dict[str, str]) -> None:
+        """Commit related connection settings together, including their secret and enable switch."""
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                self._conn.executemany(
+                    "INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                    list(values.items()))
+                self._conn.execute("COMMIT")
+            except BaseException:
+                self._conn.execute("ROLLBACK")
+                raise
+
     def get_int(self, key: str, default: int) -> int:
         try:
             return int(self.get_setting(key, str(default)))

@@ -862,11 +862,10 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None) 
         if (db.get_setting('smtp_password') and not password and
             any(values[k] != (db.get_setting(k, '') or '') for k in ('smtp_host', 'smtp_username'))):
             raise HTTPException(400, "Re-enter the password when changing the SMTP server or username")
-        for key, value in values.items():
-            db.set_setting(key, value)
         if password:
-            db.set_setting('smtp_password', password)
-        db.set_setting('smtp_enabled', '1' if enabled else '0')
+            values['smtp_password'] = password
+        values['smtp_enabled'] = '1' if enabled else '0'
+        db.set_settings(values)
         db.log('settings.saved', 'Email server settings saved (password hidden)')
         return _done('setup', 'Email settings saved')
 
