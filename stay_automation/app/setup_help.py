@@ -228,3 +228,14 @@ SETUP_FIELDS["occupied_reset_spacing_seconds"] = {
     "more": "One thermostat at a time, including homes with multiple thermostats. A setting that is already reasonable needs no cloud command. Daily resets also wait after arrival or vacant-home commands. A failed or uncertain daily adjustment pauses the queue using the existing thermostat retry delay. Other apps and the integration may still make their own cloud requests.",
     "example": "90 = one adjustment about every 1½ minutes. Use 180 or 300 for a slower rollout."
 }
+
+SETUP_FIELDS.update({
+    'smtp_enabled': dict(label='Send staff alerts by email', brief='Enable email after entering your server settings.', more='Recipients and their owner/category choices are on Staff & access. App notifications can continue too.', example='Turn on after saving your SMTP server and recipients.'),
+    'smtp_host': dict(label='Outgoing email server (SMTP)', brief='Your email provider supplies this server address.', more='Use only the SMTP hostname, without https://. TLS encryption is required.', example='smtp.example.com'),
+    'smtp_port': dict(label='Email server port', brief='Usually 587 for STARTTLS or 465 for SSL.', more='Use the port specified by your email provider.', example='587'),
+    'smtp_security': dict(label='Email encryption', brief='Use the encryption method required by your provider.', more='Certificates are verified. Unencrypted email login is not supported.', example='STARTTLS with port 587.'),
+    'smtp_username': dict(label='Email login username', brief='Usually the full email address you sign in with.', more='Re-enter the password if you change the server or username.', example='alerts@example.com'),
+    'smtp_password': dict(label='Email password or app password', brief='Leave blank to keep the saved password. It is never displayed.', more='Use a provider app password when required. It is stored in the app configuration, which administrators and backups can access.', example='Paste the SMTP app password from your email provider.'),
+    'smtp_from': dict(label='Send alerts from this email address', brief='The sender address your SMTP account is allowed to use.', more='The From address can differ from the login only if your provider permits it.', example='alerts@example.com'),
+    'alert_properties_url': dict(label='Permanent link to the Properties list', brief='The HTTPS link recipients should open for more information.', more='Use a permanent authenticated link, never a temporary /api/hassio_ingress/ session URL. For Home Assistant use its external address followed by /hassio/ingress/APP_SLUG?stay_page=properties. Recipients still need their own Home Assistant access.', example='https://your-ha.example.com/hassio/ingress/1777083f_stay_automation?stay_page=properties')
+})

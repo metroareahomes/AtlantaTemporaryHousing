@@ -65,30 +65,33 @@
 <form method="post" action="recipients-save" id="save-recipients" data-save-label="Save recipients">
 <section class="panel">
 <h2>Alert recipients</h2>
-<p class="sub">Extra Home Assistant notify targets for lock failures, missing guest codes and the daily arrivals report.
-  Use a full service id such as <code>notify.mobile_app_kurts_iphone</code> (an email recipient needs an email notify service
-  set up in Home Assistant first). The optional Setup “Alert also through” service is included too.</p>
-<div class="scroll">
-<table>
-  <thead><tr><th scope="col">Name</th><th scope="col">Notify target</th><th scope="col">Active</th></tr></thead>
-  <tbody>
-  {% for r in recipients %}
-    <tr>
-      <td><input name="rname_{{ r.id }}" value="{{ r.name }}"></td>
-      <td><input name="rtarget_{{ r.id }}" value="{{ r.target }}" placeholder="notify.…"></td>
-      <td><input type="checkbox" name="ractive_{{ r.id }}" {{ 'checked' if r.active }}></td>
-    </tr>
-  {% endfor %}
-    <tr>
-      <td><input name="rname_new" placeholder="Add recipient…"></td>
-      <td><input name="rtarget_new" placeholder="notify.…"></td>
-      <td><input type="checkbox" name="ractive_new" checked></td>
-    </tr>
-  </tbody>
-</table>
+<p class="sub">Choose the homes and interruptions each person receives. Email is sent through the server in Setup.
+The existing Setup app-alert fallback still receives all owners; clear it if you want only recipient-specific routing.</p>
+<p class="sub">Hostaway owner tags: {% for owner, count in owner_counts.items() %}{{ owner }}: {{ count }} homes{{ ' · ' if not loop.last }}{% endfor %}. Review unconfirmed owners on Properties before relying on owner-only alerts.</p>
+<input type="hidden" name="recipient_settings_version" value="2">
+{% for r in recipients + [{'id':'new','name':'','email':'','target':'','owners':'Mike,Kurt','alert_types':'all','active':1}] %}
+<fieldset class="panel"><legend>{{ r.name or 'Add recipient' }}</legend>
+<div class="stack cols">
+<label>Name <input name="rname_{{ r.id }}" value="{{ r.name }}" placeholder="Person’s name"></label>
+<label>Email address <input type="email" name="remail_{{ r.id }}" value="{{ r.email }}" placeholder="name@example.com"></label>
+<label><input type="checkbox" name="ractive_{{ r.id }}" {{ 'checked' if r.active }}> Active</label>
 </div>
+<fieldset><legend>Whose homes?</legend>
+{% for owner in alert_owners %}<label><input type="checkbox" name="rowner_{{ r.id }}_{{ owner }}" {{ 'checked' if owner in r.owners.split(',') }}> {{ owner }}</label> {% endfor %}
+<p class="sub">Check both for both portfolios. Missing or conflicting owner tags go only to people selecting both owners.</p></fieldset>
+<fieldset><legend>Which interruptions?</legend>
+{% for category, label in alert_categories.items() %}<label style="display:block"><input type="checkbox" name="rtype_{{ r.id }}_{{ category }}" {{ 'checked' if 'all' in r.alert_types.split(',') or category in r.alert_types.split(',') }}> {{ label }}</label>{% endfor %}
+</fieldset>
+<details><summary>Optional Home Assistant app notification</summary><label>Notify service <input name="rtarget_{{ r.id }}" value="{{ r.target }}" placeholder="notify.mobile_app_kurts_iphone"></label></details>
+<p class="sub">Clear the name to remove this recipient.</p>
+</fieldset>
+{% endfor %}
 <p><button class="primary">Save recipients</button></p>
 </section>
 </form>
+<section class="panel"><h2>Test a saved recipient</h2><p class="sub">Save recipients first. A test goes only to the selected person.</p>
+<form method="post" action="recipient-test" class="inline"><select name="recipient_id" aria-label="Recipient to test">{% for r in recipients if r.active %}<option value="{{ r.id }}">{{ r.name }}</option>{% endfor %}</select><button>Send recipient test</button></form></section>
+{% if delivery_issues %}<section class="panel"><h2>Alerts waiting for delivery</h2>
+{% for d in delivery_issues %}<p>{{ d.name or 'Setup app target' }} · {{ d.channel }} · {{ d.status }}{% if d.status == 'uncertain' %} — the mail server may have accepted this message; check before retrying{% else %} — retry scheduled{% endif %}{% if d.last_error %}<br>{{ d.last_error }}{% endif %}</p>{% if d.status == 'uncertain' %}<form method="post" action="alert-delivery-retry" class="inline"><input type="hidden" name="delivery_id" value="{{ d.id }}"><label><input type="checkbox" name="checked_inbox" required> Inbox checked; retry may duplicate this email</label><button>Retry email</button></form>{% endif %}{% endfor %}</section>{% endif %}
 </div>
 {% endblock %}

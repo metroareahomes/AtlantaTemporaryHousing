@@ -42,3 +42,5 @@ jobs:
         run: python tests/browser/check_scrolling.py
       - name: Check daily temperature Setup on desktop and phone
         run: python tests/browser/check_daily_setup.py
+      - name: Check email recipients and SMTP setup on desktop and phone
+        run: python tests/browser/check_email_alerts.py

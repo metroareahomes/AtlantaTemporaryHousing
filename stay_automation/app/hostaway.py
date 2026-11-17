@@ -103,7 +103,7 @@ class HostawayClient:
             offset += PAGE_SIZE
 
     async def listings(self) -> list[dict[str, Any]]:
-        return await self._paged("/listings", {})
+        return await self._paged("/listings", {"includeResources": 1})
 
     async def reservations(self, departing_from: str) -> list[dict[str, Any]]:
         """All reservations that depart on or after the given date (YYYY-MM-DD)."""

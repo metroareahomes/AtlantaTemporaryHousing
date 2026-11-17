@@ -3,10 +3,10 @@ import json
 import re
 import secrets
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit, parse_qs
 
 from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.exception_handlers import http_exception_handler
@@ -20,6 +20,7 @@ from .climate import (
     TOLERANCE, is_summer, occupancy, occupying_reservation, setpoint,
 )
 from .daily_temperature import DEFAULTS as DAILY_DEFAULTS, RANGES as DAILY_RANGES, current_stay
+from .alerts import CATEGORIES, OWNERS, SMTP_FIELDS, email_address
 from .hostaway import HostawayError
 from .locks import DEFAULT_GUEST_MESSAGE, DEFAULTS, LockManager, _utc, add_time, new_backup_code
 from .reservations import code_status, property_state, within
@@ -368,6 +369,10 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None) 
 
     @app.get("/", response_class=HTMLResponse)
     async def status(request: Request, q: str = "", show: str = "attention", sort: str = "attention"):
+        ref = urlsplit(request.headers.get('referer', ''))
+        public = urlsplit(db.get_setting('public_url', '') or '')
+        if public.netloc and ref.netloc == public.netloc and '/hassio/ingress/' in ref.path and parse_qs(ref.query).get('stay_page') == ['properties']:
+            return RedirectResponse('properties', status_code=302)
         rows = dashboard_rows(syncer, q)
         counts = {k: sum(1 for r in rows if r["status"] == k) for k in STATUS_LABELS}
         problems = sum(1 for r in rows if r["problems"])
@@ -525,6 +530,9 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None) 
             request, "staff.html",
             staff=db.query("SELECT * FROM staff ORDER BY name"),
             recipients=db.query("SELECT * FROM alert_recipients ORDER BY name"),
+            alert_categories=CATEGORIES, alert_owners=OWNERS,
+            owner_counts={r['owner_scope'] or 'Unconfirmed': r['n'] for r in db.query("SELECT owner_scope, COUNT(*) AS n FROM properties WHERE active=1 GROUP BY owner_scope")},
+            delivery_issues=db.query("SELECT d.*,r.name FROM staff_alert_deliveries d LEFT JOIN alert_recipients r ON r.id=d.recipient_id WHERE d.status IN ('pending','uncertain') ORDER BY d.id DESC LIMIT 30"),
             previews=[{**p, "expires_local": _fmt(p["expires_at"], syncer.tz)} for p in db.query(
                 "SELECT v.*, p.name AS property_name FROM preview_codes v JOIN properties p ON p.id = v.property_id "
                 "WHERE v.expires_at > ? ORDER BY v.expires_at", (_utc(syncer.now()),))],
@@ -700,36 +708,59 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None) 
     async def recipients_save(request: Request):
         form = await request.form()
 
-        def check(name: str, target: str) -> None:
-            # Anything else would be skipped silently when alerting, so refuse it up front.
-            if not target.startswith("notify.") or len(target) <= len("notify."):
-                raise HTTPException(400, f"{name}: the target must be a Home Assistant notify service, "
-                                         "like notify.mobile_app_kurts_iphone")
-
-        # Validate everything first so a typo cannot half-save.
         updates = []
-        for row in db.query("SELECT id FROM alert_recipients"):
-            rid = row["id"]
+        emails = set()
+        extended = form.get("recipient_settings_version") == "2"
+        rows = db.query("SELECT * FROM alert_recipients") + [{"id": "new", "owners": "Mike,Kurt", "alert_types": "all"}]
+        for row in rows:
+            rid = row['id']
             name = str(form.get(f"rname_{rid}", "")).strip()
             target = str(form.get(f"rtarget_{rid}", "")).strip()
-            if not name or not target:
-                updates.append(("DELETE FROM alert_recipients WHERE id = ?", (rid,)))
+            email = str(form.get(f"remail_{rid}", row.get('email', ''))).strip().lower()
+            active = int(bool(form.get(f"ractive_{rid}")))
+            if not name or not (target or email):
+                if rid == 'new':
+                    if name or target or email:
+                        raise HTTPException(400, "New recipient needs a name and an email address or app notify target")
+                else:
+                    updates.append(("DELETE FROM alert_recipients WHERE id=?", (rid,)))
                 continue
-            check(name, target)
-            updates.append(("UPDATE alert_recipients SET name = ?, target = ?, active = ? WHERE id = ?",
-                            (name, target, 1 if form.get(f"ractive_{rid}") else 0, rid)))
-        new_name = str(form.get("rname_new", "")).strip()
-        new_target = str(form.get("rtarget_new", "")).strip()
-        if new_name or new_target:
-            if not new_name or not new_target:
-                raise HTTPException(400, "New recipient needs a name and a notify target")
-            check(new_name, new_target)
-            updates.append(("INSERT INTO alert_recipients(name, target, active) VALUES(?, ?, ?)",
-                            (new_name, new_target, 1 if form.get("ractive_new") else 0)))
+            if any(c in name for c in '\r\n') or len(name) > 120:
+                raise HTTPException(400, "Enter a short recipient name without line breaks")
+            if target and not re.fullmatch(r"notify\.[a-zA-Z0-9_]+", target):
+                raise HTTPException(400, f"{name}: enter a valid notify service")
+            if email and (not email_address(email) or email in emails):
+                raise HTTPException(400, f"{name}: enter a valid, unique email address")
+            if email:
+                emails.add(email)
+            owners = ','.join(o for o in OWNERS if form.get(f"rowner_{rid}_{o}")) if extended else row['owners']
+            types = ','.join(c for c in CATEGORIES if form.get(f"rtype_{rid}_{c}")) if extended else row['alert_types']
+            if active and not owners:
+                raise HTTPException(400, f"{name}: select Mike, Kurt, or both")
+            values = (name, target, email, owners, types, active)
+            if rid == 'new':
+                updates.append(("INSERT INTO alert_recipients(name,target,email,owners,alert_types,active) VALUES(?,?,?,?,?,?)", values))
+            else:
+                updates.append(("UPDATE alert_recipients SET name=?,target=?,email=?,owners=?,alert_types=?,active=? WHERE id=?", (*values, rid)))
         for sql, args in updates:
             db.execute(sql, args)
         db.log("recipients.saved", "Alert recipients saved")
         return _done("staff", "Alert recipients saved")
+
+    @app.post("/recipient-test")
+    async def recipient_test(recipient_id: int = Form(...)):
+        if locks is None or not db.one('SELECT 1 FROM alert_recipients WHERE id=? AND active=1', (recipient_id,)):
+            raise HTTPException(400, "Choose an active saved recipient")
+        await locks.alert_service.test_recipient(recipient_id)
+        return _done('staff', 'Test alert queued for that recipient; check their inbox or phone')
+
+    @app.post("/alert-delivery-retry")
+    async def alert_delivery_retry(delivery_id: int = Form(...), checked_inbox: str = Form('')):
+        if not checked_inbox:
+            raise HTTPException(400, "Check the recipient inbox first; retrying an uncertain email may send a duplicate")
+        db.execute("UPDATE staff_alert_deliveries SET status='pending',next_attempt_at=? WHERE id=? AND status='uncertain'",
+                   (syncer.now().astimezone(timezone.utc).isoformat(timespec='seconds'), delivery_id))
+        return _done('staff', 'Email retry queued')
 
     @app.get("/events", response_class=HTMLResponse)
     async def events(request: Request, q: str = "", level: str = "", kind: str = ""):
@@ -782,6 +813,8 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None) 
         return page(
             request, "setup.html",
             setup_fields=SETUP_FIELDS,
+            smtp_values={k: db.get_setting(k, '587' if k == 'smtp_port' else 'starttls' if k == 'smtp_security' else '') or '' for k in SMTP_FIELDS},
+            smtp_enabled=db.get_bool('smtp_enabled'),
             lyric_climate_entities=db.get_setting("lyric_climate_entities", "") or "",
             ha_ok=ha_ok, automation=automation, public_url=public_url,
             addon_slug=db.get_setting("addon_slug", "local_stay_automation"),
@@ -805,6 +838,36 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None) 
             guest_message=db.get_setting("guest_message") or DEFAULT_GUEST_MESSAGE,
             automated=db.one("SELECT COUNT(*) AS n FROM properties WHERE lock_automation = 1")["n"],
         )
+
+    @app.post("/smtp-settings-save")
+    async def smtp_settings_save(request: Request):
+        form = await request.form()
+        values = {k: str(form.get(k, '')).strip() for k in SMTP_FIELDS}
+        password = str(form.get('smtp_password', ''))
+        enabled = bool(form.get('smtp_enabled'))
+        if values['smtp_security'] not in ('ssl', 'starttls') or not values['smtp_port'].isdigit() or not 1 <= int(values['smtp_port']) <= 65535:
+            raise HTTPException(400, "Choose SSL or STARTTLS and a port from 1 to 65535")
+        if any('\r' in v or '\n' in v for v in values.values()):
+            raise HTTPException(400, "Email settings cannot contain line breaks")
+        if enabled:
+            try:
+                link = urlsplit(values['alert_properties_url'])
+            except ValueError:
+                raise HTTPException(400, 'Enter a valid HTTPS Properties link')
+            if (not email_address(values['smtp_from']) or not values['smtp_host'] or any(c in values['smtp_host'] for c in ' /@') or
+                link.scheme != 'https' or not link.netloc or link.username or '/api/hassio_ingress/' in link.path):
+                raise HTTPException(400, "Enter the SMTP server, a sender email and a permanent HTTPS Properties link")
+            if values['smtp_username'] and not (password or db.get_setting('smtp_password')):
+                raise HTTPException(400, "Enter the SMTP password (or app password)")
+        if (db.get_setting('smtp_password') and not password and
+            any(values[k] != (db.get_setting(k, '') or '') for k in ('smtp_host', 'smtp_username'))):
+            raise HTTPException(400, "Re-enter the password when changing the SMTP server or username")
+        if password:
+            values['smtp_password'] = password
+        values['smtp_enabled'] = '1' if enabled else '0'
+        db.set_settings(values)
+        db.log('settings.saved', 'Email server settings saved (password hidden)')
+        return _done('setup', 'Email settings saved')
 
     @app.post("/settings-save")
     async def settings_save(request: Request):

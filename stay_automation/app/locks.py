@@ -11,6 +11,7 @@ Hostaway's codes are never touched; if one outlives its guest, staff are told.
 Staff access codes and HA-BACKUP are managed from the database and pushed to every automated lock.
 """
 import asyncio
+from .alerts import AlertService
 import json
 import logging
 import re
@@ -236,6 +237,7 @@ def _utc(dt: datetime) -> str:
 class LockManager:
     def __init__(self, syncer):
         self.s = syncer
+        self.alert_service = AlertService(syncer)
         self.db = syncer.db
         self.ha = syncer.ha
         self.hostaway = syncer.hostaway
@@ -376,7 +378,7 @@ class LockManager:
                 f"The backup code on {lock['name']} was replaced {n} times in 24 hours. Something else is "
                 "changing it: check Home Assistant for a second 'Stays' / Stay Automation add-on (only one "
                 "should run), or whether someone is editing the code in the Schlage app.",
-                key=f"backupflap:{lock['id']}:{self.s.now().date()}")
+                key=f"backupflap:{lock['id']}:{self.s.now().date()}", category="guest_access", property_id=lock["property_id"])
 
     def _log_present_elsewhere(self, lock, names: list[str], reservations: list[dict[str, Any]],
                                cfg: dict[str, int]) -> None:
@@ -439,7 +441,7 @@ class LockManager:
         if fail_count == 1:
             await self.alert(f"Lock problem: {lock['property_name']}",
                              f"{lock['name']}: {error}. Retrying every {cfg['retry_minutes']} minutes.",
-                             key=f"lockfail:{lock['id']}:{now.date()}")
+                             key=f"lockfail:{lock['id']}:{now.date()}", category="locks", property_id=lock["property_id"])
         await self._final_checks(lock, now, reservations, actual, error)
         return False
 
@@ -479,7 +481,7 @@ class LockManager:
                     f"Old guest code still in lock: {lock['property_name']}",
                     f"{r['guest_name'] or 'The guest'} checked out {left}, but their code is still in "
                     f"{lock['name']} as \"{names[0]}\". Please remove it in the Schlage app.",
-                    key=f"stale:{r['id']}:{lock['id']}")
+                    key=f"stale:{r['id']}:{lock['id']}", category="guest_access", property_id=lock["property_id"])
 
     async def fallback(self, r: dict[str, Any], lock: dict[str, Any], reason: str) -> None:
         if self.db.one("SELECT 1 FROM guest_notices WHERE reservation_id = ?", (r["id"],)):
@@ -492,7 +494,7 @@ class LockManager:
         if not backup:
             await self.alert(f"Guest code NOT confirmed: {prop['name']}",
                              staff + " No backup code is set up, so the guest has NOT been messaged.",
-                             key=f"fallback:{r['id']}")
+                             key=f"fallback:{r['id']}", category="guest_access", property_id=prop["id"])
             self._record_notice(r, prop, delivered=False, message="(no backup code)")
             return
 
@@ -511,7 +513,7 @@ class LockManager:
             staff += " The backup code was sent to the guest through Hostaway."
             self.db.execute("UPDATE properties SET backup_used_by = ? WHERE id = ?", (r["id"], prop["id"]))
         self._record_notice(r, prop, delivered, message)
-        await self.alert(f"Guest code NOT confirmed: {prop['name']}", staff, key=f"fallback:{r['id']}")
+        await self.alert(f"Guest code NOT confirmed: {prop['name']}", staff, key=f"fallback:{r['id']}", category="guest_access", property_id=prop["id"])
 
     def _record_notice(self, r, prop, delivered: bool, message: str) -> None:
         self.db.execute(
@@ -560,17 +562,8 @@ class LockManager:
                 targets.append(target)
         return targets
 
-    async def alert(self, title: str, message: str, key: str | None = None) -> None:
-        if key and self.db.one("SELECT 1 FROM alerts_sent WHERE key = ?", (key,)):
-            return
-        try:
-            await self.ha.notify(title, message, services=self.alert_targets(), notification_id=key or "")
-        except Exception as exc:
-            log.error("alert failed: %s", exc)
-            self.db.log("alert.failed", f"Could not deliver alert '{title}': {exc}", level="error")
-        if key:
-            self.db.execute("INSERT OR IGNORE INTO alerts_sent(key, at) VALUES(?, ?)", (key, utcnow()))
-        self.db.log("alert", f"{title}: {message}", level="warning")
+    async def alert(self, title: str, message: str, key: str | None = None, **context) -> None:
+        await self.alert_service.emit(title, message, key, **context)
 
     async def daily_report(self, now: datetime) -> None:
         cfg = self.cfg()
@@ -590,4 +583,6 @@ class LockManager:
         else:
             message = "No arrivals today."
         self.db.set_setting("last_report_date", today)
-        await self.alert(f"Arrivals today ({now.strftime('%a %b %d')})", message, key=f"report:{today}")
+        await self.alert(f"Arrivals today ({now.strftime('%a %b %d')})", message, key=f"report:{today}",
+                         category="arrivals", property_ids=[r['id'] for r in rows],
+                         details={r['id']: f"{r['next_guest'] or 'Guest'} arrives {r['next_in']} — {r['code_label']}" for r in rows})

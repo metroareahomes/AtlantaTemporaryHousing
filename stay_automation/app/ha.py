@@ -184,6 +184,13 @@ class HAClient:
             timeout=SCHLAGE_TIMEOUT,
         )
 
+    async def notify_target(self, title: str, message: str, target: str) -> None:
+        """One outbound service only; a persistent-notice failure must not replay a successful push."""
+        if not re.fullmatch(r'notify\.[a-zA-Z0-9_]+', target):
+            raise HAError('Invalid staff notification target')
+        await self._post(f"/api/services/notify/{target.removeprefix('notify.')}",
+                         {'title': title, 'message': message})
+
     async def notify(self, title: str, message: str, *, service: str = "", services: list[str] | None = None,
                      notification_id: str = "") -> None:
         """Persistent notification in HA, plus optional notify services (e.g. notify.mobile_app_x)."""
@@ -240,3 +247,32 @@ class HAClient:
                 }],
             },
         )
+
+    async def reauthorization_entries(self) -> list[dict[str, Any]]:
+        """Read HA's actual reauth flows and entity registry, without reloading integrations."""
+        import asyncio
+        from websockets.asyncio.client import connect
+        base = str(self._http.base_url).rstrip('/')
+        suffix = '/websocket' if base.endswith('/core') else '/api/websocket'
+        url = base.replace('https://', 'wss://', 1).replace('http://', 'ws://', 1) + suffix
+        authorization = self._http.headers.get('Authorization', '')
+        async with connect(url, additional_headers={'Authorization': authorization}, open_timeout=10, close_timeout=5) as ws:
+            hello = json.loads(await asyncio.wait_for(ws.recv(), 15))
+            if hello.get('type') == 'auth_required':
+                await ws.send(json.dumps({'type': 'auth', 'access_token': authorization.removeprefix('Bearer ')}))
+                hello = json.loads(await asyncio.wait_for(ws.recv(), 15))
+            if hello.get('type') != 'auth_ok':
+                raise HAError('Home Assistant denied the reauthorization monitor connection')
+            results = []
+            for request_id, command in enumerate(('config_entries/flow/progress', 'config/entity_registry/list', 'config_entries/get'), 1):
+                await ws.send(json.dumps({'id': request_id, 'type': command}))
+                reply = json.loads(await asyncio.wait_for(ws.recv(), 15))
+                if reply.get('id') != request_id or not reply.get('success'):
+                    raise HAError('Could not read integration reauthorization state')
+                results.append(reply['result'])
+        flows, entities, entries = results
+        return [{'entry_id': f['context']['entry_id'], 'flow_id': f['flow_id'],
+                 'domain': f['handler'],
+                 'title': next((e['title'] for e in entries if e['entry_id'] == f['context']['entry_id']), f['handler']),
+                 'entities': [e['entity_id'] for e in entities if e.get('config_entry_id') == f['context']['entry_id']]}
+                for f in flows if f.get('context', {}).get('source') == 'reauth' and f['context'].get('entry_id')]

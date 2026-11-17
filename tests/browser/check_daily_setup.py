@@ -34,6 +34,8 @@ with sync_playwright() as p:
         assert page.locator('[name=occupied_reset_hour]').input_value() == '10'
         assert page.locator('[name=occupied_reset_spacing_seconds]').input_value() == '90'
         assert not page.locator('[name=occupied_reset_enabled]').is_checked()
+        assert not page.locator('[name=smtp_enabled]').is_checked()
+        assert page.locator('[name=smtp_password]').input_value() == ''
         page.locator('[name=daily_summer]').fill('74')
         page.locator('[aria-label="Help: Summer: lowest reasonable cooling setting (°F)"]').click()
         assert page.locator('.field-help[open]').is_visible()

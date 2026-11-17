@@ -79,6 +79,19 @@ def build():
     climate = ClimateManager(syncer, locks.alert)
     syncer.on_thermostats = climate.tick_property
 
+    async def sync_with_alerts():
+        try:
+            return await syncer.sync_reservations()
+        except Exception:
+            await locks.alert("Hostaway synchronization failed", "Booking updates could not be refreshed. Check the Hostaway connection; the last saved reservations remain available.",
+                              key=f"hostaway_sync:{syncer.now().strftime('%Y-%m-%dT%H')}", category="hostaway",
+                              property_ids=[p['id'] for p in db.query("SELECT id FROM properties WHERE active=1")])
+            raise
+
+    async def retry_staff_alerts():
+        await locks.alert_service.flush(channel='ha')
+        await locks.alert_service.flush(channel='email')
+
     discover = _then(syncer.import_listings, syncer.discover_locks)
 
     async def startup() -> None:
@@ -87,7 +100,7 @@ def build():
         except Exception as exc:  # never block startup over the webhook wiring
             db.log("setup.webhook", f"Could not check the add-on slug: {exc}", level="warning")
         await discover()
-        await syncer.sync_reservations()
+        await sync_with_alerts()
         await climate.refresh()
         await climate.check_batteries()
 
@@ -95,10 +108,12 @@ def build():
         # One chain so the startup sync finishes before the periodic loops begin.
         await run_logged("startup", startup, db)
         await asyncio.gather(
-            every(settings.sync_minutes, "sync", syncer.sync_reservations, db),
+            every(settings.sync_minutes, "sync", sync_with_alerts, db),
             every(settings.lock_discovery_minutes, "lock_discovery", discover, db),
             every(LOCK_TICK_MINUTES, "lock_automation", locks.tick, db),
             every(CLIMATE_TICK_MINUTES, "thermostats", climate.tick, db),
+            every(1, "staff_alert_delivery", retry_staff_alerts, db),
+            every(5, "integration_reauthorization", locks.alert_service.integrations, db),
             every(1, "temperature_guest_notes", climate.daily_pauses.flush_note_updates, db),
             every(0.25, "daily_temperature_queue", climate.daily_tick, db),
             every(CLIMATE_TICK_MINUTES, "temperature_complaints", climate.daily_pauses.monitor, db),

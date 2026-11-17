@@ -13,6 +13,7 @@ from .config import Settings
 from .db import DB, utcnow
 from .matching import match_lock
 from .reservations import changes, normalize
+from .alerts import owner_tag
 
 log = logging.getLogger(__name__)
 
@@ -68,6 +69,9 @@ class Syncer:
                     (listing["id"], hostaway_name, hostaway_name, address),
                 )
                 added += 1
+            owner = owner_tag(listing)
+            if owner is not None:
+                self.db.execute("UPDATE properties SET owner_scope=? WHERE hostaway_listing_id=?", (owner, listing['id']))
         if added:
             self.db.log("properties.imported", f"{added} new properties from Hostaway")
         return added
@@ -216,6 +220,9 @@ class Syncer:
                 property_id=prop["id"] if prop else None,
                 reservation_id=new["id"],
             )
+        owner = owner_tag(raw)
+        if owner is not None:
+            self.db.execute("UPDATE reservations SET owner_scope=? WHERE id=?", (owner, new['id']))
         if self.temperature_pauses:
             self.temperature_pauses.remember_field(raw)
         return what
