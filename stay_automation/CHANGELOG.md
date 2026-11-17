@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.6.23 — confirm seasonal mode and clear corrected thermostat warnings
+
+- Confirm Heat in winter or Cool in summer before an occupied temperature adjustment.
+- Pace mode and temperature commands in separate persisted slots; recheck NTC, eligibility and mode before the target command.
+- Withhold temperature commands if seasonal mode is unconfirmed, including normal arrival/vacant changes.
+- Clear stale failures without a new device command when an online reading confirms the current occupancy-policy mode and target.
+- Keep already reasonable settings alone and preserve arrival/checkout-day exclusions, complaint pauses and lock operations.
+
+Source rollback: stable-0.6.22-before-season-mode. Live Home Assistant state requires verification after installation.
+
+
 ## 0.6.22 — shared Google property status sheet
 
 - Add an optional view-only Google Sheet mirror, updated every five minutes from cached app readings without extra device polling.
