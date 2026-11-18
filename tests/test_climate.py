@@ -479,7 +479,7 @@ def test_status_page_shows_temperatures_and_battery(cm):
     page = client(cm).get("/?show=all")
     assert page.status_code == 200
     assert "Vacant setting will be restored to Cool 78" in page.text and "74°" in page.text and "72°" in page.text
-    assert "battery 12%" in page.text  # flagged as needing attention (limit is 15)
+    assert "battery 12%" in client(cm).get("/").text  # flagged as needing attention (limit is 15)
 
 
 def test_status_page_calls_a_matching_summer_setpoint_on_target(cm):
