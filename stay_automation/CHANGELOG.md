@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.24 — quietly restore vacant temperatures
+
+- Correct vacant-home mode/target drift on the normal five-minute thermostat pass, including after a successful reset earlier the same day.
+- Remove routine vacant mismatch warnings from Needs Attention; retain offline and failed-correction warnings.
+- Preserve occupied guest settings, thermostat automation switches, per-pass command limits and failed-command retry delays.
+
+Source rollback: stable-0.6.23-before-vacant-drift. Separate pending PRs are not included.
+
+
 ## 0.6.23 — confirm seasonal mode and clear corrected thermostat warnings
 
 - Confirm Heat in winter or Cool in summer before an occupied temperature adjustment.

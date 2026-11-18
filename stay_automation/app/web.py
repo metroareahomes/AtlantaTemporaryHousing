@@ -187,6 +187,10 @@ def _climate_views(therms: list[dict], prop: dict, reservations: list[dict], now
             })
             continue
         asked = f"{want_mode.title()} {wanted}°"
+        if not occupying:
+            views.append({"name": t["name"], "line": f"Vacant setting will be restored to {asked} · now {now_bits}" + (f", {set_bit}" if set_bit else ""),
+                          "ok": True, "detail": detail, "action": "", "problem": None})
+            continue
         views.append({
             "name": t["name"],
             "line": " · ".join(x for x in (f"Should be {asked}", f"now {now_bits}".strip(), set_bit) if x),
