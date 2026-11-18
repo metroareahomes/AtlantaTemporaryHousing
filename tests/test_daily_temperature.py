@@ -684,3 +684,16 @@ def test_confirmed_number_in_wrong_mode_cannot_confirm_daily_target(cm):
     cm.ha.set_temperature=changed_mode
     queue_tick(cm, at('2030-06-13T10:00'))
     assert cm.db.one('SELECT result FROM thermostat_daily_checks')['result'] == 'unconfirmed'
+
+
+def test_setup_removes_extra_pause_field_and_keeps_legacy_value_on_save(cm):
+    cm.db.set_setting('temperature_pause_field_id','167')
+    client = TestClient(create_app(cm.s), follow_redirects=False)
+    html = client.get('/setup').text
+    assert 'name="temperature_pause_field_id"' not in html
+    assert 'Optional extra Hostaway pause field number' not in html
+    assert 'NTC' in html
+    values = {k:str(v) for k,v in DEFAULTS.items() if k != 'temperature_pause_field_id'}
+    assert client.post('/daily-temperature-settings-save',data=values).status_code == 303
+    assert cm.db.get_setting('temperature_pause_field_id') == '167'
+    assert '/sheet-settings-save' not in html and 'sheet_endpoint' not in html

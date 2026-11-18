@@ -110,18 +110,6 @@ Changes are staggered, with at least the selected gap between thermostat command
   <button class="primary">Save extra thermostats</button>
 </form>
 </section>
-<section class="panel"><h2>Shared Google property sheet</h2>
-<p class="sub">A view-only copy for your team. Updates every five minutes from saved app readings. It does not control homes or add device polling. Mike, Kurt and Needs attention views are created by the Google setup script.</p>
-<form method="post" action="sheet-settings-save" id="save-sheet-settings" data-save-label="Save sheet connection" class="stack cols">
-{{ checkbox('sheet_enabled', sheet_enabled) }}
-{{ text('sheet_endpoint', sheet_endpoint, 'https://script.google.com/macros/s/…/exec') }}
-<div class="setup-field"><label class="field-title" for="setting-sheet_secret">{{ setup_fields.sheet_secret.label }}</label>{{ help('sheet_secret') }}
-<input id="setting-sheet_secret" name="sheet_secret" type="password" value="" autocomplete="new-password" aria-describedby="hint-sheet_secret">
-<p class="field-hint" id="hint-sheet_secret">{{ setup_fields.sheet_secret.brief }}</p></div>
-<p class="sub wide">Last confirmed update: {{ sheet_last_success }}{% if sheet_last_error %}<br>{{ sheet_last_error }}{% endif %}</p>
-<button class="primary">Save sheet connection</button></form>
-<p class="sub">Share the Google spreadsheet with Viewer access. Choose Data → Filter views → Mike, Kurt or Needs attention. You can also paste its share link into the email Properties link field below.</p>
-</section>
 <section class="panel"><h2>Email server for staff alerts</h2>
 <p class="sub">Use your email provider’s SMTP settings. Some providers need an app password.</p>
 <form method="post" action="smtp-settings-save" id="save-email-settings" data-save-label="Save email settings" class="stack cols">
