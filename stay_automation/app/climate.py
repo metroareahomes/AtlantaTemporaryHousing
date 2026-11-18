@@ -336,7 +336,12 @@ class ClimateManager:
                 self.db.log("thermostat.adopted", f"{t['name']}: stay already under way, left as it is",
                             property_id=t["property_id"])
             return "skip"  # daily resets have their own paced queue
-        if not should_apply(mode, t["last_mode"], last_applied, now, cfg["vacant_reset_hour"],
+        summer_now = is_summer(now.date(), cfg["summer_start_month"], cfg["summer_end_month"])
+        vacant_target = _clamped_policy_target(t, setpoint("vacant", summer_now, cfg))
+        vacant_drift = mode == "vacant" and (
+            t["state"] != ("cool" if summer_now else "heat")
+            or not took_effect(target_call(t, vacant_target, summer_now), t))
+        if not vacant_drift and not should_apply(mode, t["last_mode"], last_applied, now, cfg["vacant_reset_hour"],
                             occupying["id"] if occupying else None, t.get("last_reservation_id")):
             return "skip"
 

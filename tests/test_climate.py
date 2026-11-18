@@ -476,9 +476,9 @@ def test_status_page_shows_temperatures_and_battery(cm):
     cm.s.now = lambda: at("2030-06-10T12:00")  # vacant, summer: schedule is Cool 78
     cm.db.execute("UPDATE locks SET battery = 12")
     asyncio.run(cm.refresh())
-    page = client(cm).get("/")
+    page = client(cm).get("/?show=all")
     assert page.status_code == 200
-    assert "should be Cool 78" in page.text and "74°" in page.text and "72°" in page.text
+    assert "Vacant setting will be restored to Cool 78" in page.text and "74°" in page.text and "72°" in page.text
     assert "battery 12%" in page.text  # flagged as needing attention (limit is 15)
 
 
@@ -490,12 +490,12 @@ def test_status_page_calls_a_matching_summer_setpoint_on_target(cm):
     assert "should be" not in client(cm).get("/").text.lower()
 
 
-def test_status_page_flags_heat_during_summer(cm):
+def test_status_page_does_not_flag_routine_vacant_mode_drift(cm):
     cm.s.now = lambda: at("2030-06-10T12:00")
     cm.ha.climate["climate.maple"].update(state="heat", current_temp=74, target_temp=72)
     asyncio.run(cm.refresh())
-    text = client(cm).get("/").text
-    assert "should be Cool 78" in text and "heat" in text
+    text = client(cm).get("/?show=all").text
+    assert "Vacant setting will be restored to Cool 78" in text and "heat" in text
 
 
 def test_status_page_shows_offline_thermostat_as_a_problem(cm):
@@ -638,4 +638,43 @@ def test_wrong_mode_correct_number_does_not_clear_failure_or_send_temperature(cm
     cm.db.execute("UPDATE thermostats SET fail_count=1, last_error='did not take'")
     tick(cm, at("2030-12-10T12:00"))
     assert row(cm)["fail_count"] >= 1
+    assert cm.ha.sets == []
+
+
+def test_vacant_drift_corrected_again_same_day_before_reset_hour(cm):
+    tick(cm, at("2030-12-10T01:00"))
+    cm.ha.sets.clear()
+    cm.ha.climate["climate.maple"].update(state="heat",target_temp=68)
+    tick(cm, at("2030-12-10T01:05"))
+    assert cm.ha.sets == [("climate.maple",55.0,None,None)]
+    tick(cm, at("2030-12-10T01:10"))
+    assert len(cm.ha.sets) == 1
+
+
+def test_vacant_drift_is_quiet_but_failure_and_offline_still_warn(cm):
+    from app.web import dashboard_rows
+    cm.s.now = lambda: at("2030-12-10T01:00")
+    cm.ha.climate["climate.maple"].update(state="heat",target_temp=68)
+    asyncio.run(cm.refresh())
+    board = dashboard_rows(cm.s)[0]
+    assert not any("should be Heat" in p["text"] for p in board["problems"])
+    cm.db.execute("UPDATE thermostats SET fail_count=1,last_error='correction failed'")
+    assert any("correction failed" in p["text"] for p in dashboard_rows(cm.s)[0]["problems"])
+    cm.db.execute("UPDATE thermostats SET offline_since=?,state='unavailable'", (cm.s.now().isoformat(),))
+    assert any("offline" in p["text"] for p in dashboard_rows(cm.s)[0]["problems"])
+
+
+def test_vacant_summer_drift_corrects_without_waiting_for_next_day(cm):
+    tick(cm, at("2030-06-10T12:00"))
+    cm.ha.sets.clear()
+    cm.ha.climate["climate.maple"]["target_temp"] = 68
+    tick(cm, at("2030-06-10T12:05"))
+    assert cm.ha.sets == [("climate.maple",78.0,None,None)]
+
+
+def test_occupied_guest_change_is_not_treated_as_vacant_drift(cm):
+    tick(cm, at("2030-06-12T13:00"))
+    cm.ha.sets.clear()
+    cm.ha.climate["climate.maple"]["target_temp"] = 68
+    tick(cm, at("2030-06-12T14:00"))
     assert cm.ha.sets == []
