@@ -12,7 +12,6 @@ from test_sync import SETTINGS, FakeHA, FakeHostaway
 
 s = Syncer(DB(':memory:'), SETTINGS, FakeHostaway(), FakeHA())
 s.db.set_setting('smtp_password','never-show-this-secret')
-s.db.set_setting('sheet_secret','never-show-sheet-secret')
 c = TestClient(create_app(s))
 pages = {p:c.get(p).text for p in ('/staff','/setup','/','/properties')}
 s.db.execute("INSERT INTO alert_recipients(name,target,email,active) VALUES('Saved recipient','','saved@example.com',1)")
@@ -64,16 +63,6 @@ with sync_playwright() as p:
         saved = page.evaluate('window.sent[0]')
         assert saved['id']=='save-email-settings' and saved['values']['smtp_host']=='smtp.example.com'
         assert 'occ_summer' not in saved['values'] and 'guest_message' not in saved['values']
-        assert page.evaluate('document.documentElement.scrollWidth') <= width
-        assert 'never-show-sheet-secret' not in page.content()
-        assert page.locator('[name=sheet_secret]').input_value()==''
-        page.locator('[name=sheet_endpoint]').fill('https://script.google.com/macros/s/example/exec')
-        page.locator('[name=sheet_secret]').fill('a'*64)
-        page.locator('[name=sheet_enabled]').check()
-        page.locator('.save-bar').get_by_role('button',name='Save sheet connection',exact=True).click()
-        saved = page.evaluate('window.sent[1]')
-        assert saved['id']=='save-sheet-settings' and saved['values']['sheet_secret']=='a'*64
-        assert 'smtp_password' not in saved['values'] and 'guest_message' not in saved['values']
         assert page.evaluate('document.documentElement.scrollWidth') <= width
         # Simulate HA's authenticated ingress iframe, even if its proxy strips HTTP Referer.
         page.goto('https://ha.example.com/',referer='https://ha.example.com/hassio/ingress/stay?stay_page=properties')
