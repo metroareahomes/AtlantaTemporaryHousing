@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from app.web import dashboard_rows, missing_code_warning_due
-from test_sync import res, run
+from test_sync import res, run, syncer
 
 TZ = ZoneInfo("America/New_York")
 
