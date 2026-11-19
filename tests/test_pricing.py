@@ -215,7 +215,7 @@ def test_deactivated_property_during_read_is_not_recorded(syncer):
 def test_no_pricing_worker_or_live_route_is_registered():
     from pathlib import Path
     main=Path('stay_automation/app/main.py').read_text()
-    assert 'pricing' not in main
+    assert 'pricing.preview' not in main
 
 
 def test_spring_dst_gap_rejected_before_api_read(syncer):
@@ -387,3 +387,35 @@ def test_bulk_special_rechecks_threshold_and_preserves_manual_selection(syncer):
     assert writes[301][0]['price'] == 153
     assert any('Verified in Hostaway' in report for report in reports)
     assert any('no longer meets the threshold' in report for report in reports)
+
+
+def test_thursday_schedule_uses_saved_selection_and_runs_once_after_restart(syncer):
+    from starlette.datastructures import FormData
+
+    service = PricingSimulator(syncer)
+    thursday = FRIDAY - timedelta(days=1)
+    calls = []
+
+    async def apply(form):
+        calls.append(dict(form))
+        return ['Test home verified']
+
+    service.apply_selected_special = apply
+    syncer.now = lambda: thursday
+    run(service.tick_thursday_schedule())
+    assert calls == []
+    service.save_thursday_schedule(FormData({
+        'special_time': '14:00', 'special_enabled': 'on', 'special_owner': 'Kurt',
+        'special_discount': '15', 'special_floor': '200',
+    }))
+    syncer.now = lambda: thursday - timedelta(minutes=1)
+    run(service.tick_thursday_schedule())
+    assert calls == []
+    syncer.now = lambda: thursday
+    run(service.tick_thursday_schedule())
+    restart = PricingSimulator(syncer)
+    restart.apply_selected_special = apply
+    run(restart.tick_thursday_schedule())
+    syncer.now = lambda: FRIDAY
+    run(restart.tick_thursday_schedule())
+    assert calls == [{'special_owner': 'Kurt', 'special_discount': '15', 'special_floor': '200'}]

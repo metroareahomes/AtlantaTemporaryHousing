@@ -331,13 +331,13 @@ SETTING_LABELS = {
 }
 
 
-def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None) -> FastAPI:
+def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, *, pricing=None) -> FastAPI:
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None)
     app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
     # The stylesheet URL changes whenever the file does, so a browser or the HA ingress proxy never serves a stale copy.
     templates.env.globals["css_v"] = int((HERE / "static" / "style.css").stat().st_mtime)
     db = syncer.db
-    pricing = PricingSimulator(syncer)
+    pricing = pricing if pricing is not None else PricingSimulator(syncer)
 
     @app.exception_handler(HostawayError)
     async def hostaway_failed(request: Request, exc: HostawayError):
@@ -909,6 +909,9 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None) 
         result, error, applied, bulk_report = None, None, None, None
         if request.method == 'POST':
             try:
+                if form.get('special_action') == 'save_schedule':
+                    pricing.save_thursday_schedule(form)
+                    return _done('thursday-special', 'Thursday schedule saved')
                 if form.get('special_action') == 'apply_wright':
                     choices = form.getlist('special_property')
                     if len(choices) != 1 or form.get('special_floor', '').strip() or form.get('special_discount') != '20':
@@ -920,12 +923,20 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None) 
                     result = await pricing.thursday_special(form)
             except ValueError as exc:
                 error = str(exc)
+        schedule = pricing.thursday_schedule()
+        if request.method == 'GET' and schedule:
+            from starlette.datastructures import FormData
+            form = FormData([
+                ('special_owner', schedule['owner']), ('special_discount', schedule['discount']),
+                ('special_floor', schedule['floor']),
+                *(('special_property', item) for item in schedule['selected']),
+            ])
         properties = db.query(
             'SELECT id,name,address,owner_scope FROM properties WHERE active=1 '
             'AND hostaway_listing_id IS NOT NULL ORDER BY name, address, id'
         )
         return page(request, 'thursday_special.html', properties=properties, owners=OWNERS,
-                    special=form, result=result, error=error, applied=applied, bulk_report=bulk_report)
+                    special=form, result=result, error=error, applied=applied, bulk_report=bulk_report, schedule=schedule)
 
     @app.post("/pricing-settings-save")
     async def pricing_settings_save(request: Request):

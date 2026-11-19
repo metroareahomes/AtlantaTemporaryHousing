@@ -27,6 +27,13 @@
 </fieldset>
 <button>Preview Thursday Special</button>
 <button name="special_action" value="apply_selected">Apply once to qualifying homes in Hostaway</button>
+<fieldset>
+<legend>Thursday schedule</legend>
+<label><input type="checkbox" name="special_enabled" {{ 'checked' if schedule.enabled }}> Run automatically each Thursday</label>
+<label>Activation time (Eastern) <input type="time" name="special_time" value="{{ schedule.clock|default('14:00') }}"></label>
+<p>Saving uses the discount, owner, checked homes and price threshold above. If the app misses the selected minute, that week’s run is skipped.</p>
+<button name="special_action" value="save_schedule">Save Thursday schedule</button>
+</fieldset>
 </form>
 </section>
 {% if result %}

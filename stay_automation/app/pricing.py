@@ -6,6 +6,8 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from zoneinfo import ZoneInfo
 
+from starlette.datastructures import FormData
+
 TZ = ZoneInfo('America/New_York')
 DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
 DEFAULTS = {'pricing_discount': '10', 'pricing_threshold': '200', 'pricing_window': '24',
@@ -308,6 +310,64 @@ class PricingSimulator:
                     continue
                 results.append({'id': str(prop['id']), 'name': name, 'rows': rows})
             return {'thursday': thursday.isoformat(), 'properties': results, 'errors': errors}
+
+    def save_thursday_schedule(self, form):
+        clock = form.get('special_time', '')
+        if not re.fullmatch(r'(?:[01][0-9]|2[0-3]):[0-5][0-9]', clock):
+            raise ValueError('Enter a Thursday activation time')
+        enabled = form.get('special_enabled') == 'on'
+        owner = form.get('special_owner', '')
+        selected = form.getlist('special_property')
+        discount = form.get('special_discount', '').strip()
+        floor = form.get('special_floor', '').strip()
+        try:
+            rate = money(discount)
+            if not 0 < rate <= 90 or rate != rate.quantize(Decimal('.01')):
+                raise ValueError
+            if floor:
+                money(floor)
+        except (ValueError, InvalidOperation):
+            raise ValueError('Enter a valid discount and optional Thursday rate threshold') from None
+        if owner not in ('', 'Kurt', 'Mike') or any(
+            not re.fullmatch(r'[1-9][0-9]{0,12}', item) for item in selected
+        ):
+            raise ValueError('Choose a valid owner and properties')
+        if enabled and not (selected or floor):
+            raise ValueError('Check a home or enter a Thursday rate threshold before enabling')
+        config = {
+            'clock': clock, 'enabled': enabled, 'owner': owner,
+            'selected': selected, 'discount': discount, 'floor': floor,
+        }
+        self.db.set_setting('thursday_special_schedule', json.dumps(config))
+        return config
+
+    def thursday_schedule(self):
+        return json.loads(self.db.get_setting('thursday_special_schedule', '{}'))
+
+    async def tick_thursday_schedule(self):
+        local = self.s.now().astimezone(TZ)
+        if local.weekday() != 3:
+            return
+        config = self.thursday_schedule()
+        if not config.get('enabled') or config['clock'] != local.strftime('%H:%M'):
+            return
+        run_date = local.date().isoformat()
+        if self._lock.locked() or self.db.get_setting('thursday_special_last_run') == run_date:
+            return
+        if self._last_attempt and self.s.now() - self._last_attempt < timedelta(seconds=30):
+            return
+        self.db.set_setting('thursday_special_last_run', run_date)
+        form = FormData([
+            ('special_owner', config['owner']), ('special_discount', config['discount']),
+            ('special_floor', config['floor']),
+            *(('special_property', item) for item in config['selected']),
+        ])
+        try:
+            reports = await self.apply_selected_special(form)
+        except ValueError as exc:
+            reports = [str(exc)]
+        for report in reports:
+            self.db.log('pricing.thursday_special', report)
 
     async def apply_selected_special(self, form):
         if self.s.now().astimezone(TZ).weekday() != 3:
