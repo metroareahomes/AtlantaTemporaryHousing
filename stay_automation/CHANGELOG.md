@@ -3,6 +3,7 @@
 ## 0.6.31 — Apply immediately after preview
 
 - Allow Thursday Special Apply immediately after a preview while retaining live eligibility and duplicate-discount checks.
+- Remove Google Sheets controls from Setup.
 
 Source rollback: stable-0.6.30-before-apply-fix.
 

@@ -241,28 +241,6 @@ SETUP_FIELDS.update({
 })
 
 
-SETUP_FIELDS.update({
-    "sheet_enabled": {
-        "label": "Keep the shared sheet up to date",
-        "brief": "Send a view-only copy of property status to Google every five minutes.",
-        "more": "This uses saved readings. It does not change a home or ask devices to refresh. Turn it off to stop future updates; existing sheet rows remain.",
-        "example": "Turn this on after adding the Google receiver address and connection key."
-    },
-    "sheet_endpoint": {
-        "label": "Where should this app send the sheet updates?",
-        "brief": "Paste the web app address from the Google setup script, ending in /exec.",
-        "more": "This is the receiver address from Deploy in Apps Script. It is different from the Google spreadsheet link you share with people.",
-        "example": "https://script.google.com/macros/s/your-deployment/exec"
-    },
-    "sheet_secret": {
-        "label": "Secret connection key from Google",
-        "brief": "Copy CONNECTION_KEY from the script’s Project Settings. Leave blank to keep your saved key.",
-        "more": "The key proves that updates came from this app. Keep it private. Enter it again if you change the receiver address; it is never shown after saving.",
-        "example": "Paste the full connection key here, never into a shared sheet cell."
-    }
-})
-
-
 # Pricing controls affect manual simulations only until the one-property live test is approved.
 SETUP_FIELDS.update({
     'pricing_simulation_enabled': dict(label='Allow manual pricing simulations', brief='A simulation reads rates and shows a proposal. It does not change prices.', more='Turn this off to disable the simulation button. Recurring runs and live price writes are unavailable in this version.', example='Enable after choosing one test property.'),

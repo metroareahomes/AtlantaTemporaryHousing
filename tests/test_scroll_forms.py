@@ -31,7 +31,6 @@ class Forms(HTMLParser):
     ("/setup", [("save-lock-settings", "settings-save", "Save lock settings", "post"),
                 ("save-thermostat-settings", "thermostat-settings-save", "Save thermostat settings", "post"),
                 ("save-daily-temperature-settings", "daily-temperature-settings-save", "Save daily temperature settings", "post"),
-                ("save-sheet-settings", "sheet-settings-save", "Save sheet connection", "post"),
                 ("save-pricing-settings", "pricing-settings-save", "Save pricing settings", "post"),
                 ("save-email-settings", "smtp-settings-save", "Save email settings", "post")]),
     ("/events", []),
