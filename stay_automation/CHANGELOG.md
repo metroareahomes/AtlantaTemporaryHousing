@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.28 — Thursday Special preview rates
+
+- Show proposed rates on available nights and report arrival restrictions separately.
+- Preserve the existing booked and blocked inventory checks.
+
 ## 0.6.27 — The Thursday Special
 
 - Preview Thursday through Saturday rate discounts and a three-night Thursday arrival minimum.
