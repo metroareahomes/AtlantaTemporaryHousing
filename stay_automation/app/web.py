@@ -906,10 +906,16 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None) 
     @app.post("/thursday-special", response_class=HTMLResponse)
     async def thursday_special(request: Request):
         form = await request.form()
-        result, error = None, None
+        result, error, applied = None, None, None
         if request.method == 'POST':
             try:
-                result = await pricing.thursday_special(form)
+                if form.get('special_action') == 'apply_wright':
+                    choices = form.getlist('special_property')
+                    if len(choices) != 1 or form.get('special_floor', '').strip() or form.get('special_discount') != '20':
+                        raise ValueError('Check Wright only, enter 20% and leave the threshold blank')
+                    applied = await pricing.apply_wright_special(choices[0])
+                else:
+                    result = await pricing.thursday_special(form)
             except ValueError as exc:
                 error = str(exc)
         properties = db.query(
@@ -917,7 +923,7 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None) 
             'AND hostaway_listing_id IS NOT NULL ORDER BY name, address, id'
         )
         return page(request, 'thursday_special.html', properties=properties, owners=OWNERS,
-                    special=form, result=result, error=error)
+                    special=form, result=result, error=error, applied=applied)
 
     @app.post("/pricing-settings-save")
     async def pricing_settings_save(request: Request):

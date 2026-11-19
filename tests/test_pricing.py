@@ -258,7 +258,8 @@ def test_one_time_override_uses_selected_home_and_leaves_weekend_settings_intact
     assert syncer.db.query('SELECT * FROM settings') == before
 
 
-def test_thursday_special_combines_checked_homes_and_rate_matches(syncer):
+@pytest.mark.parametrize('blocked_listing', [None, 301, 302])
+def test_thursday_special_combines_checked_homes_and_rate_matches(syncer, blocked_listing):
     for lid, name, owner in [(301, 'Wright', 'Kurt'), (302, 'Matching', 'Kurt'),
                              (303, 'At threshold', 'Kurt'), (304, 'Other owner', 'Mike')]:
         syncer.db.execute('INSERT INTO properties(hostaway_listing_id,name,owner_scope) VALUES(?,?,?)',
@@ -269,9 +270,10 @@ def test_thursday_special_combines_checked_homes_and_rate_matches(syncer):
     async def calendar(lid, start, end):
         assert lid != 304
         assert (start, end) == ('2030-06-13', '2030-06-15')
-        return [day(start, price={301: 180, 302: 250, 303: 200}[lid], closedOnArrival=None),
+        return [day(start, price={301: 180, 302: 250, 303: 200}[lid], closedOnArrival=None, countAvailableUnits=1,
+                    availableUnitsToSell=1, desiredUnitsToSell=1),
                 day('2030-06-14', price=300, isAvailable='1', closedOnArrival=1),
-                day(end, price=350)]
+                day(end, price=350, countReservedUnits=1 if lid == blocked_listing else '0')]
 
     async def listing(lid):
         return dict(LISTING, id=lid)
@@ -288,8 +290,59 @@ def test_thursday_special_combines_checked_homes_and_rate_matches(syncer):
     assert '<h3>Matching</h3>' in response.text
     assert '<h3>At threshold</h3>' not in response.text
     assert '<h3>Other owner</h3>' not in response.text
+    if blocked_listing:
+        assert 'Skipped: all three nights must be confirmed vacant.' in response.text
+        start = response.text.index('<h3>Wright</h3>' if blocked_listing == 301 else '<h3>Matching</h3>')
+        end = response.text.index('</table>', start)
+        assert '<td>3</td>' not in response.text[start:end]
+        assert '<td>240.00</td>' not in response.text[start:end]
+        return
     assert '<td>180</td><td>144.00</td><td>1</td><td>3</td>' in response.text
     assert '<td>300</td><td>240.00</td><td>1</td><td>—</td>' in response.text
     assert '<td>350</td><td>280.00</td><td>1</td><td>—</td>' in response.text
     assert 'Arrival status unconfirmed' in response.text
     assert 'Hostaway reports arrivals closed' in response.text
+    assert 'Inventory counts reported' in response.text
+
+
+@pytest.mark.parametrize('blocked', [False, True])
+def test_live_wright_trial_checks_all_nights_and_applies_only_once(syncer, blocked):
+    pid = syncer.db.execute(
+        "INSERT INTO properties(hostaway_listing_id,name,owner_scope) VALUES(301,'Wright','Kurt')"
+    )
+    syncer.now = lambda: FRIDAY - timedelta(days=1)
+    calls = []
+
+    async def listing(lid):
+        assert lid == 301
+        return dict(LISTING, id=lid)
+
+    async def calendar(lid, start, end):
+        assert lid == 301
+        return [
+            day(start, price=200 if calls else 250, minimumStay=3 if calls else 1),
+            day('2030-06-14', price=240 if calls else 300, minimumStay=2),
+            day(end, price=280 if calls else 350, countReservedUnits=int(blocked)),
+        ]
+
+    async def write(lid, intervals):
+        assert lid == 301
+        calls.append(intervals)
+
+    syncer.hostaway.pricing_listing = listing
+    syncer.hostaway.pricing_calendar = calendar
+    syncer.hostaway.apply_calendar_intervals = write
+    service = PricingSimulator(syncer)
+    if blocked:
+        with pytest.raises(ValueError, match='confirmed vacant'):
+            run(service.apply_wright_special(str(pid)))
+        assert calls == []
+        return
+    assert '$200.00' in run(service.apply_wright_special(str(pid)))
+    assert calls == [[
+        {'startDate': '2030-06-13', 'endDate': '2030-06-13', 'price': 200, 'minimumStay': 3},
+        {'startDate': '2030-06-14', 'endDate': '2030-06-14', 'price': 240},
+        {'startDate': '2030-06-15', 'endDate': '2030-06-15', 'price': 280},
+    ]]
+    with pytest.raises(ValueError, match='already attempted'):
+        run(PricingSimulator(syncer).apply_wright_special(str(pid)))

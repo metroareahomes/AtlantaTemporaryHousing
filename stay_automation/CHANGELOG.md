@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.29 — One-time Wright trial
+
+- Apply the Thursday Special to Kurt’s Wright listing on demand, with three vacant nights required and Hostaway readback.
+- Retain a local record of the attempt to prevent duplicate discounts.
+
 ## 0.6.28 — Thursday Special preview rates
 
 - Show proposed rates on available nights and report arrival restrictions separately.

@@ -116,7 +116,7 @@ class HostawayClient:
         return {k: raw.get(k) for k in ('id', 'currencyCode', 'timeZoneName', 'checkInTimeStart')}
 
     async def pricing_calendar(self, listing_id: int, start: str, end: str) -> list[dict[str, Any]]:
-        """GET nightly calendar prices, never base prices. No pricing write endpoint is implemented."""
+        """GET nightly calendar prices, never base prices."""
         from datetime import date, timedelta
         first, last = date.fromisoformat(start), date.fromisoformat(end)
         if type(listing_id) is not int or listing_id <= 0 or not 0 <= (last-first).days <= 4:
@@ -140,6 +140,10 @@ class HostawayClient:
         if {day['date'] for day in days} != {(first + timedelta(days=i)).isoformat() for i in range((last-first).days+1)}:
             raise HostawayError("Pricing calendar dates incomplete")
         return days
+
+    async def apply_calendar_intervals(self, listing_id: int, intervals: list[dict]) -> None:
+        await self._request("PUT", f"/listings/{listing_id}/calendarIntervals",
+                            json=intervals, retry_transient=False)
 
     async def reservations(self, departing_from: str) -> list[dict[str, Any]]:
         """All reservations that depart on or after the given date (YYYY-MM-DD)."""

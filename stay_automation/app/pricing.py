@@ -1,4 +1,4 @@
-"""Read-only, single-property weekend pricing simulations. No calendar-write capability."""
+"""Weekend pricing previews and the explicitly triggered Wright trial."""
 import asyncio
 import json
 import re
@@ -99,6 +99,18 @@ def next_start(now, cfg):
     return start.strftime('%Y-%m-%dT%H:%M')
 
 
+def vacancy_issue(day):
+    if day.get('status') != 'available' or day.get('isAvailable') not in (1, '1'):
+        return 'Night not confirmed available'
+    if day.get('reservations') or any(
+        day.get(key) not in (None, 0, '0') for key in (
+            'countPendingUnits', 'countReservedUnits', 'countBlockingReservations', 'countBlockedUnits',
+        )
+    ):
+        return 'Reservation / blocking inventory present'
+    return None
+
+
 def plan(calendar, listing, at, cfg, manual=None):
     if listing.get('currencyCode') != 'USD':
         raise ValueError('Only a confirmed USD listing can be simulated')
@@ -112,6 +124,7 @@ def plan(calendar, listing, at, cfg, manual=None):
     active = start <= at.astimezone(TZ) < end
     cutoff = at.astimezone(timezone.utc) + timedelta(hours=int(cfg['pricing_window']))
     rows, dates = [], set()
+    thursday_special = bool(manual and manual.get('discount_all_dates'))
     for day in calendar:
         date = str(day.get('date', ''))
         if not re.fullmatch(r'\d{4}-\d{2}-\d{2}', date) or date in dates:
@@ -130,19 +143,20 @@ def plan(calendar, listing, at, cfg, manual=None):
             rows.append(row)
             continue
         offset = (checkin.date() - at.astimezone(TZ).date()).days
+        inventory_fields_present = any(day.get(key) is not None for key in (
+            'countAvailableUnits', 'availableUnitsToSell', 'desiredUnitsToSell',
+        ))
         if manual is None and not active:
             row['reason'] = 'Outside promotion window'
         elif manual is None and not at.astimezone(timezone.utc) <= checkin.astimezone(timezone.utc) <= cutoff:
             row['reason'] = 'Check-in outside next-hours window'
         elif manual is None and checkin >= end:
             row['reason'] = 'Check-in after promotion stops'
-        elif day.get('status') != 'available' or day.get('isAvailable') not in (1, '1'):
-            row['reason'] = 'Night not confirmed available'
-        elif not (manual and manual.get('discount_all_dates')) and day.get('closedOnArrival') not in (0, False):
+        elif issue := vacancy_issue(day):
+            row['reason'] = issue
+        elif not thursday_special and day.get('closedOnArrival') not in (0, False):
             row['reason'] = 'Arrival closed or unknown'
-        elif day.get('reservations') or any(day.get(k) not in (None, 0) for k in ('countPendingUnits', 'countReservedUnits', 'countBlockingReservations', 'countBlockedUnits')):
-            row['reason'] = 'Reservation / blocking inventory present'
-        elif any(day.get(k) is not None for k in ('countAvailableUnits', 'availableUnitsToSell', 'desiredUnitsToSell')):
+        elif inventory_fields_present and not thursday_special:
             row['reason'] = 'Multi-unit inventory requires separate review'
         elif manual is not None:
             minimum = manual['minimums'][offset]
@@ -156,7 +170,9 @@ def plan(calendar, listing, at, cfg, manual=None):
                     row['proposed'] = str(proposed)
             row['reason'] = ('One-time preview' if row['proposed'] or minimum is not None
                              else 'No change proposed')
-            if manual.get('discount_all_dates'):
+            if thursday_special:
+                if inventory_fields_present:
+                    row['reason'] += ' · Inventory counts reported; verify unit setup before applying'
                 arrival = day.get('closedOnArrival')
                 if arrival in (1, '1'):
                     row['reason'] += ' · Hostaway reports arrivals closed'
@@ -278,8 +294,80 @@ class PricingSimulator:
                             continue
                     listing = await self.s.hostaway.pricing_listing(listing_id)
                     rows = plan(calendar, listing, at, DEFAULTS, rule)
+                    expected_dates = {(thursday + timedelta(days=offset)).isoformat() for offset in range(3)}
+                    if {row['date'] for row in rows} != expected_dates or any(vacancy_issue(day) for day in calendar):
+                        for row in rows:
+                            row['proposed'] = ''
+                            row.pop('proposed_minimum_stay', None)
+                            if row['reason'].startswith('One-time preview'):
+                                row['reason'] = 'Skipped because the full weekend is not vacant'
+                        results.append({'name': name, 'rows': rows, 'ineligible': True})
+                        continue
                 except Exception:
                     errors.append(name)
                     continue
                 results.append({'name': name, 'rows': rows})
             return {'thursday': thursday.isoformat(), 'properties': results, 'errors': errors}
+
+    async def apply_wright_special(self, property_id):
+        if self._lock.locked():
+            raise ValueError('A pricing action is already running')
+        async with self._lock:
+            today = self.s.now().astimezone(TZ).date()
+            if today.weekday() != 3:
+                raise ValueError('The live Wright trial can be run on Thursday Eastern time')
+            matches = [
+                prop for prop in self.db.query(
+                    "SELECT id,name,address,hostaway_listing_id FROM properties "
+                    "WHERE active=1 AND owner_scope='Kurt' AND hostaway_listing_id IS NOT NULL"
+                )
+                if re.search(r"\bwright\b", f"{prop['name']} {prop['address'] or ''}", re.IGNORECASE)
+            ]
+            if len(matches) != 1 or str(matches[0]['id']) != property_id:
+                raise ValueError('Select Kurt’s uniquely matched Wright listing')
+            listing_id = matches[0]['hostaway_listing_id']
+            start = today.isoformat()
+            dates = [(today + timedelta(days=offset)).isoformat() for offset in range(3)]
+            end = dates[-1]
+            key = f'pricing_wright_trial_{listing_id}_{start}'
+            if self.db.get_setting(key):
+                raise ValueError('A write was already attempted for these dates. Check the Hostaway calendar.')
+            try:
+                listing = await self.s.hostaway.pricing_listing(listing_id)
+                calendar = await self.s.hostaway.pricing_calendar(listing_id, start, end)
+                rule = {'discount': '20', 'minimums': [3, None, None], 'discount_all_dates': True}
+                at = datetime.combine(today, datetime.min.time(), TZ)
+                rows = plan(calendar, listing, at, DEFAULTS, rule)
+            except Exception:
+                raise ValueError('Could not verify Wright’s calendar. No updates were sent.') from None
+            if sorted(row['date'] for row in rows) != dates or any(
+                vacancy_issue(day) for day in calendar
+            ) or any(not row['proposed'] for row in rows):
+                raise ValueError('All three nights must have a valid rate and be confirmed vacant')
+            if self.s.now().astimezone(TZ).date() != today:
+                raise ValueError('The Eastern calendar date changed. No updates were sent.')
+            intervals = []
+            for row in sorted(rows, key=lambda row: row['date']):
+                date = row['date']
+                item = {'startDate': date, 'endDate': date, 'price': float(row['proposed'])}
+                if date == start:
+                    item['minimumStay'] = 3
+                intervals.append(item)
+            # Persist the intent before sending. A timeout can mean the write succeeded.
+            record = {'status': 'attempted', 'before': rows, 'requested': intervals}
+            self.db.set_setting(key, json.dumps(record))
+            try:
+                await self.s.hostaway.apply_calendar_intervals(listing_id, intervals)
+                after = await self.s.hostaway.pricing_calendar(listing_id, start, end)
+                actual = {day['date']: day for day in after}
+                if len(after) != 3 or any(
+                    money(actual[item['startDate']]['price']) != money(item['price'])
+                    or ('minimumStay' in item and actual[item['startDate']]['minimumStay'] not in (3, '3'))
+                    for item in intervals
+                ):
+                    raise ValueError
+            except Exception:
+                raise ValueError('The update was attempted but could not be verified. Check Wright in Hostaway before making further changes.') from None
+            record['status'] = 'verified'
+            self.db.set_setting(key, json.dumps(record))
+            return ', '.join(f"{item['startDate']} at ${item['price']:.2f}" for item in intervals)
