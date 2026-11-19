@@ -105,6 +105,42 @@ class HostawayClient:
     async def listings(self) -> list[dict[str, Any]]:
         return await self._paged("/listings", {"includeResources": 1})
 
+    async def pricing_listing(self, listing_id: int) -> dict[str, Any]:
+        """Read only the metadata required for a pricing simulation."""
+        if type(listing_id) is not int or listing_id <= 0:
+            raise HostawayError("Invalid pricing listing")
+        body = await self._request("GET", f"/listings/{listing_id}")
+        raw = body.get("result")
+        if not isinstance(raw, dict) or str(raw.get("id")) != str(listing_id):
+            raise HostawayError("Pricing listing identity mismatch")
+        return {k: raw.get(k) for k in ('id', 'currencyCode', 'timeZoneName', 'checkInTimeStart')}
+
+    async def pricing_calendar(self, listing_id: int, start: str, end: str) -> list[dict[str, Any]]:
+        """GET nightly calendar prices, never base prices. No pricing write endpoint is implemented."""
+        from datetime import date, timedelta
+        first, last = date.fromisoformat(start), date.fromisoformat(end)
+        if type(listing_id) is not int or listing_id <= 0 or not 0 <= (last-first).days <= 4:
+            raise HostawayError("Pricing calendar read range invalid")
+        body = await self._request("GET", f"/listings/{listing_id}/calendar",
+                                   params={"startDate": start, "endDate": end, "includeResources": 1})
+        raw = body.get("result")
+        if not isinstance(raw, list) or len(raw) > 5:
+            raise HostawayError("Unexpected pricing calendar response")
+        allowed = ('id', 'date', 'price', 'status', 'isAvailable', 'isProcessed', 'minimumStay', 'maximumStay',
+                   'closedOnArrival', 'closedOnDeparture', 'countPendingUnits', 'countReservedUnits',
+                   'countBlockingReservations', 'countBlockedUnits', 'countAvailableUnits',
+                   'availableUnitsToSell', 'desiredUnitsToSell', 'updatedAt', 'updatedOn')
+        days = []
+        for day in raw:
+            if not isinstance(day, dict) or not first <= date.fromisoformat(day.get('date', '')) <= last:
+                raise HostawayError("Pricing calendar date mismatch")
+            item = {k: day.get(k) for k in allowed}
+            item['reservations'] = bool(day.get('reservations'))
+            days.append(item)
+        if {day['date'] for day in days} != {(first + timedelta(days=i)).isoformat() for i in range((last-first).days+1)}:
+            raise HostawayError("Pricing calendar dates incomplete")
+        return days
+
     async def reservations(self, departing_from: str) -> list[dict[str, Any]]:
         """All reservations that depart on or after the given date (YYYY-MM-DD)."""
         return await self._paged("/reservations", {"departureStartDate": departing_from, "includeResources": 1})

@@ -1,0 +1,258 @@
+import asyncio
+import json
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal
+
+import httpx
+import pytest
+from fastapi.testclient import TestClient
+
+from app.hostaway import HostawayClient, HostawayError
+from app.pricing import DEFAULTS, TZ, PricingSimulator, plan, validate, promotion_window
+from app.web import create_app
+from test_sync import syncer, run
+
+LISTING = {'id':100,'currencyCode':'USD','timeZoneName':'America/New_York','checkInTimeStart':15}
+FRIDAY = datetime(2030, 6, 14, 14, tzinfo=TZ)
+
+
+def day(date='2030-06-14', **kw):
+    return dict({'id':1,'date':date,'price':250,'isAvailable':1,'status':'available',
+                 'closedOnArrival':0,'minimumStay':1,'isProcessed':1}, **kw)
+
+
+@pytest.mark.parametrize('price,proposed',[(250,'225.00'),(200,''),(199.99,''),(210,'189.00'),(201.01,'180.91'),(0,''),('NaN',''),(None,'')])
+def test_current_calendar_price_threshold_and_rounding(price, proposed):
+    cfg = dict(DEFAULTS)
+    assert plan([day(price=price)], LISTING, FRIDAY, cfg)[0]['proposed']==proposed
+
+
+@pytest.mark.parametrize('patch,reason',[
+    ({'isAvailable':0},'not confirmed available'),({'status':'reserved'},'not confirmed available'),
+    ({'closedOnArrival':1},'Arrival closed'),({'closedOnArrival':None},'Arrival closed'),
+    ({'reservations':[{'guestName':'private'}]},'blocking inventory'),({'countPendingUnits':1},'blocking inventory'),
+    ({'countBlockedUnits':1},'blocking inventory'),({'availableUnitsToSell':2},'Multi-unit'),
+])
+def test_unavailable_or_ambiguous_inventory_never_proposed(patch,reason):
+    r=plan([day(**patch)],LISTING,FRIDAY,DEFAULTS)[0]
+    assert r['proposed']=='' and reason in r['reason']
+
+
+def test_checkin_window_uses_listing_hour_not_midnight():
+    rows=plan([day(),day('2030-06-15')],LISTING,FRIDAY,DEFAULTS)
+    assert rows[0]['proposed']=='225.00'
+    assert rows[1]['reason']=='Check-in outside next-hours window'  # 25 hours away
+    at=FRIDAY+timedelta(hours=1)
+    assert plan([day('2030-06-15')],LISTING,at,DEFAULTS)[0]['proposed']=='225.00'
+    assert plan([day()],LISTING,FRIDAY+timedelta(hours=2),DEFAULTS)[0]['proposed']==''
+
+
+@pytest.mark.parametrize('at,active',[(FRIDAY-timedelta(minutes=1),False),(FRIDAY,True),
+    (datetime(2030,6,17,0,0,tzinfo=TZ),True),(datetime(2030,6,17,0,1,tzinfo=TZ),False)])
+def test_exact_weekend_window(at,active):
+    start,end=promotion_window(at,DEFAULTS)
+    assert (start<=at<end) is active
+
+
+def test_checkin_after_promotion_stop_excluded_even_with_longer_window():
+    at=datetime(2030,6,16,6,tzinfo=TZ)
+    row=plan([day('2030-06-17')],LISTING,at,dict(DEFAULTS,pricing_window='48'))[0]
+    assert row['reason']=='Check-in after promotion stops'
+
+
+@pytest.mark.parametrize('date,offset',[(datetime(2030,1,11,14,tzinfo=TZ),-5),(FRIDAY,-4)])
+def test_eastern_schedule_respects_daylight_saving(date,offset):
+    start,end=promotion_window(date,DEFAULTS)
+    assert start.hour==14 and end.hour==0 and end.minute==1
+    assert start.utcoffset()==timedelta(hours=offset)
+
+
+@pytest.mark.parametrize('metadata',[dict(LISTING,currencyCode='EUR'),dict(LISTING,currencyCode=None),
+    dict(LISTING,timeZoneName='Europe/Berlin'),dict(LISTING,checkInTimeStart=None)])
+def test_unverified_currency_timezone_or_checkin_rejected(metadata):
+    with pytest.raises(ValueError):
+        plan([day()],metadata,FRIDAY,DEFAULTS)
+
+
+def configure(s):
+    run(s.import_listings())
+    prop=s.db.one('SELECT * FROM properties WHERE hostaway_listing_id=100')
+    cfg=dict(DEFAULTS,pricing_property=str(prop['id']))
+    s.db.set_settings({**cfg,'pricing_simulation_enabled':'1'})
+    s.now=lambda:FRIDAY
+    async def listing(lid):
+        assert lid==100
+        return dict(LISTING)
+    async def calendar(lid,start,end):
+        assert lid==100 and start=='2030-06-14' and end=='2030-06-15'
+        return [day(),day('2030-06-15')]
+    s.hostaway.pricing_listing=listing
+    s.hostaway.pricing_calendar=calendar
+    return cfg
+
+
+def test_repeat_simulations_do_not_compound_or_change_devices_or_reservations(syncer):
+    s=syncer; configure(s)
+    before={t:s.db.query(f'SELECT * FROM {t}') for t in ('properties','locks','thermostats','reservations')}
+    service=PricingSimulator(s)
+    run(service.preview(FRIDAY))
+    s.now=lambda:FRIDAY+timedelta(seconds=31)
+    run(service.preview(FRIDAY))
+    rows=s.db.query('SELECT * FROM pricing_simulations')
+    assert len(rows)==2
+    assert all(json.loads(r['rows_json'])[0]['proposed']=='225.00' for r in rows)
+    assert before=={t:s.db.query(f'SELECT * FROM {t}') for t in before}
+    assert 'guestName' not in json.dumps(rows)
+
+
+def test_manual_read_is_opt_in_and_rate_limited(syncer):
+    service=PricingSimulator(syncer)
+    with pytest.raises(ValueError,match='disabled'):
+        run(service.preview(FRIDAY))
+    configure(syncer)
+    run(service.preview(FRIDAY))
+    with pytest.raises(ValueError,match='30 seconds'):
+        run(service.preview(FRIDAY))
+
+
+def test_api_failure_is_generic_and_cannot_write_audit_or_leak_secret(syncer):
+    configure(syncer)
+    async def fail(lid):
+        raise HostawayError('SECRET access token')
+    syncer.hostaway.pricing_listing=fail
+    with pytest.raises(ValueError) as exc:
+        run(PricingSimulator(syncer).preview(FRIDAY))
+    assert 'SECRET' not in str(exc.value)
+    assert not syncer.db.query('SELECT * FROM pricing_simulations')
+    assert 'SECRET' not in json.dumps(syncer.db.query('SELECT * FROM events'))
+
+
+def test_property_or_configuration_changed_during_io_discards_preview(syncer):
+    configure(syncer)
+    original=syncer.hostaway.pricing_calendar
+    async def read(*args):
+        syncer.db.set_setting('pricing_property','2')
+        return await original(*args)
+    syncer.hostaway.pricing_calendar=read
+    with pytest.raises(ValueError,match='changed'):
+        run(PricingSimulator(syncer).preview(FRIDAY))
+    assert not syncer.db.query('SELECT * FROM pricing_simulations')
+
+
+@pytest.mark.parametrize('patch',[{'pricing_discount':'NaN'},{'pricing_discount':'100'},{'pricing_threshold':'-1'},
+    {'pricing_window':'0'},{'pricing_property':'0'},{'pricing_start_time':'25:00'},
+    {'pricing_check1_day':'4'},{'pricing_check2_time':'1:00'},{'pricing_end_day':'5'}])
+def test_invalid_settings_are_atomic(syncer,patch):
+    cfg=configure(syncer)
+    old=syncer.db.query('SELECT * FROM settings ORDER BY key')
+    c=TestClient(create_app(syncer))
+    response=c.post('/pricing-settings-save',data={**cfg,**patch,'pricing_simulation_enabled':'on'})
+    assert response.status_code==400
+    assert old==syncer.db.query('SELECT * FROM settings ORDER BY key')
+
+
+def test_setup_variables_save_and_simulate_with_no_live_activation_route(syncer):
+    cfg=configure(syncer)
+    c=TestClient(create_app(syncer))
+    assert 'Weekend last-minute pricing' in c.get('/setup').text
+    r=c.post('/pricing-settings-save',data={**cfg,'pricing_discount':'12.5','pricing_simulation_enabled':'on'},follow_redirects=False)
+    assert r.status_code==303
+    assert not syncer.db.get_bool('pricing_enabled')
+    r=c.post('/pricing-simulate',data={'pricing_preview_at':'2030-06-14T14:00'},follow_redirects=False)
+    assert r.status_code==303 and syncer.db.one('SELECT id FROM pricing_simulations')
+    html=c.get('/setup').text
+    assert '218.75' in html and 'Simulation only' in html
+    assert c.post('/pricing-activate').status_code==404
+    c.post('/pricing-settings-save',data=dict(cfg,pricing_property='0'),follow_redirects=False)
+    assert not syncer.db.get_bool('pricing_simulation_enabled')
+
+
+def test_calendar_client_uses_only_get_and_sanitizes_source():
+    calls=[]
+    def handle(request):
+        calls.append((request.method,request.url.path))
+        if request.url.path.endswith('/calendar'):
+            data=[day(reservations=[{'guestName':'private','doorCode':'4821'}])]
+        else:
+            data=dict(LISTING,wifiPassword='PRIVATE')
+        return httpx.Response(200,json={'status':'success','result':data})
+    h=HostawayClient('1','secret',load_token=lambda:'stored',http=httpx.AsyncClient(base_url='https://hostaway.test',transport=httpx.MockTransport(handle)))
+    listing=run(h.pricing_listing(100)); rows=run(h.pricing_calendar(100,'2030-06-14','2030-06-14'))
+    assert 'PRIVATE' not in json.dumps(listing) and 'private' not in json.dumps(rows) and '4821' not in json.dumps(rows)
+    assert rows[0]['reservations'] is True
+    assert calls==[('GET','/listings/100'),('GET','/listings/100/calendar')]
+
+
+def test_calendar_duplicates_and_missing_days_rejected():
+    def handle(request):
+        return httpx.Response(200,json={'status':'success','result':[day()]})
+    h=HostawayClient('1','secret',load_token=lambda:'stored',http=httpx.AsyncClient(base_url='https://hostaway.test',transport=httpx.MockTransport(handle)))
+    with pytest.raises(HostawayError):
+        run(h.pricing_calendar(100,'2030-06-14','2030-06-15'))
+    with pytest.raises(ValueError):
+        plan([day(),day()],LISTING,FRIDAY,DEFAULTS)
+
+
+def test_rounded_proposal_cannot_be_zero_or_unchanged():
+    cfg=dict(DEFAULTS,pricing_threshold='0',pricing_discount='90')
+    assert plan([day(price='0.01')],LISTING,FRIDAY,cfg)[0]['proposed']==''
+    cfg['pricing_discount']='0.01'
+    assert plan([day(price='0.01')],LISTING,FRIDAY,cfg)[0]['proposed']==''
+
+
+def test_deactivated_property_during_read_is_not_recorded(syncer):
+    configure(syncer)
+    original=syncer.hostaway.pricing_calendar
+    async def read(*args):
+        syncer.db.execute('UPDATE properties SET active=0')
+        return await original(*args)
+    syncer.hostaway.pricing_calendar=read
+    with pytest.raises(ValueError,match='changed'):
+        run(PricingSimulator(syncer).preview(FRIDAY))
+    assert not syncer.db.query('SELECT * FROM pricing_simulations')
+
+
+def test_no_pricing_worker_or_live_route_is_registered():
+    from pathlib import Path
+    main=Path('stay_automation/app/main.py').read_text()
+    assert 'pricing' not in main
+
+
+def test_spring_dst_gap_rejected_before_api_read(syncer):
+    configure(syncer)
+    c=TestClient(create_app(syncer))
+    result=c.post('/pricing-simulate',data={'pricing_preview_at':'2030-03-10T02:30'},follow_redirects=False)
+    assert 'does+not+exist' in result.headers['location']
+    assert not syncer.db.query('SELECT * FROM pricing_simulations')
+
+
+def test_one_time_override_uses_selected_home_and_leaves_weekend_settings_intact(syncer):
+    configure(syncer)
+    property_id = syncer.db.execute(
+        "INSERT INTO properties(hostaway_listing_id,name,owner_scope) VALUES(303,'Wright','Kurt')"
+    )
+    syncer.now = lambda: FRIDAY - timedelta(days=1)
+
+    async def listing(listing_id):
+        assert listing_id == 303
+        return dict(LISTING, id=303)
+
+    async def calendar(listing_id, start, end):
+        assert (listing_id, start, end) == (303, '2030-06-13', '2030-06-15')
+        return [day(date, price=180) for date in ('2030-06-13', '2030-06-14', '2030-06-15')]
+
+    syncer.hostaway.pricing_listing = listing
+    syncer.hostaway.pricing_calendar = calendar
+    before = syncer.db.query('SELECT * FROM settings')
+    client = TestClient(create_app(syncer))
+    response = client.post('/pricing-simulate', data={
+        'pricing_action': 'one_time', 'pricing_property': str(property_id),
+        'pricing_manual_discount': '20', 'pricing_minimum_0': '3', 'pricing_minimum_2': '2',
+    }, follow_redirects=False)
+    assert response.is_redirect
+    result = syncer.db.one('SELECT * FROM pricing_simulations')
+    assert result['property_id'] == property_id
+    rows = json.loads(result['rows_json'])
+    assert [row['proposed'] for row in rows] == ['144.00', '', '']
+    assert [row.get('proposed_minimum_stay') for row in rows] == [3, None, 2]
+    assert syncer.db.query('SELECT * FROM settings') == before

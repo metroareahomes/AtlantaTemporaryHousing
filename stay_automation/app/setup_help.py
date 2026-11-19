@@ -261,3 +261,29 @@ SETUP_FIELDS.update({
         "example": "Paste the full connection key here, never into a shared sheet cell."
     }
 })
+
+
+# Pricing controls affect manual simulations only until the one-property live test is approved.
+SETUP_FIELDS.update({
+    'pricing_simulation_enabled': dict(label='Allow manual pricing simulations', brief='A simulation reads rates and shows a proposal. It does not change prices.', more='Turn this off to disable the simulation button. Recurring runs and live price writes are unavailable in this version.', example='Enable after choosing one test property.'),
+    'pricing_property': dict(label='One home to test', brief='Only this property is read by the pricing preview.', more='Choose one active Hostaway listing. This does not change its lock or thermostat automation.', example='Choose your test home, then save before running a simulation.'),
+    'pricing_discount': dict(label='Reduce eligible nightly rates by (%)', brief='Default: 10%. Each proposal uses the current Hostaway calendar rate.', more='This is the percentage reduction, not a new base rate. Simulations never write the discounted value back, so repeating a preview does not compound it.', example='$250 with 10% off gives $225.'),
+    'pricing_threshold': dict(label='Only discount rates greater than ($)', brief='Default: $200. A rate equal to this number is excluded.', more='This is an eligibility threshold, not a floor for the final rate. Prices below this threshold after discount are allowed in the proposal.', example='$210 is eligible and becomes $189 at 10% off; $200 is excluded.'),
+    'pricing_window': dict(label='Check-in within the next (hours)', brief='Default: 24 hours from the simulated run time.', more='Uses the listing’s normal check-in hour and local calendar date, not just midnight. Already-passed check-in times are excluded.', example='Friday at 2 PM includes a Friday 3 PM check-in; Saturday 3 PM is 25 hours away and excluded.'),
+    'pricing_preview_at': dict(label='Pretend the check runs at this Eastern time', brief='Choose the date and time to simulate, within 14 days of now.', more='Future simulations read today’s current calendar prices for those dates. They are not forecasts of future PriceLabs updates. Eastern daylight saving time is applied automatically.', example='Choose the coming Friday at 14:00 to preview activation.'),
+})
+for _event, _label, _example in [('start','Promotion starts','Friday at 14:00 (2 PM)'), ('check1','Second pricing check','Saturday at 06:00 (6 AM)'), ('check2','Third pricing check','Sunday at 06:00 (6 AM)'), ('end','Promotion stops','Monday at 00:01 (12:01 AM)')]:
+    SETUP_FIELDS['pricing_'+_event+'_day'] = dict(label=_label+' — day', brief='All promotion times use America/New_York (Eastern).', more='These settings describe the simulation schedule. Saving them does not enable recurring jobs. Checks and stop must follow the start in order within one week.', example=_example)
+    SETUP_FIELDS['pricing_'+_event+'_time'] = dict(label=_label+' — time', brief='Use a 24-hour Eastern time, such as 06:00 or 14:00.', more='Eastern daylight saving time is handled automatically. This is only a planned schedule until the one-property test and activation are approved.', example=_example)
+
+SETUP_FIELDS['pricing_manual_discount'] = dict(
+    label='Tonight only — discount (%)', brief='Leave blank to keep tonight’s rate.',
+    more='The one-time preview uses the current calendar price and bypasses the weekend schedule and price threshold.',
+    example='Enter 20 to preview a 20% reduction for tonight.',
+)
+for _day, _label in enumerate(('Tonight', 'Tomorrow', 'Two days from today')):
+    SETUP_FIELDS[f'pricing_minimum_{_day}'] = dict(
+        label=f'{_label} — minimum nights', brief='Leave blank to keep the current minimum.',
+        more='This is the minimum length of a reservation arriving on this date.',
+        example='Enter 3 to require a stay of at least three nights for arrivals on this date.',
+    )

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.26 — Hostaway pricing previews
+
+- Preview weekend pricing on one property with configurable rates and timing.
+- Filter properties by owner and preview one-time discounts and arrival minimums.
+- This release reads calendar data only. Live pricing and recurring runs are unavailable.
+
+Source rollback: stable-0.6.25-before-pricing-preview.
+
 ## 0.6.25 — refresh lock availability on Check lock
 
 - Read the selected lock's current Home Assistant availability as well as its access codes when Check lock is pressed.
