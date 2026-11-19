@@ -148,7 +148,7 @@ def plan(calendar, listing, at, cfg, manual=None):
             minimum = manual['minimums'][offset]
             if minimum is not None:
                 row['proposed_minimum_stay'] = minimum
-            if offset == 0 and manual['discount']:
+            if (offset == 0 or manual.get('discount_all_dates')) and manual['discount']:
                 proposed = (current * (1 - money(manual['discount']) / 100)).quantize(
                     Decimal('.01'), rounding=ROUND_HALF_UP
                 )
@@ -213,3 +213,67 @@ class PricingSimulator:
                                  (self.s.now().isoformat(), prop['id'], at.isoformat(), json.dumps(cfg if manual is None else {'one_time': manual}), json.dumps(rows)))
             self.db.log('pricing.simulated', f'Pricing simulation saved: {len(rows)} dates reviewed; no prices changed.', property_id=prop['id'])
             return rid
+
+    async def thursday_special(self, form):
+        """Preview the current or coming Thursday without changing the calendar."""
+        owner = form.get('special_owner', '')
+        if owner not in ('', 'Kurt', 'Mike'):
+            raise ValueError('Choose a valid owner')
+        selected = form.getlist('special_property')
+        if any(not re.fullmatch(r'[1-9][0-9]{0,12}', value) for value in selected):
+            raise ValueError('Choose valid properties')
+        selected = {int(value) for value in selected}
+        try:
+            discount = money(form.get('special_discount', ''))
+            floor_input = form.get('special_floor', '').strip()
+            floor = money(floor_input) if floor_input else None
+            if not 0 < discount <= 90 or discount != discount.quantize(Decimal('.01')):
+                raise ValueError
+        except (ValueError, InvalidOperation):
+            raise ValueError('Enter a discount above 0 and up to 90%, and a valid optional price threshold') from None
+        if not selected and floor is None:
+            raise ValueError('Check at least one home or enter a Thursday price threshold')
+        if self._lock.locked():
+            raise ValueError('A pricing preview is already running')
+        async with self._lock:
+            now = self.s.now()
+            if self._last_attempt and now - self._last_attempt < timedelta(seconds=30):
+                raise ValueError('Wait 30 seconds before another pricing read')
+            self._last_attempt = now
+            today = now.astimezone(TZ).date()
+            thursday = today + timedelta(days=(3 - today.weekday()) % 7)
+            saturday = thursday + timedelta(days=2)
+            properties = self.db.query(
+                'SELECT id,name,address,hostaway_listing_id FROM properties WHERE active=1 '
+                "AND hostaway_listing_id IS NOT NULL AND (? = '' OR owner_scope = ?) ORDER BY name, id",
+                (owner, owner),
+            )
+            if not selected <= {prop['id'] for prop in properties}:
+                raise ValueError('A selected property is outside the chosen owner or no longer active')
+            results = []
+            errors = []
+            rule = {'discount': str(discount), 'minimums': [3, None, None], 'discount_all_dates': True}
+            at = datetime.combine(thursday, datetime.min.time(), TZ)
+            for prop in properties:
+                checked = prop['id'] in selected
+                if not checked and floor is None:
+                    continue
+                listing_id = prop['hostaway_listing_id']
+                name = prop['name']
+                if prop['address'] and prop['address'] != name:
+                    name += f" ({prop['address']})"
+                try:
+                    calendar = await self.s.hostaway.pricing_calendar(
+                        listing_id, thursday.isoformat(), saturday.isoformat()
+                    )
+                    if not checked:
+                        thursday_rate = next(day['price'] for day in calendar if day['date'] == thursday.isoformat())
+                        if money(thursday_rate) <= floor:
+                            continue
+                    listing = await self.s.hostaway.pricing_listing(listing_id)
+                    rows = plan(calendar, listing, at, DEFAULTS, rule)
+                except Exception:
+                    errors.append(name)
+                    continue
+                results.append({'name': name, 'rows': rows})
+            return {'thursday': thursday.isoformat(), 'properties': results, 'errors': errors}

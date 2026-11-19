@@ -902,6 +902,23 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None) 
         db.log('sheet.settings_saved', 'Property sheet connection settings saved (key hidden)')
         return _done('setup', 'Sheet connection saved; enabled updates run every five minutes')
 
+    @app.get("/thursday-special", response_class=HTMLResponse)
+    @app.post("/thursday-special", response_class=HTMLResponse)
+    async def thursday_special(request: Request):
+        form = await request.form()
+        result, error = None, None
+        if request.method == 'POST':
+            try:
+                result = await pricing.thursday_special(form)
+            except ValueError as exc:
+                error = str(exc)
+        properties = db.query(
+            'SELECT id,name,address,owner_scope FROM properties WHERE active=1 '
+            'AND hostaway_listing_id IS NOT NULL ORDER BY name, address, id'
+        )
+        return page(request, 'thursday_special.html', properties=properties, owners=OWNERS,
+                    special=form, result=result, error=error)
+
     @app.post("/pricing-settings-save")
     async def pricing_settings_save(request: Request):
         form = await request.form()

@@ -256,3 +256,37 @@ def test_one_time_override_uses_selected_home_and_leaves_weekend_settings_intact
     assert [row['proposed'] for row in rows] == ['144.00', '', '']
     assert [row.get('proposed_minimum_stay') for row in rows] == [3, None, 2]
     assert syncer.db.query('SELECT * FROM settings') == before
+
+
+def test_thursday_special_combines_checked_homes_and_rate_matches(syncer):
+    for lid, name, owner in [(301, 'Wright', 'Kurt'), (302, 'Matching', 'Kurt'),
+                             (303, 'At threshold', 'Kurt'), (304, 'Other owner', 'Mike')]:
+        syncer.db.execute('INSERT INTO properties(hostaway_listing_id,name,owner_scope) VALUES(?,?,?)',
+                          (lid, name, owner))
+    wright = syncer.db.one('SELECT id FROM properties WHERE hostaway_listing_id=301')['id']
+    syncer.now = lambda: FRIDAY - timedelta(days=1)
+
+    async def calendar(lid, start, end):
+        assert lid != 304
+        assert (start, end) == ('2030-06-13', '2030-06-15')
+        return [day(start, price={301: 180, 302: 250, 303: 200}[lid]),
+                day('2030-06-14', price=300), day(end, price=350)]
+
+    async def listing(lid):
+        return dict(LISTING, id=lid)
+
+    syncer.hostaway.pricing_calendar = calendar
+    syncer.hostaway.pricing_listing = listing
+    client = TestClient(create_app(syncer))
+    response = client.post('/thursday-special', data={
+        'special_owner': 'Kurt', 'special_property': str(wright),
+        'special_discount': '20', 'special_floor': '200',
+    })
+    assert response.status_code == 200
+    assert '<h3>Wright</h3>' in response.text
+    assert '<h3>Matching</h3>' in response.text
+    assert '<h3>At threshold</h3>' not in response.text
+    assert '<h3>Other owner</h3>' not in response.text
+    assert '<td>180</td><td>144.00</td><td>1</td><td>3</td>' in response.text
+    assert '<td>300</td><td>240.00</td><td>1</td><td>—</td>' in response.text
+    assert '<td>350</td><td>280.00</td><td>1</td><td>—</td>' in response.text

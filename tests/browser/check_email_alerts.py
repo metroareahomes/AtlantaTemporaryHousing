@@ -63,6 +63,7 @@ with sync_playwright() as p:
         page.get_by_role('button',name='Send recipient test',exact=True).click()
         assert page.evaluate('window.tests[0].recipient_id')=='1'
         page.goto('https://ha.example.com/setup')
+        page.locator('#earlier-pricing-previews > summary').click()
         assert 'never-show-this-secret' not in page.content()
         assert page.locator('[name=smtp_password]').input_value()==''
         page.evaluate("window.sent=[];document.addEventListener('submit',e=>{e.preventDefault();window.sent.push({id:e.target.id,values:Object.fromEntries(new FormData(e.target))})})")
@@ -84,6 +85,7 @@ with sync_playwright() as p:
         assert 'smtp_password' not in saved['values'] and 'guest_message' not in saved['values']
         assert page.evaluate('document.documentElement.scrollWidth') <= width
         page.goto('https://ha.example.com/setup-pricing')
+        page.locator('#earlier-pricing-previews > summary').click()
         assert page.get_by_text('Live price writes: unavailable. Recurring schedule: off.',exact=True).is_visible()
         page.evaluate("window.pricing=[];document.addEventListener('submit',e=>{e.preventDefault();window.pricing.push({id:e.target.id,values:Object.fromEntries(new FormData(e.target))})})")
         owner_filter = page.get_by_label('Filter test properties by owner')
@@ -113,6 +115,7 @@ with sync_playwright() as p:
         assert page.get_by_text('225.00',exact=True).count()==1
         assert page.evaluate('document.documentElement.scrollWidth') <= width
         page.goto('https://ha.example.com/setup-pricing-enabled')
+        page.locator('#earlier-pricing-previews > summary').click()
         page.evaluate("""document.addEventListener('submit', event => {
             event.preventDefault();
             window.override = {
