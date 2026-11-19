@@ -919,7 +919,7 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, 
                     except Exception:
                         error = "Could not read the reservation history from Hostaway."
         return page(request, "thursday_bookings.html", start=start, end=end,
-                    report=report, error=error)
+                    report=report, error=error, running=booking_report_lock.locked())
 
     @app.get("/thursday-special", response_class=HTMLResponse)
     @app.post("/thursday-special", response_class=HTMLResponse)
