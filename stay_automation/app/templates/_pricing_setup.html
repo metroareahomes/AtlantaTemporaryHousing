@@ -5,9 +5,16 @@
 <p class="sub">Preview one property using the existing Hostaway connection. Prices, availability and stay restrictions are not changed. Calendar pricing applies to dates, including later nights of longer stays; it cannot guarantee a first-night-only discount.</p>
 <form method="post" action="pricing-settings-save" id="save-pricing-settings" data-save-label="Save pricing settings" class="stack cols">
 {{ checkbox('pricing_simulation_enabled', pricing_simulation_enabled) }}
-<div class="setup-field wide"><label class="field-title" for="setting-pricing_property">{{ setup_fields.pricing_property.label }}</label>{{ help('pricing_property') }}
+<div class="setup-field">
+<label class="field-title" for="pricing-owner-filter">Filter test properties by owner</label>
+<select id="pricing-owner-filter">
+<option value="" {{ 'selected' if not pricing_owner }}>All owners</option>
+{% for owner in pricing_owners %}<option value="{{ owner }}" {{ 'selected' if owner == pricing_owner }}>{{ owner }}</option>{% endfor %}
+</select>
+</div>
+<div class="setup-field"><label class="field-title" for="setting-pricing_property">{{ setup_fields.pricing_property.label }}</label>{{ help('pricing_property') }}
 <select id="setting-pricing_property" name="pricing_property" aria-describedby="hint-pricing_property"><option value="0">Choose one test property</option>
-{% for p in pricing_properties %}<option value="{{ p.id }}" {{ 'selected' if pricing_values.pricing_property == p.id|string }}>{{ p.name }}</option>{% endfor %}</select><p class="field-hint" id="hint-pricing_property">{{ setup_fields.pricing_property.brief }}</p></div>
+{% for p in pricing_properties %}<option value="{{ p.id }}" data-owner="{{ p.owner_scope }}" {{ 'selected' if pricing_selection == p.id }}>{{ p.name }}{% if p.address and p.address != p.name %} ({{ p.address }}){% endif %}</option>{% endfor %}</select><p class="field-hint" id="hint-pricing_property">{{ setup_fields.pricing_property.brief }}</p></div>
 {% for k in ['pricing_discount','pricing_threshold','pricing_window'] %}{{ text(k, pricing_values[k]) }}{% endfor %}
 {% for event in ['start','check1','check2','end'] %}
 {% set daykey = 'pricing_' ~ event ~ '_day' %}{% set timekey = 'pricing_' ~ event ~ '_time' %}
@@ -32,3 +39,20 @@
 {% endif %}
 <p class="sub">PriceLabs may overwrite calendar prices overnight or during additional syncs. Before any live test, its timing/ownership must be coordinated; restoring an old price blindly could overwrite a newer valid rate. No automatic restoration or price writes run here.</p>
 </section>
+<script>
+(() => {
+    const filter = document.getElementById('pricing-owner-filter');
+    const picker = document.getElementById('setting-pricing_property');
+    const options = Array.from(picker.options);
+    const filterProperties = () => {
+        const selected = picker.value;
+        const matches = options.filter(option =>
+            option.value === '0' || !filter.value || option.dataset.owner === filter.value
+        );
+        picker.replaceChildren(...matches);
+        picker.value = matches.some(option => option.value === selected) ? selected : '0';
+    };
+    filter.addEventListener('change', filterProperties);
+    filterProperties();
+})();
+</script>

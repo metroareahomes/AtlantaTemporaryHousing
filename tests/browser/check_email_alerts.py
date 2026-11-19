@@ -18,9 +18,9 @@ c = TestClient(create_app(s))
 pages = {p:c.get(p).text for p in ('/staff','/setup','/','/properties')}
 s.db.execute("INSERT INTO alert_recipients(name,target,email,active) VALUES('Saved recipient','','saved@example.com',1)")
 pages['/staff-saved'] = c.get('/staff').text
-pid = s.db.execute("INSERT INTO properties(hostaway_listing_id,name) VALUES(100,'Pricing test home')")
-s.db.set_setting('pricing_property',str(pid))
-s.db.set_setting('pricing_simulation_enabled','1')
+pid = s.db.execute("INSERT INTO properties(hostaway_listing_id,name,address,owner_scope) VALUES(100,'Test home','10 Wright St','Kurt')")
+mike_id = s.db.execute("INSERT INTO properties(hostaway_listing_id,name,owner_scope) VALUES(101,'Wright backup','Mike')")
+s.db.execute("INSERT INTO properties(hostaway_listing_id,name) VALUES(102,'Untagged property')")
 s.db.execute("INSERT INTO pricing_simulations(created_at,property_id,simulation_at,config_json,rows_json) VALUES(?,?,?,?,?)", ('2030-06-14T14:00:00-04:00',pid,'2030-06-14T14:00:00-04:00','{}',json.dumps([{'date':'2030-06-14','current':'250','proposed':'225.00','minimum_stay':1,'reason':'Simulation only — calendar date, not first-night-only'}])))
 pages['/setup-pricing'] = c.get('/setup').text
 static = root / 'stay_automation' / 'app' / 'static'
@@ -84,12 +84,28 @@ with sync_playwright() as p:
         page.goto('https://ha.example.com/setup-pricing')
         assert page.get_by_text('Live price writes: unavailable. Recurring schedule: off.',exact=True).is_visible()
         page.evaluate("window.pricing=[];document.addEventListener('submit',e=>{e.preventDefault();window.pricing.push({id:e.target.id,values:Object.fromEntries(new FormData(e.target))})})")
+        owner_filter = page.get_by_label('Filter test properties by owner')
+        picker = page.locator('[name=pricing_property]')
+        assert owner_filter.input_value() == 'Kurt'
+        assert picker.input_value() == str(pid)
+        assert picker.locator('option').count() == 2
+        owner_filter.select_option('Mike')
+        assert picker.input_value() == '0'
+        assert picker.locator('option').all_text_contents() == ['Choose one test property', 'Wright backup']
+        picker.select_option(str(mike_id))
+        owner_filter.select_option('')
+        assert picker.input_value() == str(mike_id)
+        assert picker.locator('option').count() == 4
+        owner_filter.select_option('Kurt')
+        picker.select_option(str(pid))
         page.locator('[name=pricing_discount]').fill('12.5')
         page.locator('[name=pricing_threshold]').fill('210')
         page.locator('[name=pricing_check1_time]').fill('07:00')
         page.locator('.save-bar').get_by_role('button',name='Save pricing settings',exact=True).click()
         saved=page.evaluate('window.pricing[0]')
         assert saved['id']=='save-pricing-settings'
+        assert saved['values']['pricing_property'] == str(pid)
+        assert 'pricing_simulation_enabled' not in saved['values']
         assert saved['values']['pricing_discount']=='12.5' and saved['values']['pricing_check1_time']=='07:00'
         assert 'smtp_password' not in saved['values'] and 'guest_message' not in saved['values']
         assert page.get_by_text('225.00',exact=True).count()==1

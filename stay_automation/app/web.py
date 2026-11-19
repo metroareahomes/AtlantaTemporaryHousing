@@ -825,15 +825,32 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None) 
             automation = await syncer.ha.webhook_automation_exists()
         except Exception:
             ha_ok, automation = False, False
+        pricing_values = pricing_config(db)
+        pricing_properties = db.query(
+            'SELECT id,name,address,owner_scope FROM properties '
+            'WHERE active=1 AND hostaway_listing_id IS NOT NULL ORDER BY name, address, id'
+        )
+        pricing_selection = int(pricing_values['pricing_property'])
+        pricing_owner = ''
+        if pricing_selection == 0:
+            pricing_owner = 'Kurt'
+            wright_matches = [
+                prop for prop in pricing_properties
+                if prop['owner_scope'] == pricing_owner
+                and re.search(r"\bwright\b", f"{prop['name']} {prop['address'] or ''}", re.IGNORECASE)
+            ]
+            if len(wright_matches) == 1:
+                pricing_selection = wright_matches[0]['id']
         return page(
             request, "setup.html",
             setup_fields=SETUP_FIELDS,
             smtp_values={k: db.get_setting(k, '587' if k == 'smtp_port' else 'starttls' if k == 'smtp_security' else '') or '' for k in SMTP_FIELDS},
             smtp_enabled=db.get_bool('smtp_enabled'),
             pricing_rows=json.loads((db.one("SELECT rows_json FROM pricing_simulations ORDER BY id DESC LIMIT 1") or {}).get("rows_json", "[]")),
-            pricing_values=pricing_config(db), pricing_days=PRICING_DAYS,
+            pricing_values=pricing_values, pricing_days=PRICING_DAYS,
+            pricing_owners=OWNERS, pricing_owner=pricing_owner, pricing_selection=pricing_selection,
             pricing_simulation_enabled=db.get_bool('pricing_simulation_enabled'),
-            pricing_properties=db.query('SELECT id,name FROM properties WHERE active=1 AND hostaway_listing_id IS NOT NULL ORDER BY name'),
+            pricing_properties=pricing_properties,
             pricing_preview_at=pricing_next_start(syncer.now(), pricing_config(db)),
             pricing_preview=db.one('SELECT s.*,p.name AS property_name FROM pricing_simulations s LEFT JOIN properties p ON p.id=s.property_id ORDER BY s.id DESC LIMIT 1'),
             sheet_enabled=db.get_bool("sheet_enabled"),
