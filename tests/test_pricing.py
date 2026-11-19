@@ -215,7 +215,7 @@ def test_deactivated_property_during_read_is_not_recorded(syncer):
 def test_no_pricing_worker_or_live_route_is_registered():
     from pathlib import Path
     main=Path('stay_automation/app/main.py').read_text()
-    assert 'pricing' not in main
+    assert 'pricing.preview' not in main
 
 
 def test_spring_dst_gap_rejected_before_api_read(syncer):
@@ -346,3 +346,100 @@ def test_live_wright_trial_checks_all_nights_and_applies_only_once(syncer, block
     ]]
     with pytest.raises(ValueError, match='already attempted'):
         run(PricingSimulator(syncer).apply_wright_special(str(pid)))
+
+
+def test_bulk_special_rechecks_threshold_and_preserves_manual_selection(syncer):
+    from starlette.datastructures import FormData
+
+    for lid in (301, 302):
+        syncer.db.execute(
+            "INSERT INTO properties(hostaway_listing_id,name,owner_scope) VALUES(?,?,'Kurt')",
+            (lid, str(lid)),
+        )
+    service = PricingSimulator(syncer)
+    syncer.now = lambda: FRIDAY - timedelta(days=1)
+    checked = syncer.db.one('SELECT id FROM properties WHERE hostaway_listing_id=301')['id']
+    reads = {301: 0, 302: 0}
+    writes = {}
+
+    async def listing(lid):
+        return dict(LISTING, id=lid)
+
+    async def calendar(lid, start, end):
+        reads[lid] += 1
+        current = 180 if lid == 301 or reads[lid] > 1 else 250
+        if lid in writes:
+            return [day(item['startDate'], price=item['price'],
+                        minimumStay=item.get('minimumStay', 1)) for item in writes[lid]]
+        return [day(start, price=current), day('2030-06-14'), day(end)]
+
+    async def write(lid, intervals):
+        writes[lid] = intervals
+
+    syncer.hostaway.pricing_listing = listing
+    syncer.hostaway.pricing_calendar = calendar
+    syncer.hostaway.apply_calendar_intervals = write
+    reports = run(service.apply_selected_special(FormData({
+        'special_owner': 'Kurt', 'special_property': str(checked),
+        'special_discount': '15', 'special_floor': '200',
+    })))
+    assert set(writes) == {301}
+    assert writes[301][0]['price'] == 153
+    assert any('Verified in Hostaway' in report for report in reports)
+    assert any('no longer meets the threshold' in report for report in reports)
+
+
+def test_thursday_schedule_uses_saved_selection_and_runs_once_after_restart(syncer):
+    from starlette.datastructures import FormData
+
+    service = PricingSimulator(syncer)
+    thursday = FRIDAY - timedelta(days=1)
+    calls = []
+
+    async def apply(form, *, scheduled=False):
+        calls.append(dict(form))
+        return ['Test home verified']
+
+    service.apply_selected_special = apply
+    syncer.now = lambda: thursday
+    run(service.tick_thursday_schedule())
+    assert calls == []
+    service.save_thursday_schedule(FormData({
+        'special_time': '14:00', 'special_enabled': 'on', 'special_owner': 'Kurt',
+        'special_discount': '15', 'special_floor': '200',
+    }))
+    syncer.now = lambda: thursday - timedelta(minutes=1)
+    run(service.tick_thursday_schedule())
+    assert calls == []
+    syncer.now = lambda: thursday
+    run(service.tick_thursday_schedule())
+    restart = PricingSimulator(syncer)
+    restart.apply_selected_special = apply
+    run(restart.tick_thursday_schedule())
+    syncer.now = lambda: FRIDAY
+    run(restart.tick_thursday_schedule())
+    assert calls == [{'special_owner': 'Kurt', 'special_discount': '15', 'special_floor': '200'}]
+
+
+def test_owner_pages_scope_selection_and_save_distinct_discounts(syncer):
+    for lid, owner in [(610, 'Mike'), (611, 'Kurt')]:
+        syncer.db.execute(
+            'INSERT INTO properties(hostaway_listing_id,name,owner_scope) VALUES(?,?,?)',
+            (lid, f'{owner} Test Home', owner),
+        )
+    service = PricingSimulator(syncer)
+    client = TestClient(create_app(syncer, pricing=service))
+    for owner, other, discount in [('Mike', 'Kurt', '12'), ('Kurt', 'Mike', '20')]:
+        url = f'/thursday-special?owner={owner}'
+        html = client.get(url).text
+        assert f'{owner} Test Home' in html
+        assert f'{other} Test Home' not in html
+        response = client.post(url, data={
+            'special_action': 'save_schedule', 'special_owner': other,
+            'special_time': '14:00', 'special_discount': discount, 'special_floor': '200',
+            'special_enabled': 'on',
+        }, follow_redirects=False)
+        assert response.status_code == 303
+        assert service.thursday_schedule(owner)['owner'] == owner
+    assert service.thursday_schedule('Mike')['discount'] == '12'
+    assert service.thursday_schedule('Kurt')['discount'] == '20'

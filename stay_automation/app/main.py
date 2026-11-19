@@ -17,6 +17,7 @@ from .locks import LockManager
 from .property_sheet import PropertySheet
 from .sync import Syncer
 from .web import create_app
+from .pricing import PricingSimulator
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("stay")
@@ -76,6 +77,7 @@ def build():
     ha = HAClient(settings.ha_url, settings.ha_token,
                   extra_climate_entities=lambda: (db.get_setting("lyric_climate_entities", "") or "").split())
     syncer = Syncer(db, settings, hostaway, ha)
+    pricing = PricingSimulator(syncer)
     locks = LockManager(syncer)
     climate = ClimateManager(syncer, locks.alert)
     property_sheet = PropertySheet(syncer)
@@ -114,6 +116,7 @@ def build():
             every(settings.lock_discovery_minutes, "lock_discovery", discover, db),
             every(LOCK_TICK_MINUTES, "lock_automation", locks.tick, db),
             every(CLIMATE_TICK_MINUTES, "thermostats", climate.tick, db),
+            every(0.25, "thursday_special", pricing.tick_thursday_schedule, db),
             every(5, "property_sheet", property_sheet.push, db),
             every(1, "staff_alert_delivery", retry_staff_alerts, db),
             every(5, "integration_reauthorization", locks.alert_service.integrations, db),
@@ -136,7 +139,7 @@ def build():
         await hostaway.close()
         await ha.close()
 
-    return create_app(syncer, locks, lifespan=lifespan)
+    return create_app(syncer, locks, lifespan=lifespan, pricing=pricing)
 
 
 def _then(*jobs: Callable[[], Awaitable[object]]) -> Callable[[], Awaitable[None]]:
