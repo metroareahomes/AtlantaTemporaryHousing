@@ -346,3 +346,44 @@ def test_live_wright_trial_checks_all_nights_and_applies_only_once(syncer, block
     ]]
     with pytest.raises(ValueError, match='already attempted'):
         run(PricingSimulator(syncer).apply_wright_special(str(pid)))
+
+
+def test_bulk_special_rechecks_threshold_and_preserves_manual_selection(syncer):
+    from starlette.datastructures import FormData
+
+    for lid in (301, 302):
+        syncer.db.execute(
+            "INSERT INTO properties(hostaway_listing_id,name,owner_scope) VALUES(?,?,'Kurt')",
+            (lid, str(lid)),
+        )
+    service = PricingSimulator(syncer)
+    syncer.now = lambda: FRIDAY - timedelta(days=1)
+    checked = syncer.db.one('SELECT id FROM properties WHERE hostaway_listing_id=301')['id']
+    reads = {301: 0, 302: 0}
+    writes = {}
+
+    async def listing(lid):
+        return dict(LISTING, id=lid)
+
+    async def calendar(lid, start, end):
+        reads[lid] += 1
+        current = 180 if lid == 301 or reads[lid] > 1 else 250
+        if lid in writes:
+            return [day(item['startDate'], price=item['price'],
+                        minimumStay=item.get('minimumStay', 1)) for item in writes[lid]]
+        return [day(start, price=current), day('2030-06-14'), day(end)]
+
+    async def write(lid, intervals):
+        writes[lid] = intervals
+
+    syncer.hostaway.pricing_listing = listing
+    syncer.hostaway.pricing_calendar = calendar
+    syncer.hostaway.apply_calendar_intervals = write
+    reports = run(service.apply_selected_special(FormData({
+        'special_owner': 'Kurt', 'special_property': str(checked),
+        'special_discount': '15', 'special_floor': '200',
+    })))
+    assert set(writes) == {301}
+    assert writes[301][0]['price'] == 153
+    assert any('Verified in Hostaway' in report for report in reports)
+    assert any('no longer meets the threshold' in report for report in reports)

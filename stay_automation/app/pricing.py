@@ -306,10 +306,31 @@ class PricingSimulator:
                 except Exception:
                     errors.append(name)
                     continue
-                results.append({'name': name, 'rows': rows})
+                results.append({'id': str(prop['id']), 'name': name, 'rows': rows})
             return {'thursday': thursday.isoformat(), 'properties': results, 'errors': errors}
 
-    async def apply_wright_special(self, property_id):
+    async def apply_selected_special(self, form):
+        if self.s.now().astimezone(TZ).weekday() != 3:
+            raise ValueError('The Thursday Special can be applied on Thursday Eastern time')
+        result = await self.thursday_special(form)
+        checked = set(form.getlist('special_property'))
+        reports = [f"{name}: Calendar could not be verified" for name in result['errors']]
+        for prop in result['properties']:
+            if prop.get('ineligible'):
+                reports.append(f"{prop['name']}: Skipped; all three nights must be vacant")
+                continue
+            try:
+                rates = await self.apply_wright_special(
+                    prop['id'], bulk=True, discount=form['special_discount'].strip(),
+                    floor=None if prop['id'] in checked else money(form['special_floor']),
+                    owner=form.get('special_owner', ''), expected_date=result['thursday'],
+                )
+                reports.append(f"{prop['name']}: Verified in Hostaway — {rates}; Thursday minimum 3 nights")
+            except ValueError as exc:
+                reports.append(f"{prop['name']}: {exc}")
+        return reports or ['No homes qualified']
+
+    async def apply_wright_special(self, property_id, *, bulk=False, discount='20', floor=None, owner='', expected_date=None):
         if self._lock.locked():
             raise ValueError('A pricing action is already running')
         async with self._lock:
@@ -323,10 +344,18 @@ class PricingSimulator:
                 )
                 if re.search(r"\bwright\b", f"{prop['name']} {prop['address'] or ''}", re.IGNORECASE)
             ]
+            if bulk:
+                matches = self.db.query(
+                    "SELECT id,hostaway_listing_id FROM properties WHERE active=1 "
+                    "AND hostaway_listing_id IS NOT NULL AND id=? AND (?='' OR owner_scope=?)",
+                    (int(property_id), owner, owner),
+                )
             if len(matches) != 1 or str(matches[0]['id']) != property_id:
-                raise ValueError('Select Kurt’s uniquely matched Wright listing')
+                raise ValueError('The selected listing could not be verified')
             listing_id = matches[0]['hostaway_listing_id']
             start = today.isoformat()
+            if expected_date is not None and start != expected_date:
+                raise ValueError('The target Thursday has changed')
             dates = [(today + timedelta(days=offset)).isoformat() for offset in range(3)]
             end = dates[-1]
             key = f'pricing_wright_trial_{listing_id}_{start}'
@@ -335,11 +364,15 @@ class PricingSimulator:
             try:
                 listing = await self.s.hostaway.pricing_listing(listing_id)
                 calendar = await self.s.hostaway.pricing_calendar(listing_id, start, end)
-                rule = {'discount': '20', 'minimums': [3, None, None], 'discount_all_dates': True}
+                rule = {'discount': discount, 'minimums': [3, None, None], 'discount_all_dates': True}
                 at = datetime.combine(today, datetime.min.time(), TZ)
                 rows = plan(calendar, listing, at, DEFAULTS, rule)
             except Exception:
-                raise ValueError('Could not verify Wright’s calendar. No updates were sent.') from None
+                raise ValueError('Could not verify the calendar. No updates were sent.') from None
+            if floor is not None and not any(
+                row['date'] == start and row['current'] and money(row['current']) > floor for row in rows
+            ):
+                raise ValueError('Thursday rate no longer meets the threshold')
             if sorted(row['date'] for row in rows) != dates or any(
                 vacancy_issue(day) for day in calendar
             ) or any(not row['proposed'] for row in rows):
@@ -367,7 +400,7 @@ class PricingSimulator:
                 ):
                     raise ValueError
             except Exception:
-                raise ValueError('The update was attempted but could not be verified. Check Wright in Hostaway before making further changes.') from None
+                raise ValueError('The update was attempted but could not be verified. Check the calendar in Hostaway before making further changes.') from None
             record['status'] = 'verified'
             self.db.set_setting(key, json.dumps(record))
             return ', '.join(f"{item['startDate']} at ${item['price']:.2f}" for item in intervals)
