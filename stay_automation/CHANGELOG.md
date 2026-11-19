@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.31 — Apply immediately after preview
+
+- Allow Thursday Special Apply immediately after a preview while retaining live eligibility and duplicate-discount checks.
+
+Source rollback: stable-0.6.30-before-apply-fix.
+
 ## 0.6.30 — Owner schedules for the Thursday Special
 
 - Give Mike and Kurt separate property selections, discounts and Eastern activation times.
