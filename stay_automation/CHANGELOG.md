@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.27 — The Thursday Special
+
+- Preview Thursday through Saturday rate discounts and a three-night Thursday arrival minimum.
+- Select homes by checkbox, Thursday calendar rate, or both.
+- The preview does not write calendar updates or schedule repeat runs.
+
 ## 0.6.26 — Hostaway pricing previews
 
 - Preview weekend pricing on one property with configurable rates and timing.
