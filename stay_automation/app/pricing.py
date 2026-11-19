@@ -102,14 +102,22 @@ def next_start(now, cfg):
 
 
 def vacancy_issue(day):
-    if day.get('status') != 'available' or day.get('isAvailable') not in (1, '1'):
-        return 'Night not confirmed available'
     if day.get('reservations') or any(
         day.get(key) not in (None, 0, '0') for key in (
             'countPendingUnits', 'countReservedUnits', 'countBlockingReservations', 'countBlockedUnits',
         )
     ):
         return 'Reservation / blocking inventory present'
+    status = str(day.get('status') or '').strip().lower()
+    availability = day.get('isAvailable')
+    if status in ('reserved', 'pending', 'blocked'):
+        return f'Hostaway marks this night {status}'
+    if availability in (0, '0'):
+        return 'Hostaway marks this night unavailable'
+    # Hostaway makes isAvailable optional. Only an explicit available status
+    # can establish vacancy when that flag is omitted.
+    if status != 'available' or availability not in (None, 1, '1'):
+        return 'Night not confirmed available: incomplete or unclear Hostaway data'
     return None
 
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.32 — Hostaway calendar availability
+
+- Accept an explicit available status when Hostaway omits its optional availability flag.
+- Distinguish unavailable nights from unclear calendar data. All three nights must still qualify.
+
+Source rollback: stable-0.6.31-before-availability-fix.
+
 ## 0.6.31 — Apply immediately after preview
 
 - Allow Thursday Special Apply immediately after a preview while retaining live eligibility and duplicate-discount checks.

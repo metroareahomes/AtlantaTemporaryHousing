@@ -28,7 +28,8 @@ def test_current_calendar_price_threshold_and_rounding(price, proposed):
 
 
 @pytest.mark.parametrize('patch,reason',[
-    ({'isAvailable':0},'not confirmed available'),({'status':'reserved'},'not confirmed available'),
+    ({'isAvailable':0},'unavailable'),({'status':'reserved'},'reserved'),
+    ({'status':None},'not confirmed available'),
     ({'closedOnArrival':1},'Arrival closed'),({'closedOnArrival':None},'Arrival closed'),
     ({'reservations':[{'guestName':'private'}]},'blocking inventory'),({'countPendingUnits':1},'blocking inventory'),
     ({'countBlockedUnits':1},'blocking inventory'),({'availableUnitsToSell':2},'Multi-unit'),
@@ -270,7 +271,7 @@ def test_thursday_special_combines_checked_homes_and_rate_matches(syncer, blocke
     async def calendar(lid, start, end):
         assert lid != 304
         assert (start, end) == ('2030-06-13', '2030-06-15')
-        return [day(start, price={301: 180, 302: 250, 303: 200}[lid], closedOnArrival=None, countAvailableUnits=1,
+        return [day(start, price={301: 180, 302: 250, 303: 200}[lid], closedOnArrival=None, isAvailable=None, countAvailableUnits=1,
                     availableUnitsToSell=1, desiredUnitsToSell=1),
                 day('2030-06-14', price=300, isAvailable='1', closedOnArrival=1),
                 day(end, price=350, countReservedUnits=1 if lid == blocked_listing else '0')]
