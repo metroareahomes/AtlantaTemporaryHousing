@@ -28,7 +28,7 @@ class SetupControls(HTMLParser):
         attrs = dict(attrs)
         if "id" in attrs:
             self.ids.append(attrs["id"])
-        if tag in ("input", "select", "textarea"):
+        if tag in ("input", "select", "textarea") and "name" in attrs:
             self.controls[attrs["name"]] = attrs
         if tag == "label" and "for" in attrs:
             self.labels.append(attrs["for"])
