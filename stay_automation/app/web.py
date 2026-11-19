@@ -807,9 +807,12 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None) 
     @app.post("/lock-refresh")
     async def lock_refresh(property_id: int = Form(...), show: str = Form("attention"),
                            sort: str = Form("attention"), q: str = Form("")):
+        checked = True
         for lock in db.query("SELECT * FROM locks WHERE property_id = ?", (property_id,)):
+            checked = await syncer.refresh_lock_state(lock) and checked
             await syncer.read_lock_codes(lock)
-        return _done(_board_back(show, sort, q), "Lock read")
+        notice = "Lock state and codes checked" if checked else "Codes checked; current lock state could not be confirmed. Previous availability retained."
+        return _done(_board_back(show, sort, q), notice)
 
     @app.get("/setup", response_class=HTMLResponse)
     async def setup(request: Request):

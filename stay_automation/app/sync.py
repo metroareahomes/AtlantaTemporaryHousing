@@ -126,6 +126,24 @@ class Syncer:
             (property_id, lock_id),
         )
 
+    async def refresh_lock_state(self, lock: dict[str, Any]) -> bool:
+        """Update only the selected saved state. Code-read success is not proof of availability."""
+        try:
+            state = await self.ha.lock_state(lock['entity_id'])
+            if state not in {'locked', 'unlocked', 'locking', 'unlocking', 'jammed', 'open', 'opening', 'unavailable', 'unknown'}:
+                return False
+            # The existing dashboard uses unavailable for its offline warning. Unknown is also
+            # unconfirmed, so do not clear an old warning based on an unknown response.
+            if state == 'unknown':
+                state = 'unavailable'
+            self.db.execute('UPDATE locks SET state=?, seen_at=? WHERE id=? AND entity_id=?',
+                            (state, utcnow(), lock['id'], lock['entity_id']))
+            return True
+        except Exception:
+            self.db.log('lock.state_read_failed', f"Could not refresh saved availability for {lock['name']}; previous state retained.",
+                        level='warning', property_id=lock['property_id'])
+            return False
+
     async def read_lock_codes(self, lock: dict[str, Any]) -> None:
         try:
             codes = await self.ha.get_codes(lock["entity_id"])
