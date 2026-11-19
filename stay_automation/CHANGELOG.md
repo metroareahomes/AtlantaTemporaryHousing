@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.30 — Owner schedules for the Thursday Special
+
+- Give Mike and Kurt separate property selections, discounts and Eastern activation times.
+- Allow one-time updates for qualifying homes and keep weekly schedules off by default.
+
+Source rollback: stable-0.6.29-before-owner-schedules.
+
 ## 0.6.29 — One-time Wright trial
 
 - Apply the Thursday Special to Kurt’s Wright listing on demand, with three vacant nights required and Hostaway readback.
