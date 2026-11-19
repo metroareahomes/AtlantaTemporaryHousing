@@ -238,7 +238,7 @@ class PricingSimulator:
             self.db.log('pricing.simulated', f'Pricing simulation saved: {len(rows)} dates reviewed; no prices changed.', property_id=prop['id'])
             return rid
 
-    async def thursday_special(self, form, *, scheduled=False):
+    async def thursday_special(self, form, *, applying=False):
         """Preview the current or coming Thursday without changing the calendar."""
         owner = form.get('special_owner', '')
         if owner not in ('', 'Kurt', 'Mike'):
@@ -261,7 +261,7 @@ class PricingSimulator:
             raise ValueError('A pricing preview is already running')
         async with self._lock:
             now = self.s.now()
-            if not scheduled:
+            if not applying:
                 if self._last_attempt and now - self._last_attempt < timedelta(seconds=30):
                     raise ValueError('Wait 30 seconds before another pricing read')
                 self._last_attempt = now
@@ -366,16 +366,16 @@ class PricingSimulator:
             *(('special_property', item) for item in config['selected']),
         ])
         try:
-            reports = await self.apply_selected_special(form, scheduled=True)
+            reports = await self.apply_selected_special(form)
         except ValueError as exc:
             reports = [str(exc)]
         for report in reports:
             self.db.log('pricing.thursday_special', report)
 
-    async def apply_selected_special(self, form, *, scheduled=False):
+    async def apply_selected_special(self, form):
         if self.s.now().astimezone(TZ).weekday() != 3:
             raise ValueError('The Thursday Special can be applied on Thursday Eastern time')
-        result = await self.thursday_special(form, scheduled=scheduled)
+        result = await self.thursday_special(form, applying=True)
         checked = set(form.getlist('special_property'))
         reports = [f"{name}: Calendar could not be verified" for name in result['errors']]
         for prop in result['properties']:

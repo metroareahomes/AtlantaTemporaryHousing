@@ -367,7 +367,7 @@ def test_bulk_special_rechecks_threshold_and_preserves_manual_selection(syncer):
 
     async def calendar(lid, start, end):
         reads[lid] += 1
-        current = 180 if lid == 301 or reads[lid] > 1 else 250
+        current = 180 if lid == 301 or reads[lid] > 2 else 250
         if lid in writes:
             return [day(item['startDate'], price=item['price'],
                         minimumStay=item.get('minimumStay', 1)) for item in writes[lid]]
@@ -379,10 +379,14 @@ def test_bulk_special_rechecks_threshold_and_preserves_manual_selection(syncer):
     syncer.hostaway.pricing_listing = listing
     syncer.hostaway.pricing_calendar = calendar
     syncer.hostaway.apply_calendar_intervals = write
-    reports = run(service.apply_selected_special(FormData({
+    form = FormData({
         'special_owner': 'Kurt', 'special_property': str(checked),
         'special_discount': '15', 'special_floor': '200',
-    })))
+    })
+    preview = run(service.thursday_special(form))
+    assert len(preview['properties']) == 2
+    assert writes == {}
+    reports = run(service.apply_selected_special(form))
     assert set(writes) == {301}
     assert writes[301][0]['price'] == 153
     assert any('Verified in Hostaway' in report for report in reports)
@@ -396,7 +400,7 @@ def test_thursday_schedule_uses_saved_selection_and_runs_once_after_restart(sync
     thursday = FRIDAY - timedelta(days=1)
     calls = []
 
-    async def apply(form, *, scheduled=False):
+    async def apply(form):
         calls.append(dict(form))
         return ['Test home verified']
 

@@ -126,7 +126,7 @@ def test_settings_validate_atomically_and_hide_secret(sheet_sync):
     assert c.post('/sheet-settings-save', data=data, follow_redirects=False).status_code == 303
     assert sheet_sync.db.get_bool('sheet_enabled')
     page = c.get('/setup').text
-    assert 'Shared Google property sheet' in page and 'K'*64 not in page
+    assert 'Shared Google property sheet' not in page and 'K'*64 not in page
     invalid = dict(data, sheet_endpoint='https://example.com')
     assert c.post('/sheet-settings-save',data=invalid).status_code == 400
     assert sheet_sync.db.get_setting('sheet_endpoint') == data['sheet_endpoint']

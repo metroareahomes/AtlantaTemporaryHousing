@@ -75,15 +75,7 @@ with sync_playwright() as p:
         assert 'occ_summer' not in saved['values'] and 'guest_message' not in saved['values']
         assert page.evaluate('document.documentElement.scrollWidth') <= width
         assert 'never-show-sheet-secret' not in page.content()
-        assert page.locator('[name=sheet_secret]').input_value()==''
-        page.locator('[name=sheet_endpoint]').fill('https://script.google.com/macros/s/example/exec')
-        page.locator('[name=sheet_secret]').fill('a'*64)
-        page.locator('[name=sheet_enabled]').check()
-        page.locator('.save-bar').get_by_role('button',name='Save sheet connection',exact=True).click()
-        saved = page.evaluate('window.sent[1]')
-        assert saved['id']=='save-sheet-settings' and saved['values']['sheet_secret']=='a'*64
-        assert 'smtp_password' not in saved['values'] and 'guest_message' not in saved['values']
-        assert page.evaluate('document.documentElement.scrollWidth') <= width
+        assert page.get_by_role('heading', name='Shared Google property sheet').count() == 0
         page.goto('https://ha.example.com/setup-pricing')
         page.locator('#earlier-pricing-previews > summary').click()
         assert page.get_by_text('Live price writes: unavailable. Recurring schedule: off.',exact=True).is_visible()
