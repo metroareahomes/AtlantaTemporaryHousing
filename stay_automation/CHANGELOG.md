@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.33 — Thursday booking times report
+
+- Use the existing Hostaway connection to report 12 months of Thursday booking times in Eastern Time.
+- Compare same-day arrivals with all Thursday bookings and show the split at 2 PM.
+
+Source rollback: stable-0.6.32-before-booking-report.
+
 ## 0.6.32 — Hostaway calendar availability
 
 - Accept an explicit available status when Hostaway omits its optional availability flag.
