@@ -7,6 +7,15 @@ from pathlib import Path
 from typing import Any
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS pricing_simulations (
+    id INTEGER PRIMARY KEY,
+    created_at TEXT NOT NULL,
+    property_id INTEGER NOT NULL,
+    simulation_at TEXT NOT NULL,
+    config_json TEXT NOT NULL,
+    rows_json TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS properties (
     id INTEGER PRIMARY KEY,
     hostaway_listing_id INTEGER UNIQUE,

@@ -1,5 +1,6 @@
 """Real recipient and SMTP forms, plus stable ingress Properties links. No emails sent."""
 from pathlib import Path
+import json
 import sys
 root = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(root / 'stay_automation'), str(root / 'tests')]
@@ -17,6 +18,11 @@ c = TestClient(create_app(s))
 pages = {p:c.get(p).text for p in ('/staff','/setup','/','/properties')}
 s.db.execute("INSERT INTO alert_recipients(name,target,email,active) VALUES('Saved recipient','','saved@example.com',1)")
 pages['/staff-saved'] = c.get('/staff').text
+pid = s.db.execute("INSERT INTO properties(hostaway_listing_id,name) VALUES(100,'Pricing test home')")
+s.db.set_setting('pricing_property',str(pid))
+s.db.set_setting('pricing_simulation_enabled','1')
+s.db.execute("INSERT INTO pricing_simulations(created_at,property_id,simulation_at,config_json,rows_json) VALUES(?,?,?,?,?)", ('2030-06-14T14:00:00-04:00',pid,'2030-06-14T14:00:00-04:00','{}',json.dumps([{'date':'2030-06-14','current':'250','proposed':'225.00','minimum_stay':1,'reason':'Simulation only — calendar date, not first-night-only'}])))
+pages['/setup-pricing'] = c.get('/setup').text
 static = root / 'stay_automation' / 'app' / 'static'
 with sync_playwright() as p:
     browser = p.chromium.launch(headless=True)
@@ -74,6 +80,19 @@ with sync_playwright() as p:
         saved = page.evaluate('window.sent[1]')
         assert saved['id']=='save-sheet-settings' and saved['values']['sheet_secret']=='a'*64
         assert 'smtp_password' not in saved['values'] and 'guest_message' not in saved['values']
+        assert page.evaluate('document.documentElement.scrollWidth') <= width
+        page.goto('https://ha.example.com/setup-pricing')
+        assert page.get_by_text('Live price writes: unavailable. Recurring schedule: off.',exact=True).is_visible()
+        page.evaluate("window.pricing=[];document.addEventListener('submit',e=>{e.preventDefault();window.pricing.push({id:e.target.id,values:Object.fromEntries(new FormData(e.target))})})")
+        page.locator('[name=pricing_discount]').fill('12.5')
+        page.locator('[name=pricing_threshold]').fill('210')
+        page.locator('[name=pricing_check1_time]').fill('07:00')
+        page.locator('.save-bar').get_by_role('button',name='Save pricing settings',exact=True).click()
+        saved=page.evaluate('window.pricing[0]')
+        assert saved['id']=='save-pricing-settings'
+        assert saved['values']['pricing_discount']=='12.5' and saved['values']['pricing_check1_time']=='07:00'
+        assert 'smtp_password' not in saved['values'] and 'guest_message' not in saved['values']
+        assert page.get_by_text('225.00',exact=True).count()==1
         assert page.evaluate('document.documentElement.scrollWidth') <= width
         # Simulate HA's authenticated ingress iframe, even if its proxy strips HTTP Referer.
         page.goto('https://ha.example.com/',referer='https://ha.example.com/hassio/ingress/stay?stay_page=properties')

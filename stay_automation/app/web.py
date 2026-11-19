@@ -26,6 +26,7 @@ from .locks import DEFAULT_GUEST_MESSAGE, DEFAULTS, LockManager, _utc, add_time,
 from .reservations import code_status, property_state, within
 from .sync import Syncer
 from .setup_help import SETUP_FIELDS
+from .pricing import PricingSimulator, DEFAULTS as PRICING_DEFAULTS, DAYS as PRICING_DAYS, TZ as PRICING_TZ, read_config as pricing_config, validate as validate_pricing, next_start as pricing_next_start
 from .property_sheet import PropertySheet, valid_endpoint
 
 HERE = Path(__file__).parent
@@ -336,6 +337,7 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None) 
     # The stylesheet URL changes whenever the file does, so a browser or the HA ingress proxy never serves a stale copy.
     templates.env.globals["css_v"] = int((HERE / "static" / "style.css").stat().st_mtime)
     db = syncer.db
+    pricing = PricingSimulator(syncer)
 
     @app.exception_handler(HostawayError)
     async def hostaway_failed(request: Request, exc: HostawayError):
@@ -828,6 +830,12 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None) 
             setup_fields=SETUP_FIELDS,
             smtp_values={k: db.get_setting(k, '587' if k == 'smtp_port' else 'starttls' if k == 'smtp_security' else '') or '' for k in SMTP_FIELDS},
             smtp_enabled=db.get_bool('smtp_enabled'),
+            pricing_rows=json.loads((db.one("SELECT rows_json FROM pricing_simulations ORDER BY id DESC LIMIT 1") or {}).get("rows_json", "[]")),
+            pricing_values=pricing_config(db), pricing_days=PRICING_DAYS,
+            pricing_simulation_enabled=db.get_bool('pricing_simulation_enabled'),
+            pricing_properties=db.query('SELECT id,name FROM properties WHERE active=1 AND hostaway_listing_id IS NOT NULL ORDER BY name'),
+            pricing_preview_at=pricing_next_start(syncer.now(), pricing_config(db)),
+            pricing_preview=db.one('SELECT s.*,p.name AS property_name FROM pricing_simulations s LEFT JOIN properties p ON p.id=s.property_id ORDER BY s.id DESC LIMIT 1'),
             sheet_enabled=db.get_bool("sheet_enabled"),
             sheet_endpoint=db.get_setting("sheet_endpoint", "") or "",
             sheet_last_success=db.get_setting("sheet_last_success", "") or "Never",
@@ -876,6 +884,36 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None) 
         db.set_settings(values)
         db.log('sheet.settings_saved', 'Property sheet connection settings saved (key hidden)')
         return _done('setup', 'Sheet connection saved; enabled updates run every five minutes')
+
+    @app.post("/pricing-settings-save")
+    async def pricing_settings_save(request: Request):
+        form = await request.form()
+        try:
+            values = validate_pricing(form, db, require_property=bool(form.get("pricing_simulation_enabled")))
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        values['pricing_simulation_enabled'] = '1' if form.get('pricing_simulation_enabled') else '0'
+        db.set_settings(values)
+        db.log('pricing.settings_saved', 'Pricing simulation settings saved; live writes and recurring schedule remain unavailable.')
+        return _done('setup', 'Pricing settings saved — simulation only; no recurring schedule activated')
+
+    @app.post("/pricing-simulate")
+    async def pricing_simulate(request: Request):
+        form = await request.form()
+        try:
+            when = datetime.fromisoformat(str(form.get('pricing_preview_at', '')))
+            if when.tzinfo is not None:
+                raise ValueError('Use the local Eastern date and time')
+            when = when.replace(tzinfo=PRICING_TZ)
+            if when.astimezone(timezone.utc).astimezone(PRICING_TZ).replace(tzinfo=None) != when.replace(tzinfo=None):
+                raise ValueError('That time does not exist because daylight saving time changes')
+            await pricing.preview(when)
+        except ValueError as exc:
+            return _done('setup', str(exc) or 'Pricing simulation could not run; no prices changed')
+        except Exception:
+            db.log('pricing.preview_failed', 'Pricing simulation failed; no prices changed.', level='warning')
+            return _done('setup', 'Pricing simulation failed; no prices changed')
+        return _done('setup', 'Simulation saved — no Hostaway or Airbnb prices changed')
 
     @app.post("/smtp-settings-save")
     async def smtp_settings_save(request: Request):

@@ -4,6 +4,7 @@ from html.parser import HTMLParser
 from fastapi.testclient import TestClient
 
 from app.setup_help import SETUP_FIELDS
+from app.pricing import DEFAULTS as PRICING_DEFAULTS
 from app.alerts import SMTP_FIELDS
 from app.daily_temperature import DEFAULTS as DAILY_DEFAULTS
 from app.web import create_app
@@ -54,7 +55,8 @@ def page(syncer):
 
 def test_every_setup_control_has_named_help_and_a_visible_hint(syncer):
     html, parsed = page(syncer)
-    expected = set(LOCK_DEFAULTS) | set(CLIMATE_DEFAULTS) | set(DAILY_DEFAULTS) | set(SMTP_FIELDS) | {
+    expected = set(LOCK_DEFAULTS) | set(CLIMATE_DEFAULTS) | set(DAILY_DEFAULTS) | set(SMTP_FIELDS) | set(PRICING_DEFAULTS) | {
+        "pricing_simulation_enabled", "pricing_preview_at",
         'smtp_enabled', 'smtp_password', 'sheet_enabled', 'sheet_endpoint', 'sheet_secret',
         "occupied_reset_enabled", "temperature_complaints_enabled",
         "public_url", "addon_slug", "register_hostaway", "alert_service",
@@ -95,8 +97,8 @@ def test_help_keeps_existing_form_routes_and_does_not_add_submit_buttons(syncer)
     html, parsed = page(syncer)
     assert parsed.forms == [
         ("post", "sync"), ("post", "setup-webhook"), ("post", "settings-save"),
-        ("post", "thermostat-settings-save"), ("post", "daily-temperature-settings-save"), ("post", "additional-thermostats-save"), ("post", "sheet-settings-save"), ("post", "smtp-settings-save"), ("post", "test-alert")]
-    assert html.count("<button") == 9
+        ("post", "thermostat-settings-save"), ("post", "daily-temperature-settings-save"), ("post", "additional-thermostats-save"), ("post", "sheet-settings-save"), ("post", "pricing-settings-save"), ("post", "pricing-simulate"), ("post", "smtp-settings-save"), ("post", "test-alert")]
+    assert html.count("<button") == 11
     assert html.count('class="field-help"') == len(SETUP_FIELDS)
     assert "Save your alert destination above" in html
 
