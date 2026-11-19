@@ -56,7 +56,8 @@ def page(syncer):
 def test_every_setup_control_has_named_help_and_a_visible_hint(syncer):
     html, parsed = page(syncer)
     expected = set(LOCK_DEFAULTS) | set(CLIMATE_DEFAULTS) | set(DAILY_DEFAULTS) | set(SMTP_FIELDS) | set(PRICING_DEFAULTS) | {
-        "pricing_simulation_enabled", "pricing_preview_at",
+        "pricing_simulation_enabled", "pricing_preview_at", "pricing_manual_discount",
+        "pricing_minimum_0", "pricing_minimum_1", "pricing_minimum_2",
         'smtp_enabled', 'smtp_password', 'sheet_enabled', 'sheet_endpoint', 'sheet_secret',
         "occupied_reset_enabled", "temperature_complaints_enabled",
         "public_url", "addon_slug", "register_hostaway", "alert_service",
@@ -98,7 +99,7 @@ def test_help_keeps_existing_form_routes_and_does_not_add_submit_buttons(syncer)
     assert parsed.forms == [
         ("post", "sync"), ("post", "setup-webhook"), ("post", "settings-save"),
         ("post", "thermostat-settings-save"), ("post", "daily-temperature-settings-save"), ("post", "additional-thermostats-save"), ("post", "sheet-settings-save"), ("post", "pricing-settings-save"), ("post", "pricing-simulate"), ("post", "smtp-settings-save"), ("post", "test-alert")]
-    assert html.count("<button") == 11
+    assert html.count("<button") == 12
     assert html.count('class="field-help"') == len(SETUP_FIELDS)
     assert "Save your alert destination above" in html
 

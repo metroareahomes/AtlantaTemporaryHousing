@@ -23,6 +23,13 @@
 <div class="setup-field"><label class="field-title" for="setting-{{ timekey }}">{{ setup_fields[timekey].label }}</label>{{ help(timekey) }}<input id="setting-{{ timekey }}" type="time" name="{{ timekey }}" value="{{ pricing_values[timekey] }}" aria-describedby="hint-{{ timekey }}"><p class="field-hint" id="hint-{{ timekey }}">{{ setup_fields[timekey].brief }}</p></div>
 {% endfor %}
 <button class="primary">Save pricing settings</button>
+<div class="wide">
+<h3>One-time override preview</h3>
+<p class="sub">Choose the home above. Tonight’s discount uses its current Hostaway rate and can apply below the weekend rate threshold. Each minimum applies to arrivals on that date. Leave a field blank to keep its current value.</p>
+</div>
+{{ text('pricing_manual_discount', '', '20') }}
+{% for day in range(3) %}{{ text('pricing_minimum_' ~ day, '', '3') }}{% endfor %}
+<button formaction="pricing-simulate" name="pricing_action" value="one_time" {{ 'disabled' if not pricing_simulation_enabled }}>Preview one-time override</button>
 </form>
 <h3>Preview saved pricing settings</h3><p class="sub">Save first. This reads only the selected property. It does not activate the schedule.</p>
 <form method="post" action="pricing-simulate" class="stack">
@@ -33,8 +40,8 @@
 <h3>Last simulation: {{ pricing_preview.property_name }}</h3>
 <p class="sub">Read at {{ pricing_preview.created_at }} · Simulated time {{ pricing_preview.simulation_at }}. This is a saved result, not a live forecast. A rate change does not identify whether PriceLabs or a person changed it.</p>
 <details><summary>Settings used for this result</summary><code style="overflow-wrap:anywhere">{{ pricing_preview.config_json }}</code></details>
-<div style="overflow-x:auto;max-width:100%"><table><thead><tr><th>Night</th><th>Current Hostaway rate</th><th>Proposed rate</th><th>Minimum nights</th><th>Hostaway channel processed</th><th>Result</th></tr></thead><tbody>
-{% for r in pricing_rows %}<tr><td>{{ r.date }}</td><td>{{ r.current }}</td><td>{{ r.proposed or '—' }}</td><td>{{ r.minimum_stay if r.minimum_stay is not none else 'Unknown' }}</td><td>{{ 'Yes' if r.processed == 1 else 'No' if r.processed == 0 else 'Unknown' }}</td><td>{{ r.reason }}</td></tr>{% endfor %}
+<div style="overflow-x:auto;max-width:100%"><table><thead><tr><th>Night</th><th>Current Hostaway rate</th><th>Proposed rate</th><th>Current minimum</th><th>Proposed minimum</th><th>Hostaway channel processed</th><th>Result</th></tr></thead><tbody>
+{% for r in pricing_rows %}<tr><td>{{ r.date }}</td><td>{{ r.current }}</td><td>{{ r.proposed or '—' }}</td><td>{{ r.minimum_stay if r.minimum_stay is not none else 'Unknown' }}</td><td>{{ r.proposed_minimum_stay|default('—') }}</td><td>{{ 'Yes' if r.processed == 1 else 'No' if r.processed == 0 else 'Unknown' }}</td><td>{{ r.reason }}</td></tr>{% endfor %}
 </tbody></table></div>
 {% endif %}
 <p class="sub">PriceLabs may overwrite calendar prices overnight or during additional syncs. Before any live test, its timing/ownership must be coordinated; restoring an old price blindly could overwrite a newer valid rate. No automatic restoration or price writes run here.</p>

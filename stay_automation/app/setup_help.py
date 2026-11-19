@@ -275,3 +275,15 @@ SETUP_FIELDS.update({
 for _event, _label, _example in [('start','Promotion starts','Friday at 14:00 (2 PM)'), ('check1','Second pricing check','Saturday at 06:00 (6 AM)'), ('check2','Third pricing check','Sunday at 06:00 (6 AM)'), ('end','Promotion stops','Monday at 00:01 (12:01 AM)')]:
     SETUP_FIELDS['pricing_'+_event+'_day'] = dict(label=_label+' — day', brief='All promotion times use America/New_York (Eastern).', more='These settings describe the simulation schedule. Saving them does not enable recurring jobs. Checks and stop must follow the start in order within one week.', example=_example)
     SETUP_FIELDS['pricing_'+_event+'_time'] = dict(label=_label+' — time', brief='Use a 24-hour Eastern time, such as 06:00 or 14:00.', more='Eastern daylight saving time is handled automatically. This is only a planned schedule until the one-property test and activation are approved.', example=_example)
+
+SETUP_FIELDS['pricing_manual_discount'] = dict(
+    label='Tonight only — discount (%)', brief='Leave blank to keep tonight’s rate.',
+    more='The one-time preview uses the current calendar price and bypasses the weekend schedule and price threshold.',
+    example='Enter 20 to preview a 20% reduction for tonight.',
+)
+for _day, _label in enumerate(('Tonight', 'Tomorrow', 'Two days from today')):
+    SETUP_FIELDS[f'pricing_minimum_{_day}'] = dict(
+        label=f'{_label} — minimum nights', brief='Leave blank to keep the current minimum.',
+        more='This is the minimum length of a reservation arriving on this date.',
+        example='Enter 3 to require a stay of at least three nights for arrivals on this date.',
+    )

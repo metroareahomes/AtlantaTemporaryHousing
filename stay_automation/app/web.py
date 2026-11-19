@@ -26,7 +26,7 @@ from .locks import DEFAULT_GUEST_MESSAGE, DEFAULTS, LockManager, _utc, add_time,
 from .reservations import code_status, property_state, within
 from .sync import Syncer
 from .setup_help import SETUP_FIELDS
-from .pricing import PricingSimulator, DEFAULTS as PRICING_DEFAULTS, DAYS as PRICING_DAYS, TZ as PRICING_TZ, read_config as pricing_config, validate as validate_pricing, next_start as pricing_next_start
+from .pricing import manual_settings, PricingSimulator, DEFAULTS as PRICING_DEFAULTS, DAYS as PRICING_DAYS, TZ as PRICING_TZ, read_config as pricing_config, validate as validate_pricing, next_start as pricing_next_start
 from .property_sheet import PropertySheet, valid_endpoint
 
 HERE = Path(__file__).parent
@@ -918,6 +918,9 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None) 
     async def pricing_simulate(request: Request):
         form = await request.form()
         try:
+            if form.get('pricing_action') == 'one_time':
+                await pricing.preview(syncer.now(), manual=manual_settings(form))
+                return _done('setup', 'One-time simulation saved; no rates or minimum stays changed')
             when = datetime.fromisoformat(str(form.get('pricing_preview_at', '')))
             if when.tzinfo is not None:
                 raise ValueError('Use the local Eastern date and time')

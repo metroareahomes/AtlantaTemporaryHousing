@@ -23,6 +23,8 @@ mike_id = s.db.execute("INSERT INTO properties(hostaway_listing_id,name,owner_sc
 s.db.execute("INSERT INTO properties(hostaway_listing_id,name) VALUES(102,'Untagged property')")
 s.db.execute("INSERT INTO pricing_simulations(created_at,property_id,simulation_at,config_json,rows_json) VALUES(?,?,?,?,?)", ('2030-06-14T14:00:00-04:00',pid,'2030-06-14T14:00:00-04:00','{}',json.dumps([{'date':'2030-06-14','current':'250','proposed':'225.00','minimum_stay':1,'reason':'Simulation only — calendar date, not first-night-only'}])))
 pages['/setup-pricing'] = c.get('/setup').text
+s.db.set_setting('pricing_simulation_enabled', '1')
+pages['/setup-pricing-enabled'] = c.get('/setup').text
 static = root / 'stay_automation' / 'app' / 'static'
 with sync_playwright() as p:
     browser = p.chromium.launch(headless=True)
@@ -110,6 +112,23 @@ with sync_playwright() as p:
         assert 'smtp_password' not in saved['values'] and 'guest_message' not in saved['values']
         assert page.get_by_text('225.00',exact=True).count()==1
         assert page.evaluate('document.documentElement.scrollWidth') <= width
+        page.goto('https://ha.example.com/setup-pricing-enabled')
+        page.evaluate("""document.addEventListener('submit', event => {
+            event.preventDefault();
+            window.override = {
+                action: event.submitter.getAttribute('formaction'),
+                fields: Object.fromEntries(new FormData(event.target, event.submitter))
+            };
+        });""")
+        page.locator('[name=pricing_manual_discount]').fill('20')
+        page.locator('[name=pricing_minimum_0]').fill('3')
+        page.get_by_role('button', name='Preview one-time override').click()
+        override = page.evaluate('window.override')
+        assert override['action'] == 'pricing-simulate'
+        assert override['fields']['pricing_action'] == 'one_time'
+        assert override['fields']['pricing_property'] == str(pid)
+        assert override['fields']['pricing_manual_discount'] == '20'
+        assert override['fields']['pricing_minimum_0'] == '3'
         # Simulate HA's authenticated ingress iframe, even if its proxy strips HTTP Referer.
         page.goto('https://ha.example.com/',referer='https://ha.example.com/hassio/ingress/stay?stay_page=properties')
         page.wait_for_url('**/properties')

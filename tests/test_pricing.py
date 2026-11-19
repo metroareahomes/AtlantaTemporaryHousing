@@ -224,3 +224,35 @@ def test_spring_dst_gap_rejected_before_api_read(syncer):
     result=c.post('/pricing-simulate',data={'pricing_preview_at':'2030-03-10T02:30'},follow_redirects=False)
     assert 'does+not+exist' in result.headers['location']
     assert not syncer.db.query('SELECT * FROM pricing_simulations')
+
+
+def test_one_time_override_uses_selected_home_and_leaves_weekend_settings_intact(syncer):
+    configure(syncer)
+    property_id = syncer.db.execute(
+        "INSERT INTO properties(hostaway_listing_id,name,owner_scope) VALUES(303,'Wright','Kurt')"
+    )
+    syncer.now = lambda: FRIDAY - timedelta(days=1)
+
+    async def listing(listing_id):
+        assert listing_id == 303
+        return dict(LISTING, id=303)
+
+    async def calendar(listing_id, start, end):
+        assert (listing_id, start, end) == (303, '2030-06-13', '2030-06-15')
+        return [day(date, price=180) for date in ('2030-06-13', '2030-06-14', '2030-06-15')]
+
+    syncer.hostaway.pricing_listing = listing
+    syncer.hostaway.pricing_calendar = calendar
+    before = syncer.db.query('SELECT * FROM settings')
+    client = TestClient(create_app(syncer))
+    response = client.post('/pricing-simulate', data={
+        'pricing_action': 'one_time', 'pricing_property': str(property_id),
+        'pricing_manual_discount': '20', 'pricing_minimum_0': '3', 'pricing_minimum_2': '2',
+    }, follow_redirects=False)
+    assert response.is_redirect
+    result = syncer.db.one('SELECT * FROM pricing_simulations')
+    assert result['property_id'] == property_id
+    rows = json.loads(result['rows_json'])
+    assert [row['proposed'] for row in rows] == ['144.00', '', '']
+    assert [row.get('proposed_minimum_stay') for row in rows] == [3, None, 2]
+    assert syncer.db.query('SELECT * FROM settings') == before
