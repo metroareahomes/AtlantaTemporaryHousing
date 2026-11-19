@@ -396,7 +396,7 @@ def test_thursday_schedule_uses_saved_selection_and_runs_once_after_restart(sync
     thursday = FRIDAY - timedelta(days=1)
     calls = []
 
-    async def apply(form):
+    async def apply(form, *, scheduled=False):
         calls.append(dict(form))
         return ['Test home verified']
 
@@ -419,3 +419,27 @@ def test_thursday_schedule_uses_saved_selection_and_runs_once_after_restart(sync
     syncer.now = lambda: FRIDAY
     run(restart.tick_thursday_schedule())
     assert calls == [{'special_owner': 'Kurt', 'special_discount': '15', 'special_floor': '200'}]
+
+
+def test_owner_pages_scope_selection_and_save_distinct_discounts(syncer):
+    for lid, owner in [(610, 'Mike'), (611, 'Kurt')]:
+        syncer.db.execute(
+            'INSERT INTO properties(hostaway_listing_id,name,owner_scope) VALUES(?,?,?)',
+            (lid, f'{owner} Test Home', owner),
+        )
+    service = PricingSimulator(syncer)
+    client = TestClient(create_app(syncer, pricing=service))
+    for owner, other, discount in [('Mike', 'Kurt', '12'), ('Kurt', 'Mike', '20')]:
+        url = f'/thursday-special?owner={owner}'
+        html = client.get(url).text
+        assert f'{owner} Test Home' in html
+        assert f'{other} Test Home' not in html
+        response = client.post(url, data={
+            'special_action': 'save_schedule', 'special_owner': other,
+            'special_time': '14:00', 'special_discount': discount, 'special_floor': '200',
+            'special_enabled': 'on',
+        }, follow_redirects=False)
+        assert response.status_code == 303
+        assert service.thursday_schedule(owner)['owner'] == owner
+    assert service.thursday_schedule('Mike')['discount'] == '12'
+    assert service.thursday_schedule('Kurt')['discount'] == '20'

@@ -238,7 +238,7 @@ class PricingSimulator:
             self.db.log('pricing.simulated', f'Pricing simulation saved: {len(rows)} dates reviewed; no prices changed.', property_id=prop['id'])
             return rid
 
-    async def thursday_special(self, form):
+    async def thursday_special(self, form, *, scheduled=False):
         """Preview the current or coming Thursday without changing the calendar."""
         owner = form.get('special_owner', '')
         if owner not in ('', 'Kurt', 'Mike'):
@@ -261,9 +261,10 @@ class PricingSimulator:
             raise ValueError('A pricing preview is already running')
         async with self._lock:
             now = self.s.now()
-            if self._last_attempt and now - self._last_attempt < timedelta(seconds=30):
-                raise ValueError('Wait 30 seconds before another pricing read')
-            self._last_attempt = now
+            if not scheduled:
+                if self._last_attempt and now - self._last_attempt < timedelta(seconds=30):
+                    raise ValueError('Wait 30 seconds before another pricing read')
+                self._last_attempt = now
             today = now.astimezone(TZ).date()
             thursday = today + timedelta(days=(3 - today.weekday()) % 7)
             saturday = thursday + timedelta(days=2)
@@ -338,41 +339,43 @@ class PricingSimulator:
             'clock': clock, 'enabled': enabled, 'owner': owner,
             'selected': selected, 'discount': discount, 'floor': floor,
         }
-        self.db.set_setting('thursday_special_schedule', json.dumps(config))
+        self.db.set_setting(f'thursday_special_schedule:{owner}', json.dumps(config))
         return config
 
-    def thursday_schedule(self):
-        return json.loads(self.db.get_setting('thursday_special_schedule', '{}'))
+    def thursday_schedule(self, owner):
+        return json.loads(self.db.get_setting(f'thursday_special_schedule:{owner}', '{}'))
 
     async def tick_thursday_schedule(self):
         local = self.s.now().astimezone(TZ)
         if local.weekday() != 3:
             return
-        config = self.thursday_schedule()
+        for owner in ('Mike', 'Kurt'):
+            await self.run_due_thursday_schedule(local, owner)
+
+    async def run_due_thursday_schedule(self, local, owner):
+        config = self.thursday_schedule(owner)
         if not config.get('enabled') or config['clock'] != local.strftime('%H:%M'):
             return
         run_date = local.date().isoformat()
-        if self._lock.locked() or self.db.get_setting('thursday_special_last_run') == run_date:
+        if self._lock.locked() or self.db.get_setting(f'thursday_special_last_run:{owner}') == run_date:
             return
-        if self._last_attempt and self.s.now() - self._last_attempt < timedelta(seconds=30):
-            return
-        self.db.set_setting('thursday_special_last_run', run_date)
+        self.db.set_setting(f'thursday_special_last_run:{owner}', run_date)
         form = FormData([
             ('special_owner', config['owner']), ('special_discount', config['discount']),
             ('special_floor', config['floor']),
             *(('special_property', item) for item in config['selected']),
         ])
         try:
-            reports = await self.apply_selected_special(form)
+            reports = await self.apply_selected_special(form, scheduled=True)
         except ValueError as exc:
             reports = [str(exc)]
         for report in reports:
             self.db.log('pricing.thursday_special', report)
 
-    async def apply_selected_special(self, form):
+    async def apply_selected_special(self, form, *, scheduled=False):
         if self.s.now().astimezone(TZ).weekday() != 3:
             raise ValueError('The Thursday Special can be applied on Thursday Eastern time')
-        result = await self.thursday_special(form)
+        result = await self.thursday_special(form, scheduled=scheduled)
         checked = set(form.getlist('special_property'))
         reports = [f"{name}: Calendar could not be verified" for name in result['errors']]
         for prop in result['properties']:

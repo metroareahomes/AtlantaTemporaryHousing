@@ -10,6 +10,7 @@ from urllib.parse import urlencode, urlsplit, parse_qs
 
 from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.exception_handlers import http_exception_handler
+from starlette.datastructures import FormData
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -906,13 +907,21 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, 
     @app.post("/thursday-special", response_class=HTMLResponse)
     async def thursday_special(request: Request):
         form = await request.form()
+        owner = request.query_params.get('owner', '')
+        if owner and owner not in OWNERS:
+            raise HTTPException(400, 'Choose Mike or Kurt')
+        if owner:
+            form = FormData([*(item for item in form.multi_items() if item[0] != 'special_owner'),
+                             ('special_owner', owner)])
         result, error, applied, bulk_report = None, None, None, None
         if request.method == 'POST':
             try:
                 if form.get('special_action') == 'save_schedule':
+                    if not owner:
+                        raise ValueError('Open an owner page to save a Thursday schedule')
                     pricing.save_thursday_schedule(form)
-                    return _done('thursday-special', 'Thursday schedule saved')
-                if form.get('special_action') == 'apply_wright':
+                    return _done(f'thursday-special?owner={owner}', 'Thursday schedule saved')
+                if form.get('special_action') == 'apply_wright' and owner != 'Mike':
                     choices = form.getlist('special_property')
                     if len(choices) != 1 or form.get('special_floor', '').strip() or form.get('special_discount') != '20':
                         raise ValueError('Check Wright only, enter 20% and leave the threshold blank')
@@ -923,9 +932,8 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, 
                     result = await pricing.thursday_special(form)
             except ValueError as exc:
                 error = str(exc)
-        schedule = pricing.thursday_schedule()
+        schedule = pricing.thursday_schedule(owner)
         if request.method == 'GET' and schedule:
-            from starlette.datastructures import FormData
             form = FormData([
                 ('special_owner', schedule['owner']), ('special_discount', schedule['discount']),
                 ('special_floor', schedule['floor']),
@@ -933,10 +941,11 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, 
             ])
         properties = db.query(
             'SELECT id,name,address,owner_scope FROM properties WHERE active=1 '
-            'AND hostaway_listing_id IS NOT NULL ORDER BY name, address, id'
+            "AND hostaway_listing_id IS NOT NULL AND (?='' OR owner_scope=?) ORDER BY name, address, id",
+            (owner, owner),
         )
         return page(request, 'thursday_special.html', properties=properties, owners=OWNERS,
-                    special=form, result=result, error=error, applied=applied, bulk_report=bulk_report, schedule=schedule)
+                    special=form, result=result, error=error, applied=applied, bulk_report=bulk_report, schedule=schedule, special_owner=owner)
 
     @app.post("/pricing-settings-save")
     async def pricing_settings_save(request: Request):
