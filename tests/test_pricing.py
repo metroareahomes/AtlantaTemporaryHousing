@@ -269,7 +269,8 @@ def test_thursday_special_combines_checked_homes_and_rate_matches(syncer):
     async def calendar(lid, start, end):
         assert lid != 304
         assert (start, end) == ('2030-06-13', '2030-06-15')
-        return [day(start, price={301: 180, 302: 250, 303: 200}[lid], closedOnArrival=None),
+        return [day(start, price={301: 180, 302: 250, 303: 200}[lid], closedOnArrival=None, countAvailableUnits=1,
+                    availableUnitsToSell=1, desiredUnitsToSell=1),
                 day('2030-06-14', price=300, isAvailable='1', closedOnArrival=1),
                 day(end, price=350)]
 
@@ -293,3 +294,4 @@ def test_thursday_special_combines_checked_homes_and_rate_matches(syncer):
     assert '<td>350</td><td>280.00</td><td>1</td><td>—</td>' in response.text
     assert 'Arrival status unconfirmed' in response.text
     assert 'Hostaway reports arrivals closed' in response.text
+    assert 'Inventory counts reported' in response.text

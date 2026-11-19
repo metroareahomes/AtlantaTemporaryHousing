@@ -112,6 +112,7 @@ def plan(calendar, listing, at, cfg, manual=None):
     active = start <= at.astimezone(TZ) < end
     cutoff = at.astimezone(timezone.utc) + timedelta(hours=int(cfg['pricing_window']))
     rows, dates = [], set()
+    thursday_special = bool(manual and manual.get('discount_all_dates'))
     for day in calendar:
         date = str(day.get('date', ''))
         if not re.fullmatch(r'\d{4}-\d{2}-\d{2}', date) or date in dates:
@@ -130,6 +131,9 @@ def plan(calendar, listing, at, cfg, manual=None):
             rows.append(row)
             continue
         offset = (checkin.date() - at.astimezone(TZ).date()).days
+        inventory_fields_present = any(day.get(key) is not None for key in (
+            'countAvailableUnits', 'availableUnitsToSell', 'desiredUnitsToSell',
+        ))
         if manual is None and not active:
             row['reason'] = 'Outside promotion window'
         elif manual is None and not at.astimezone(timezone.utc) <= checkin.astimezone(timezone.utc) <= cutoff:
@@ -138,11 +142,11 @@ def plan(calendar, listing, at, cfg, manual=None):
             row['reason'] = 'Check-in after promotion stops'
         elif day.get('status') != 'available' or day.get('isAvailable') not in (1, '1'):
             row['reason'] = 'Night not confirmed available'
-        elif not (manual and manual.get('discount_all_dates')) and day.get('closedOnArrival') not in (0, False):
+        elif not thursday_special and day.get('closedOnArrival') not in (0, False):
             row['reason'] = 'Arrival closed or unknown'
         elif day.get('reservations') or any(day.get(k) not in (None, 0) for k in ('countPendingUnits', 'countReservedUnits', 'countBlockingReservations', 'countBlockedUnits')):
             row['reason'] = 'Reservation / blocking inventory present'
-        elif any(day.get(k) is not None for k in ('countAvailableUnits', 'availableUnitsToSell', 'desiredUnitsToSell')):
+        elif inventory_fields_present and not thursday_special:
             row['reason'] = 'Multi-unit inventory requires separate review'
         elif manual is not None:
             minimum = manual['minimums'][offset]
@@ -156,7 +160,9 @@ def plan(calendar, listing, at, cfg, manual=None):
                     row['proposed'] = str(proposed)
             row['reason'] = ('One-time preview' if row['proposed'] or minimum is not None
                              else 'No change proposed')
-            if manual.get('discount_all_dates'):
+            if thursday_special:
+                if inventory_fields_present:
+                    row['reason'] += ' · Inventory counts reported; verify unit setup before applying'
                 arrival = day.get('closedOnArrival')
                 if arrival in (1, '1'):
                     row['reason'] += ' · Hostaway reports arrivals closed'
