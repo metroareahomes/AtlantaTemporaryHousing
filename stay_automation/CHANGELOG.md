@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.34 — Thursday report running status
+
+- Show when the Thursday report is running and disable repeated submissions.
+
+Source rollback: stable-0.6.33-before-report-status.
+
 ## 0.6.33 — Thursday booking times report
 
 - Use the existing Hostaway connection to report 12 months of Thursday booking times in Eastern Time.
