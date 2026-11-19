@@ -99,6 +99,18 @@ def next_start(now, cfg):
     return start.strftime('%Y-%m-%dT%H:%M')
 
 
+def vacancy_issue(day):
+    if day.get('status') != 'available' or day.get('isAvailable') not in (1, '1'):
+        return 'Night not confirmed available'
+    if day.get('reservations') or any(
+        day.get(key) not in (None, 0, '0') for key in (
+            'countPendingUnits', 'countReservedUnits', 'countBlockingReservations', 'countBlockedUnits',
+        )
+    ):
+        return 'Reservation / blocking inventory present'
+    return None
+
+
 def plan(calendar, listing, at, cfg, manual=None):
     if listing.get('currencyCode') != 'USD':
         raise ValueError('Only a confirmed USD listing can be simulated')
@@ -140,12 +152,10 @@ def plan(calendar, listing, at, cfg, manual=None):
             row['reason'] = 'Check-in outside next-hours window'
         elif manual is None and checkin >= end:
             row['reason'] = 'Check-in after promotion stops'
-        elif day.get('status') != 'available' or day.get('isAvailable') not in (1, '1'):
-            row['reason'] = 'Night not confirmed available'
+        elif issue := vacancy_issue(day):
+            row['reason'] = issue
         elif not thursday_special and day.get('closedOnArrival') not in (0, False):
             row['reason'] = 'Arrival closed or unknown'
-        elif day.get('reservations') or any(day.get(k) not in (None, 0) for k in ('countPendingUnits', 'countReservedUnits', 'countBlockingReservations', 'countBlockedUnits')):
-            row['reason'] = 'Reservation / blocking inventory present'
         elif inventory_fields_present and not thursday_special:
             row['reason'] = 'Multi-unit inventory requires separate review'
         elif manual is not None:
@@ -284,6 +294,15 @@ class PricingSimulator:
                             continue
                     listing = await self.s.hostaway.pricing_listing(listing_id)
                     rows = plan(calendar, listing, at, DEFAULTS, rule)
+                    expected_dates = {(thursday + timedelta(days=offset)).isoformat() for offset in range(3)}
+                    if {row['date'] for row in rows} != expected_dates or any(vacancy_issue(day) for day in calendar):
+                        for row in rows:
+                            row['proposed'] = ''
+                            row.pop('proposed_minimum_stay', None)
+                            if row['reason'].startswith('One-time preview'):
+                                row['reason'] = 'Skipped because the full weekend is not vacant'
+                        results.append({'name': name, 'rows': rows, 'ineligible': True})
+                        continue
                 except Exception:
                     errors.append(name)
                     continue

@@ -14,7 +14,7 @@
 </select></label>
 <fieldset>
 <legend>Homes to include</legend>
-<p>Check homes directly, enter a rate threshold to include matching homes, or use both. Checked homes qualify regardless of rate.</p>
+<p>Check homes directly, enter a rate threshold to include matching homes, or use both. Checked homes bypass the rate threshold. Every home must be vacant Thursday, Friday and Saturday.</p>
 <div style="max-height:16rem;overflow:auto">
 {% for prop in properties %}
 <div data-owner="{{ prop.owner_scope }}">
@@ -33,6 +33,7 @@
 {% if not result.properties %}<p>No homes matched.</p>{% endif %}
 {% for prop in result.properties %}
 <h3>{{ prop.name }}</h3>
+{% if prop.ineligible %}<p>Skipped: all three nights must be confirmed vacant.</p>{% endif %}
 <div style="overflow-x:auto">
 <table><thead><tr><th>Night</th><th>Current rate</th><th>Proposed rate</th><th>Current minimum</th><th>Proposed minimum</th><th>Result</th></tr></thead>
 <tbody>{% for row in prop.rows %}
