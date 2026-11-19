@@ -57,6 +57,19 @@ class HAClient:
             if s["entity_id"] in wanted
         ]
 
+    async def lock_state(self, entity_id: str) -> str | None:
+        """Read one HA cached entity state; never operate or force-refresh the lock."""
+        from urllib.parse import quote
+        response = await self._http.get('/api/states/' + quote(entity_id, safe=''))
+        if response.status_code == 404:
+            return None
+        if response.status_code != 200:
+            raise HAError('Could not read the lock state from Home Assistant')
+        data = response.json()
+        if data.get('entity_id') != entity_id or not isinstance(data.get('state'), str):
+            raise HAError('Invalid lock state response from Home Assistant')
+        return data['state']
+
     @staticmethod
     def _climate_from_state(s: dict[str, Any]) -> dict[str, Any]:
         a = s.get("attributes") or {}

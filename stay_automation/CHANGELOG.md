@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.25 — refresh lock availability on Check lock
+
+- Read the selected lock's current Home Assistant availability as well as its access codes when Check lock is pressed.
+- Clear stale offline labels only when Home Assistant confirms an available state; preserve warnings when state is missing, unknown, unavailable or unreadable.
+- Show a helpful notice when availability cannot be confirmed; retain genuine code-verification errors.
+- Do not operate locks, change codes, force cloud refreshes or alter other property assignments.
+
+Source rollback: stable-0.6.24-before-lock-state-refresh. Live availability still depends on Home Assistant's integration state.
+
+
 ## 0.6.24 — quietly restore vacant temperatures
 
 - Correct vacant-home mode/target drift on the normal five-minute thermostat pass, including after a successful reset earlier the same day.
