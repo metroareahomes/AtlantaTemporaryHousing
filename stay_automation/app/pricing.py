@@ -136,9 +136,9 @@ def plan(calendar, listing, at, cfg, manual=None):
             row['reason'] = 'Check-in outside next-hours window'
         elif manual is None and checkin >= end:
             row['reason'] = 'Check-in after promotion stops'
-        elif day.get('status') != 'available' or day.get('isAvailable') != 1:
+        elif day.get('status') != 'available' or day.get('isAvailable') not in (1, '1'):
             row['reason'] = 'Night not confirmed available'
-        elif day.get('closedOnArrival') not in (0, False):
+        elif not (manual and manual.get('discount_all_dates')) and day.get('closedOnArrival') not in (0, False):
             row['reason'] = 'Arrival closed or unknown'
         elif day.get('reservations') or any(day.get(k) not in (None, 0) for k in ('countPendingUnits', 'countReservedUnits', 'countBlockingReservations', 'countBlockedUnits')):
             row['reason'] = 'Reservation / blocking inventory present'
@@ -156,6 +156,12 @@ def plan(calendar, listing, at, cfg, manual=None):
                     row['proposed'] = str(proposed)
             row['reason'] = ('One-time preview' if row['proposed'] or minimum is not None
                              else 'No change proposed')
+            if manual.get('discount_all_dates'):
+                arrival = day.get('closedOnArrival')
+                if arrival in (1, '1'):
+                    row['reason'] += ' · Hostaway reports arrivals closed'
+                elif arrival not in (0, '0'):
+                    row['reason'] += ' · Arrival status unconfirmed'
         elif current <= money(cfg['pricing_threshold']):
             row['reason'] = 'Rate does not exceed threshold'
         else:
