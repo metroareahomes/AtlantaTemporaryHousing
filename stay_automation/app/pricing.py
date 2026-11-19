@@ -1,4 +1,4 @@
-"""Read-only, single-property weekend pricing simulations. No calendar-write capability."""
+"""Weekend pricing previews and the explicitly triggered Wright trial."""
 import asyncio
 import json
 import re
@@ -308,3 +308,66 @@ class PricingSimulator:
                     continue
                 results.append({'name': name, 'rows': rows})
             return {'thursday': thursday.isoformat(), 'properties': results, 'errors': errors}
+
+    async def apply_wright_special(self, property_id):
+        if self._lock.locked():
+            raise ValueError('A pricing action is already running')
+        async with self._lock:
+            today = self.s.now().astimezone(TZ).date()
+            if today.weekday() != 3:
+                raise ValueError('The live Wright trial can be run on Thursday Eastern time')
+            matches = [
+                prop for prop in self.db.query(
+                    "SELECT id,name,address,hostaway_listing_id FROM properties "
+                    "WHERE active=1 AND owner_scope='Kurt' AND hostaway_listing_id IS NOT NULL"
+                )
+                if re.search(r"\bwright\b", f"{prop['name']} {prop['address'] or ''}", re.IGNORECASE)
+            ]
+            if len(matches) != 1 or str(matches[0]['id']) != property_id:
+                raise ValueError('Select Kurt’s uniquely matched Wright listing')
+            listing_id = matches[0]['hostaway_listing_id']
+            start = today.isoformat()
+            dates = [(today + timedelta(days=offset)).isoformat() for offset in range(3)]
+            end = dates[-1]
+            key = f'pricing_wright_trial_{listing_id}_{start}'
+            if self.db.get_setting(key):
+                raise ValueError('A write was already attempted for these dates. Check the Hostaway calendar.')
+            try:
+                listing = await self.s.hostaway.pricing_listing(listing_id)
+                calendar = await self.s.hostaway.pricing_calendar(listing_id, start, end)
+                rule = {'discount': '20', 'minimums': [3, None, None], 'discount_all_dates': True}
+                at = datetime.combine(today, datetime.min.time(), TZ)
+                rows = plan(calendar, listing, at, DEFAULTS, rule)
+            except Exception:
+                raise ValueError('Could not verify Wright’s calendar. No updates were sent.') from None
+            if sorted(row['date'] for row in rows) != dates or any(
+                vacancy_issue(day) for day in calendar
+            ) or any(not row['proposed'] for row in rows):
+                raise ValueError('All three nights must have a valid rate and be confirmed vacant')
+            if self.s.now().astimezone(TZ).date() != today:
+                raise ValueError('The Eastern calendar date changed. No updates were sent.')
+            intervals = []
+            for row in sorted(rows, key=lambda row: row['date']):
+                date = row['date']
+                item = {'startDate': date, 'endDate': date, 'price': float(row['proposed'])}
+                if date == start:
+                    item['minimumStay'] = 3
+                intervals.append(item)
+            # Persist the intent before sending. A timeout can mean the write succeeded.
+            record = {'status': 'attempted', 'before': rows, 'requested': intervals}
+            self.db.set_setting(key, json.dumps(record))
+            try:
+                await self.s.hostaway.apply_calendar_intervals(listing_id, intervals)
+                after = await self.s.hostaway.pricing_calendar(listing_id, start, end)
+                actual = {day['date']: day for day in after}
+                if len(after) != 3 or any(
+                    money(actual[item['startDate']]['price']) != money(item['price'])
+                    or ('minimumStay' in item and actual[item['startDate']]['minimumStay'] not in (3, '3'))
+                    for item in intervals
+                ):
+                    raise ValueError
+            except Exception:
+                raise ValueError('The update was attempted but could not be verified. Check Wright in Hostaway before making further changes.') from None
+            record['status'] = 'verified'
+            self.db.set_setting(key, json.dumps(record))
+            return ', '.join(f"{item['startDate']} at ${item['price']:.2f}" for item in intervals)

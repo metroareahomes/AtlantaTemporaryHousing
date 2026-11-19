@@ -303,3 +303,46 @@ def test_thursday_special_combines_checked_homes_and_rate_matches(syncer, blocke
     assert 'Arrival status unconfirmed' in response.text
     assert 'Hostaway reports arrivals closed' in response.text
     assert 'Inventory counts reported' in response.text
+
+
+@pytest.mark.parametrize('blocked', [False, True])
+def test_live_wright_trial_checks_all_nights_and_applies_only_once(syncer, blocked):
+    pid = syncer.db.execute(
+        "INSERT INTO properties(hostaway_listing_id,name,owner_scope) VALUES(301,'Wright','Kurt')"
+    )
+    syncer.now = lambda: FRIDAY - timedelta(days=1)
+    calls = []
+
+    async def listing(lid):
+        assert lid == 301
+        return dict(LISTING, id=lid)
+
+    async def calendar(lid, start, end):
+        assert lid == 301
+        return [
+            day(start, price=200 if calls else 250, minimumStay=3 if calls else 1),
+            day('2030-06-14', price=240 if calls else 300, minimumStay=2),
+            day(end, price=280 if calls else 350, countReservedUnits=int(blocked)),
+        ]
+
+    async def write(lid, intervals):
+        assert lid == 301
+        calls.append(intervals)
+
+    syncer.hostaway.pricing_listing = listing
+    syncer.hostaway.pricing_calendar = calendar
+    syncer.hostaway.apply_calendar_intervals = write
+    service = PricingSimulator(syncer)
+    if blocked:
+        with pytest.raises(ValueError, match='confirmed vacant'):
+            run(service.apply_wright_special(str(pid)))
+        assert calls == []
+        return
+    assert '$200.00' in run(service.apply_wright_special(str(pid)))
+    assert calls == [[
+        {'startDate': '2030-06-13', 'endDate': '2030-06-13', 'price': 200, 'minimumStay': 3},
+        {'startDate': '2030-06-14', 'endDate': '2030-06-14', 'price': 240},
+        {'startDate': '2030-06-15', 'endDate': '2030-06-15', 'price': 280},
+    ]]
+    with pytest.raises(ValueError, match='already attempted'):
+        run(PricingSimulator(syncer).apply_wright_special(str(pid)))
