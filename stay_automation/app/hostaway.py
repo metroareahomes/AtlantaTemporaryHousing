@@ -145,6 +145,10 @@ class HostawayClient:
         await self._request("PUT", f"/listings/{listing_id}/calendarIntervals",
                             json=intervals, retry_transient=False)
 
+    async def booking_report_reservations(self, departing_from: str) -> list[dict[str, Any]]:
+        # A booking created in the window may have a future arrival/departure.
+        return await self._paged("/reservations", {"departureStartDate": departing_from})
+
     async def reservations(self, departing_from: str) -> list[dict[str, Any]]:
         """All reservations that depart on or after the given date (YYYY-MM-DD)."""
         return await self._paged("/reservations", {"departureStartDate": departing_from, "includeResources": 1})

@@ -1,0 +1,24 @@
+{% extends "base.html" %}{% set active = 'setup' %}
+{% block body %}
+<div class="page-head"><h1>Thursday booking times</h1></div>
+<section class="panel">
+<p>{{ start }} through {{ end }} (exclusive). Booking hours are in Eastern Time.</p>
+<p>Same-day counts cover Thursday bookings with Thursday arrivals. All Thursday bookings also include future arrivals. Counts use current reservations and exclude canceled bookings and owner stays.</p>
+<form method="post" action="thursday-bookings"><button>Run 12-month report</button></form>
+{% if error %}<p role="alert">{{ error }}</p>{% endif %}
+{% if report %}
+<h2>Bookings before and after 2 PM</h2>
+<p><strong>{{ report.total }}</strong> same-day bookings out of {{ report.all_total }} Thursday bookings. {{ report.before_two }} were before 2 PM and {{ report.after_two }} were at or after 2 PM.</p>
+{% if report.missing %}<p>{{ report.missing }} records had missing or invalid timestamps or arrival dates.</p>{% endif %}
+<div style="overflow-x:auto">
+<table>
+<thead><tr><th>Hour</th><th>Same-day bookings</th><th>Cumulative same-day share</th><th>All Thursday bookings</th></tr></thead>
+<tbody>
+{% for row in report.rows %}<tr><td>{{ row.hour }}</td><td>{{ row.same_day }}</td><td>{{ row.cumulative ~ '%' if row.cumulative is not none else '—' }}</td><td>{{ row.all_bookings }}</td></tr>{% endfor %}
+</tbody>
+</table>
+</div>
+<p>Booking counts do not account for how many homes were still available at each hour.</p>
+{% endif %}
+</section>
+{% endblock %}

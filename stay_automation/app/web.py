@@ -1,4 +1,5 @@
 """Dashboard served through HA Ingress. All links are relative so they work under the ingress path."""
+import asyncio
 import json
 import re
 import secrets
@@ -16,6 +17,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from .booking_report import report_window, thursday_bookings
 from .climate import (
     DEFAULTS as CLIMATE_DEFAULTS, LABELS as CLIMATE_LABELS, RANGES as CLIMATE_RANGES,
     TOLERANCE, is_summer, occupancy, occupying_reservation, setpoint,
@@ -898,6 +900,26 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, 
         db.set_settings(values)
         db.log('sheet.settings_saved', 'Property sheet connection settings saved (key hidden)')
         return _done('setup', 'Sheet connection saved; enabled updates run every five minutes')
+
+    booking_report_lock = asyncio.Lock()
+
+    @app.get("/thursday-bookings", response_class=HTMLResponse)
+    @app.post("/thursday-bookings", response_class=HTMLResponse)
+    async def thursday_booking_report(request: Request):
+        start, end = report_window(syncer.now())
+        report, error = None, None
+        if request.method == "POST":
+            if booking_report_lock.locked():
+                error = "A Thursday bookings report is already running."
+            else:
+                async with booking_report_lock:
+                    try:
+                        reservations = await syncer.hostaway.booking_report_reservations(start.isoformat())
+                        report = thursday_bookings(reservations, start, end)
+                    except Exception:
+                        error = "Could not read the reservation history from Hostaway."
+        return page(request, "thursday_bookings.html", start=start, end=end,
+                    report=report, error=error)
 
     @app.get("/thursday-special", response_class=HTMLResponse)
     @app.post("/thursday-special", response_class=HTMLResponse)
