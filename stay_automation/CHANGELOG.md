@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.37 — Slower Lyric temperature verification
+
+- Give configured Honeywell Lyric thermostats up to two minutes to report a requested setpoint.
+- Use the active Heat or Cool setpoint if the single target is absent.
+
+Source rollback: stable-0.6.36-before-lyric-verification.
+
 ## 0.6.36 — Activity log property filters
 
 - Search the Activity log as you type and filter by an exact property.
