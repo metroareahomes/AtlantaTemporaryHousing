@@ -25,6 +25,9 @@ s.db.execute("INSERT INTO pricing_simulations(created_at,property_id,simulation_
 pages['/setup-pricing'] = c.get('/setup').text
 s.db.set_setting('pricing_simulation_enabled', '1')
 pages['/setup-pricing-enabled'] = c.get('/setup').text
+s.db.log('lock.failed', 'Spring Road read failed', level='warning', property_id=pid)
+s.db.log('lock.failed', 'Other lock read failed', level='warning', property_id=mike_id)
+s.db.log('system.check', 'Spring Road mentioned in global event', level='warning')
 static = root / 'stay_automation' / 'app' / 'static'
 with sync_playwright() as p:
     browser = p.chromium.launch(headless=True)
@@ -34,6 +37,9 @@ with sync_playwright() as p:
             path = r.request.url.split('https://ha.example.com')[1].split('?')[0]
             if path.startswith('/static/'):
                 r.fulfill(path=str(static / path.rsplit('/',1)[-1]))
+            elif path == '/events':
+                target = r.request.url.removeprefix('https://ha.example.com')
+                r.fulfill(body=c.get(target).text, content_type='text/html')
             else:
                 r.fulfill(body=pages.get(path,pages['/']),content_type='text/html')
         page.route('https://ha.example.com/**',route)
@@ -128,6 +134,20 @@ with sync_playwright() as p:
         page.goto('https://ha.example.com/',referer='https://ha.example.com/hassio/ingress/stay?stay_page=properties')
         page.wait_for_url('**/properties')
         assert page.get_by_role('heading',name='Properties',exact=True).is_visible()
+        page.goto('https://ha.example.com/events')
+        results = page.locator('#log-results')
+        search = page.get_by_role('searchbox', name='Search log')
+        search.fill('Spring Road')
+        results.get_by_text('Other lock read failed').wait_for(state='detached')
+        assert results.get_by_text('Spring Road mentioned in global event').is_visible()
+        assert search.input_value() == 'Spring Road'
+        page.get_by_role('combobox', name='Property', exact=True).select_option(str(pid))
+        results.get_by_text('Spring Road mentioned in global event').wait_for(state='detached')
+        assert results.get_by_text('Spring Road read failed').is_visible()
+        page.get_by_role('link', name='Warnings', exact=True).click()
+        assert results.get_by_text('Spring Road read failed').is_visible()
+        assert f'property_id={pid}' in page.url
+        assert results.get_by_text('Other lock read failed').count() == 0
         page.close()
     browser.close()
 print('PASS: owner/category recipient forms and empty-test protection, SMTP secret masking, separate Save actions and ingress Properties link on desktop/phone')

@@ -792,9 +792,14 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, 
         return _done('staff', 'Email retry queued')
 
     @app.get("/events", response_class=HTMLResponse)
-    async def events(request: Request, q: str = "", level: str = "", kind: str = ""):
+    async def events(request: Request, q: str = "", level: str = "", kind: str = "",
+                     property_id: str = ""):
+        selected_property = int(property_id) if re.fullmatch(r"[1-9][0-9]{0,17}", property_id) else None
         where: list[str] = []
         args: list[Any] = []
+        if selected_property is not None:
+            where.append("e.property_id = ?")
+            args.append(selected_property)
         if q.strip():
             where.append("(IFNULL(p.name, '') LIKE ? OR e.message LIKE ? OR e.kind LIKE ?)")
             like = f"%{q.strip()}%"
@@ -813,7 +818,9 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, 
         for r in rows:
             r["at_local"] = _fmt(r["at"], syncer.tz)
         kinds = [r["kind"] for r in db.query("SELECT DISTINCT kind FROM events ORDER BY kind")]
-        return page(request, "events.html", events=rows, q=q, level=level, kind=kind, kinds=kinds)
+        properties = db.query("SELECT id, name FROM properties ORDER BY name COLLATE NOCASE, id")
+        return page(request, "events.html", events=rows, q=q, level=level, kind=kind,
+                    kinds=kinds, properties=properties, property_id=selected_property)
 
     @app.post("/sync")
     async def sync_now():
