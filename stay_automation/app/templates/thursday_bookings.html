@@ -4,29 +4,14 @@
 <section class="panel">
 <p>{{ start }} through {{ end }} (exclusive). Booking hours are in Eastern Time.</p>
 <p>Same-day counts cover Thursday bookings with Thursday arrivals. All Thursday bookings also include future arrivals. Counts use current reservations and exclude canceled bookings and owner stays.</p>
-<form method="post" action="thursday-bookings" id="booking-report-form">
-<button type="submit" {% if running %}disabled{% endif %}>Run 12-month report</button>
+<form method="post" action="thursday-bookings">
+<button type="submit" {% if running %}disabled{% endif %}>{{ 'Running report…' if running else 'Run 12-month report' }}</button>
 </form>
-<p id="booking-report-status" role="status" aria-live="polite">{% if running %}Report running. Stay Automation is reading reservations from Hostaway. If you opened this page separately, the results will appear in the tab that started the report.{% endif %}</p>
-<script>
-(() => {
-    const form = document.getElementById('booking-report-form');
-    const button = form.querySelector('button');
-    const status = document.getElementById('booking-report-status');
-    form.addEventListener('submit', event => {
-        if (button.disabled) {
-            event.preventDefault();
-            return;
-        }
-        button.disabled = true;
-        button.textContent = 'Running report…';
-        status.textContent = 'Reading reservations from Hostaway. The results will appear below when the report finishes.';
-    });
-    window.addEventListener('pageshow', event => {
-        if (event.persisted) window.location.reload();
-    });
-})();
-</script>
+{% if running %}
+<p role="status">Reading reservations from Hostaway. You can leave this page and come back for the results.</p>
+<p><a href="thursday-bookings">Refresh status</a></p>
+<script>window.setTimeout(() => window.location.reload(), 5000);</script>
+{% endif %}
 {% if error %}<p role="alert">{{ error }}</p>{% endif %}
 {% if report %}
 <h2>Bookings before and after 2 PM</h2>
