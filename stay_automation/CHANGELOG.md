@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.35 — Thursday booking reports run in the background
+
+- Keep fetching reservations when the browser closes or the page times out.
+- Show report progress and save completed results for later viewing.
+
+Source rollback: stable-0.6.34-before-background-report.
+
 ## 0.6.34 — Thursday report running status
 
 - Show when the Thursday report is running and disable repeated submissions.

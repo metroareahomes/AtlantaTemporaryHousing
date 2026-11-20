@@ -4,6 +4,7 @@ import json
 import re
 import secrets
 import sqlite3
+from contextlib import asynccontextmanager, nullcontext, suppress
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -335,7 +336,20 @@ SETTING_LABELS = {
 
 
 def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, *, pricing=None) -> FastAPI:
-    app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None)
+    booking_report_task = None
+
+    @asynccontextmanager
+    async def app_lifespan(app):
+        async with (lifespan(app) if lifespan else nullcontext()) as state:
+            try:
+                yield state
+            finally:
+                if booking_report_task is not None and not booking_report_task.done():
+                    booking_report_task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await booking_report_task
+
+    app = FastAPI(lifespan=app_lifespan, docs_url=None, redoc_url=None)
     app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
     # The stylesheet URL changes whenever the file does, so a browser or the HA ingress proxy never serves a stale copy.
     templates.env.globals["css_v"] = int((HERE / "static" / "style.css").stat().st_mtime)
@@ -901,25 +915,41 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, 
         db.log('sheet.settings_saved', 'Property sheet connection settings saved (key hidden)')
         return _done('setup', 'Sheet connection saved; enabled updates run every five minutes')
 
-    booking_report_lock = asyncio.Lock()
+    booking_report_key = "thursday_booking_report"
+
+    async def generate_booking_report(start, end):
+        snapshot = {"start": start.isoformat(), "end": end.isoformat()}
+        try:
+            reservations = await syncer.hostaway.booking_report_reservations(snapshot["start"])
+            snapshot["report"] = thursday_bookings(reservations, start, end)
+        except Exception:
+            snapshot["error"] = "Could not read the reservation history from Hostaway. Try running the report again."
+        db.set_setting(booking_report_key, json.dumps(snapshot))
+
+    @app.post("/thursday-bookings")
+    async def start_thursday_booking_report():
+        nonlocal booking_report_task
+        if booking_report_task is None or booking_report_task.done():
+            start, end = report_window(syncer.now())
+            db.set_setting(booking_report_key, json.dumps({
+                "start": start.isoformat(), "end": end.isoformat(), "running": True,
+            }))
+            booking_report_task = asyncio.create_task(generate_booking_report(start, end))
+        return RedirectResponse("thursday-bookings", status_code=303)
 
     @app.get("/thursday-bookings", response_class=HTMLResponse)
-    @app.post("/thursday-bookings", response_class=HTMLResponse)
     async def thursday_booking_report(request: Request):
+        snapshot = json.loads(db.get_setting(booking_report_key) or "{}")
+        running = booking_report_task is not None and not booking_report_task.done()
         start, end = report_window(syncer.now())
-        report, error = None, None
-        if request.method == "POST":
-            if booking_report_lock.locked():
-                error = "A Thursday bookings report is already running."
-            else:
-                async with booking_report_lock:
-                    try:
-                        reservations = await syncer.hostaway.booking_report_reservations(start.isoformat())
-                        report = thursday_bookings(reservations, start, end)
-                    except Exception:
-                        error = "Could not read the reservation history from Hostaway."
-        return page(request, "thursday_bookings.html", start=start, end=end,
-                    report=report, error=error, running=booking_report_lock.locked())
+        error = snapshot.get("error")
+        if snapshot.get("running") and not running:
+            error = "The report was interrupted. Run it again to get results."
+        response = page(request, "thursday_bookings.html",
+                        start=snapshot.get("start", start), end=snapshot.get("end", end),
+                        report=snapshot.get("report"), error=error, running=running)
+        response.headers["Cache-Control"] = "no-store"
+        return response
 
     @app.get("/thursday-special", response_class=HTMLResponse)
     @app.post("/thursday-special", response_class=HTMLResponse)
