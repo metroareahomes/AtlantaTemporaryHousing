@@ -25,7 +25,8 @@ log = logging.getLogger(__name__)
 
 OFFLINE_STATES = {"unavailable", "unknown", None}
 VERIFY_DELAY_SECONDS = 20
-LYRIC_VERIFY_RECHECK_SECONDS = 100
+VERIFY_RECHECK_SECONDS = 100
+VERIFY_GRACE_SECONDS = VERIFY_DELAY_SECONDS + VERIFY_RECHECK_SECONDS
 TOLERANCE = 0.6  # thermostats round to whole or half degrees
 
 DEFAULTS = {
@@ -167,7 +168,7 @@ class ClimateManager:
         self.ha = syncer.ha
         self.alert = alert  # LockManager.alert: same recipients, same once-only keys
         self.verify_delay = VERIFY_DELAY_SECONDS
-        self.verify_recheck_delay = 40
+        self.verify_recheck_delay = VERIFY_RECHECK_SECONDS
         self._run_lock = asyncio.Lock()
         self._daily_cursor = 0
         self.daily_pauses = StayTemperaturePauses(syncer, alert)
@@ -192,18 +193,15 @@ class ClimateManager:
         states = await self.ha.climate_states()
         return next((c for c in states if c["entity_id"] == entity_id), None)
 
-    def _is_lyric(self, entity_id: str) -> bool:
-        return entity_id in (self.db.get_setting("lyric_climate_entities") or "").split()
-
-    async def _verify_temperature(self, entity_id: str, call: dict[str, float]) -> dict[str, Any] | None:
-        """Allow a delayed HA reading to catch up, without another cloud command or forced refresh."""
+    async def _verify_temperature(self, entity_id: str, call: dict[str, float],
+                                  *, mode: str | None = None) -> dict[str, Any] | None:
+        """Read the local HA state again after a stale or unavailable first result."""
         await asyncio.sleep(self.verify_delay)
         fresh = await self._read(entity_id)
-        available = fresh is not None and fresh.get("state") not in OFFLINE_STATES
-        lyric = self._is_lyric(entity_id)
-        if (available and not took_effect(call, fresh)) or (lyric and not available):
-            delay = LYRIC_VERIFY_RECHECK_SECONDS if lyric else self.verify_recheck_delay
-            await asyncio.sleep(delay)
+        if (fresh is None or fresh.get("state") in OFFLINE_STATES
+                or (mode is not None and fresh.get("state") != mode)
+                or not took_effect(call, fresh)):
+            await asyncio.sleep(self.verify_recheck_delay)
             fresh = await self._read(entity_id)
         return fresh
 
@@ -400,26 +398,26 @@ class ClimateManager:
                            reservation_id=occupying["id"] if occupying else None)
             return "record"
         try:
-            self._note_cloud_attempt()
+            self._note_cloud_attempt(t["entity_id"])
             await self.ha.set_temperature(t["entity_id"], **call)
         except Exception as exc:
             # Lyric often returns HTTP 500/429 on the POST even when Honeywell already applied the
             # change (cancel → vacant on CC4). Re-read before counting a failure.
-            fresh = await self._verify_temperature(t["entity_id"], call)
-            if fresh is None or fresh.get("state") in OFFLINE_STATES or took_effect(call, fresh):
+            fresh = await self._verify_temperature(t["entity_id"], call, mode=want_mode)
+            if fresh is None or fresh.get("state") in OFFLINE_STATES or (fresh["state"] == want_mode and took_effect(call, fresh)):
                 self._recorded(t, mode, target, summer, already=False,
                                reservation_id=occupying["id"] if occupying else None)
                 return "write"
             await self._failed(t, now, str(exc) or type(exc).__name__)
             return "skip"
-        fresh = await self._verify_temperature(t["entity_id"], call)
+        fresh = await self._verify_temperature(t["entity_id"], call, mode=want_mode)
         # Lyric refreshes the whole account after a set. A 429 makes every climate.* go
         # unavailable; that is not proof this write failed.
         if fresh is None or fresh.get("state") in OFFLINE_STATES:
             self._recorded(t, mode, target, summer, already=False,
                            reservation_id=occupying["id"] if occupying else None)
             return "write"
-        if not took_effect(call, fresh):
+        if fresh["state"] != want_mode or not took_effect(call, fresh):
             await self._failed(t, now, "the thermostat did not take the new temperature")
             return "skip"
         self._recorded(t, mode, target, summer, already=False,
@@ -442,9 +440,13 @@ class ClimateManager:
                 return False  # corrupt pacing state must not release a burst of cloud commands
         return True
 
-    def _note_cloud_attempt(self) -> None:
+    def _note_cloud_attempt(self, entity_id: str) -> None:
         # Normal arrival/vacant commands retain their priority and schedule. Daily resets yield to them.
-        self.db.set_setting("thermostat_last_cloud_attempt_at", self.s.now().astimezone(timezone.utc).isoformat())
+        stamp = self.s.now().astimezone(timezone.utc).isoformat()
+        self.db.set_settings({
+            "thermostat_last_cloud_attempt_at": stamp,
+            f"thermostat_verifying:{entity_id}": stamp,
+        })
 
     async def daily_tick(self) -> int:
         """Short local queue pass. At most ONE thermostat write, paced across all homes/accounts."""
@@ -569,7 +571,7 @@ class ClimateManager:
         if t["state"] != want_mode:
             self.db.execute("INSERT INTO thermostat_daily_checks VALUES(?, ?, ?, 'mode_pending')", key)
             self.db.execute("INSERT INTO thermostat_daily_mode_changes VALUES(?, ?, ?, ?, ?, ?)", (*key, want_mode, target, self._stamp()))
-            self._note_cloud_attempt()
+            self._note_cloud_attempt(t["entity_id"])
             try:
                 await self.ha.set_hvac_mode(t["entity_id"], want_mode)
             except Exception:
@@ -582,16 +584,12 @@ class ClimateManager:
             self.db.execute("INSERT INTO thermostat_daily_checks VALUES(?, ?, ?, 'attempted')", key)
         error = None
         try:
-            self._note_cloud_attempt()
+            self._note_cloud_attempt(t["entity_id"])
             await self.ha.set_temperature(t["entity_id"], **call)
         except Exception as exc:
             error = type(exc).__name__
         try:
-            if self._is_lyric(t["entity_id"]):
-                fresh = await self._verify_temperature(t["entity_id"], call)
-            else:
-                await asyncio.sleep(self.verify_delay)
-                fresh = await self._read(t["entity_id"])
+            fresh = await self._verify_temperature(t["entity_id"], call, mode=want_mode)
             confirmed = bool(fresh and fresh.get("state") == want_mode and took_effect(call, fresh))
         except Exception:
             confirmed = False
@@ -628,10 +626,9 @@ class ClimateManager:
         if t["state"] == want:
             return t
         try:
-            self._note_cloud_attempt()
+            self._note_cloud_attempt(t["entity_id"])
             await self.ha.set_hvac_mode(t["entity_id"], want)
-            await asyncio.sleep(self.verify_delay)
-            fresh = await self._read(t["entity_id"])
+            fresh = await self._verify_temperature(t["entity_id"], {}, mode=want)
         except Exception as exc:  # never send a seasonal target until the mode is confirmed
             self.db.log("thermostat.mode_failed", f"{t['name']}: could not switch to {want} ({exc or type(exc).__name__})",
                         level="warning", property_id=t["property_id"])
