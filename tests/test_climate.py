@@ -678,3 +678,29 @@ def test_occupied_guest_change_is_not_treated_as_vacant_drift(cm):
     cm.ha.climate["climate.maple"]["target_temp"] = 68
     tick(cm, at("2030-06-12T14:00"))
     assert cm.ha.sets == []
+
+
+def test_lyric_waits_for_late_heat_setpoint_without_another_write(cm, monkeypatch):
+    cm.db.set_setting("lyric_climate_entities", "climate.maple")
+    cm.verify_delay = 20
+    sleeps = []
+
+    async def sleep(seconds):
+        sleeps.append(seconds)
+
+    readings = iter([{"state": "unavailable"},
+                     {"state": "heat", "target_temp": None, "target_low": 69, "current_temp": 64}])
+
+    async def read(entity_id):
+        assert entity_id == "climate.maple"
+        return next(readings)
+
+    monkeypatch.setattr("app.climate.asyncio.sleep", sleep)
+    monkeypatch.setattr(cm, "_read", read)
+    target = {"temperature": 69}
+    fresh = asyncio.run(cm._verify_temperature("climate.maple", target))
+    assert sleeps == [20, 100]
+    assert took_effect(target, fresh)
+    assert cm.ha.sets == []
+    assert not took_effect(target, {**fresh, "state": "auto"})
+    assert not took_effect(target, {**fresh, "target_temp": 66})

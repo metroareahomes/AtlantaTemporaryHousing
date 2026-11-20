@@ -25,6 +25,7 @@ log = logging.getLogger(__name__)
 
 OFFLINE_STATES = {"unavailable", "unknown", None}
 VERIFY_DELAY_SECONDS = 20
+LYRIC_VERIFY_RECHECK_SECONDS = 100
 TOLERANCE = 0.6  # thermostats round to whole or half degrees
 
 DEFAULTS = {
@@ -147,7 +148,12 @@ def took_effect(call: dict[str, float], t: dict[str, Any]) -> bool:
     for key, field in (("temperature", "target_temp"), ("low", "target_low"), ("high", "target_high")):
         if key in call:
             seen = t.get(field)
-            if seen is None or abs(float(seen) - call[key]) > TOLERANCE:
+            if seen is None and key == "temperature":
+                if t.get("state") == "heat":
+                    seen = t.get("target_low")
+                elif t.get("state") == "cool":
+                    seen = t.get("target_high")
+            if seen is None or not abs(float(seen) - call[key]) <= TOLERANCE:
                 return False
     return True
 
@@ -186,12 +192,18 @@ class ClimateManager:
         states = await self.ha.climate_states()
         return next((c for c in states if c["entity_id"] == entity_id), None)
 
+    def _is_lyric(self, entity_id: str) -> bool:
+        return entity_id in (self.db.get_setting("lyric_climate_entities") or "").split()
+
     async def _verify_temperature(self, entity_id: str, call: dict[str, float]) -> dict[str, Any] | None:
         """Allow a delayed HA reading to catch up, without another cloud command or forced refresh."""
         await asyncio.sleep(self.verify_delay)
         fresh = await self._read(entity_id)
-        if fresh is not None and fresh.get("state") not in OFFLINE_STATES and not took_effect(call, fresh):
-            await asyncio.sleep(self.verify_recheck_delay)
+        available = fresh is not None and fresh.get("state") not in OFFLINE_STATES
+        lyric = self._is_lyric(entity_id)
+        if (available and not took_effect(call, fresh)) or (lyric and not available):
+            delay = LYRIC_VERIFY_RECHECK_SECONDS if lyric else self.verify_recheck_delay
+            await asyncio.sleep(delay)
             fresh = await self._read(entity_id)
         return fresh
 
@@ -574,9 +586,12 @@ class ClimateManager:
             await self.ha.set_temperature(t["entity_id"], **call)
         except Exception as exc:
             error = type(exc).__name__
-        await asyncio.sleep(self.verify_delay)
         try:
-            fresh = await self._read(t["entity_id"])
+            if self._is_lyric(t["entity_id"]):
+                fresh = await self._verify_temperature(t["entity_id"], call)
+            else:
+                await asyncio.sleep(self.verify_delay)
+                fresh = await self._read(t["entity_id"])
             confirmed = bool(fresh and fresh.get("state") == want_mode and took_effect(call, fresh))
         except Exception:
             confirmed = False
