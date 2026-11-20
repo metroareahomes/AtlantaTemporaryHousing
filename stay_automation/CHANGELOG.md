@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.36 — Activity log property filters
+
+- Search the Activity log as you type and filter by an exact property.
+- Open a property’s activity by tapping its name in a log entry.
+
+Source rollback: stable-0.6.35-before-activity-filters.
+
 ## 0.6.35 — Thursday booking reports run in the background
 
 - Keep fetching reservations when the browser closes or the page times out.
