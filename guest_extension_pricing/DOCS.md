@@ -1,0 +1,9 @@
+# Guest Extension Pricing
+
+Install this app from the same Home Assistant app repository as Stay Automation. In Configuration, enter a Hostaway account ID and API key and your Home Assistant public HTTPS address (the origin only). Start the app and open its web UI. Choose **Connect Hostaway** to create the app's webhook and Home Assistant forwarding automation.
+
+Hostaway must accept an additional webhook. If registration fails, check the app's connection details and the account's webhook capacity. The connection button registers only this app's webhook URL.
+
+The pricing automation is off on first install. Confirm an incoming Hostaway message appears under **Hostaway connection**, then set the adjustment, booked-night range, and optional listing tags before enabling. The automation uses the booked arrival and departure dates and adjusts consecutive blocked nights beginning on checkout day. It recognizes common English extension phrases in incoming message text.
+
+The app saves the adjusted rates at 12:45 a.m. Eastern by default and reapplies them at 4:00 a.m. after the 2:00 a.m. PriceLabs run. Both app times are editable. An opened date is dropped from tracking and keeps its current rate until PriceLabs next updates it.
