@@ -117,6 +117,7 @@ def build():
             every(LOCK_TICK_MINUTES, "lock_automation", locks.tick, db),
             every(CLIMATE_TICK_MINUTES, "thermostats", climate.tick, db),
             every(0.25, "thursday_special", pricing.tick_thursday_schedule, db),
+            every(1, "extension_pricing", syncer.extension_pricing.tick, db),
             every(5, "property_sheet", property_sheet.push, db),
             every(1, "staff_alert_delivery", retry_staff_alerts, db),
             every(5, "integration_reauthorization", locks.alert_service.integrations, db),

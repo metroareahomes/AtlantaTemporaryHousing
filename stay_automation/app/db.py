@@ -1,5 +1,6 @@
 """SQLite storage. One connection, guarded by a lock; the app is mostly single-threaded asyncio."""
 import os
+import json
 import sqlite3
 import threading
 from datetime import datetime, timezone
@@ -7,6 +8,55 @@ from pathlib import Path
 from typing import Any
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS extension_messages (
+    id INTEGER PRIMARY KEY,
+    reservation_id INTEGER NOT NULL,
+    processed INTEGER NOT NULL DEFAULT 0,
+    attempts INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS extension_rates (
+    listing_id INTEGER NOT NULL,
+    night TEXT NOT NULL,
+    rate TEXT NOT NULL,
+    applied INTEGER NOT NULL DEFAULT 0,
+    captured_on TEXT,
+    snapshot_rate TEXT,
+    restored_on TEXT,
+    tracking INTEGER NOT NULL DEFAULT 1,
+    base_rate TEXT,
+    reservation_id INTEGER,
+    guest_key TEXT,
+    use_stay_average INTEGER NOT NULL DEFAULT 0,
+    stay_average_rate TEXT,
+    owner TEXT,
+    PRIMARY KEY (listing_id, night)
+);
+CREATE TABLE IF NOT EXISTS extension_price_windows (
+    listing_id INTEGER NOT NULL,
+    night TEXT NOT NULL,
+    starts_at REAL NOT NULL,
+    cutoff REAL NOT NULL,
+    PRIMARY KEY (listing_id, night, cutoff)
+);
+CREATE TABLE IF NOT EXISTS extension_booking_events (
+    reservation_id INTEGER NOT NULL,
+    listing_id INTEGER NOT NULL,
+    arrival TEXT NOT NULL,
+    departure TEXT NOT NULL,
+    guest_key TEXT,
+    booked_at REAL NOT NULL,
+    currency TEXT NOT NULL,
+    PRIMARY KEY (reservation_id, listing_id, arrival, departure, booked_at)
+);
+CREATE TABLE IF NOT EXISTS extension_booked_nights (
+    listing_id INTEGER NOT NULL,
+    night TEXT NOT NULL,
+    reservation_id INTEGER NOT NULL,
+    currency TEXT NOT NULL,
+    net_rent TEXT NOT NULL,
+    rent_increase TEXT NOT NULL,
+    PRIMARY KEY (listing_id, night)
+);
 CREATE TABLE IF NOT EXISTS pricing_simulations (
     id INTEGER PRIMARY KEY,
     created_at TEXT NOT NULL,

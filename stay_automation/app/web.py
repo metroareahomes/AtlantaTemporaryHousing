@@ -18,6 +18,9 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from .extension_pricing import OWNERS as EXTENSION_OWNERS, SETTINGS_KEY as EXTENSION_SETTINGS_KEY
+from .extension_pricing import read_settings as extension_rules, validate_settings as validate_extension_rules
+from .extension_report import report_rows as extension_report_rows
 from .booking_report import report_window, thursday_bookings
 from .climate import (
     DEFAULTS as CLIMATE_DEFAULTS, LABELS as CLIMATE_LABELS, RANGES as CLIMATE_RANGES,
@@ -392,12 +395,6 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, 
             return await http_exception_handler(request, exc)
         return page(request, "error.html", response_status=400, title="That was not saved", message=exc.detail)
 
-    def extension_pricing_slug() -> str:
-        slug = db.get_setting("addon_slug") or ""
-        match = re.fullmatch(r"([a-f0-9]{8}|local)_stay_automation", slug)
-        prefix = match.group(1) if match else "ce3f4ab0"
-        return f"{prefix}_guest_extension_pricing"
-
     def page(request: Request, name: str, *, response_status: int = 200, **ctx: Any) -> HTMLResponse:
         now = syncer.now()
         sync_ago, sync_stale = _ago(
@@ -412,7 +409,6 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, 
             "webhook_ago": webhook_ago,
             "notice": request.query_params.get("notice", "")[:200],
             "setup_sections": SETUP_SECTIONS,
-            "extension_pricing_url": "/hassio/ingress/" + extension_pricing_slug(),
             **ctx,
         }, status_code=response_status)
 
@@ -864,6 +860,29 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, 
             await syncer.read_lock_codes(lock)
         notice = "Lock state and codes checked" if checked else "Codes checked; current lock state could not be confirmed. Previous availability retained."
         return _done(_board_back(show, sort, q), notice)
+
+    @app.get("/extension-pricing", response_class=HTMLResponse)
+    async def extension_pricing(request: Request, owner: str = EXTENSION_OWNERS[0]):
+        if owner not in EXTENSION_OWNERS:
+            raise HTTPException(404)
+        rows, totals = extension_report_rows(db, owner)
+        return page(request, "extension_pricing.html", owner=owner, owners=EXTENSION_OWNERS,
+                    config=extension_rules(db)[owner], report_rows=rows, report_totals=totals)
+
+    @app.post("/extension-pricing-save")
+    async def extension_pricing_save(request: Request):
+        form = await request.form()
+        owner = form.get("owner")
+        if owner not in EXTENSION_OWNERS:
+            raise HTTPException(404)
+        try:
+            config = validate_extension_rules(form)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        rules = extension_rules(db)
+        rules[owner] = config
+        db.set_setting(EXTENSION_SETTINGS_KEY, json.dumps({"owners": rules}))
+        return _done(f"extension-pricing?owner={owner}", "Pricing rules saved")
 
     @app.get("/setup", response_class=HTMLResponse)
     async def setup(request: Request, section: str = "connections"):

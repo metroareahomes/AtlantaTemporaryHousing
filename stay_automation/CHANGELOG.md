@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.41 — Built-in Guest Extension Pricing
+
+- Open Guest Extension Pricing inside Stay Automation with separate Mike and Kurt rules and ledgers.
+- Use the existing Hostaway connection and webhook for extension pricing.
+
 ## 0.6.40 — Shared Hostaway webhook
 
 - Preserve Guest Extension Pricing delivery when rebuilding the Stay Automation webhook configuration.

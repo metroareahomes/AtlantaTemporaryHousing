@@ -1,0 +1,52 @@
+{% extends "base.html" %}{% set active = 'extension-pricing' %}
+{% block body %}
+<div class="page-head"><h1>Guest Extension Pricing</h1></div>
+<nav aria-label="Pricing views">
+{% for name in owners %}
+<a href="extension-pricing?owner={{ name }}" {% if owner == name %}aria-current="page"{% endif %}>{{ name }}’s homes</a>
+{% endfor %}
+</nav>
+<section class="panel">
+<h2>{{ owner }}’s pricing rules</h2>
+<p>Adjust consecutive blocked nights starting on the guest’s booked checkout date. Open nights keep their current price until PriceLabs updates them.</p>
+<form method="post" action="extension-pricing-save" class="stack">
+<input type="hidden" name="owner" value="{{ owner }}">
+<label><input type="checkbox" name="extension_enabled" {% if config.enabled %}checked{% endif %}> Enable extension pricing</label>
+<label><input type="checkbox" name="extension_use_stay_average" {% if config.use_stay_average %}checked{% endif %}> Base extension prices on the booked stay’s average nightly rate</label>
+<label>Rate adjustment (%) <input type="number" step=".01" name="extension_percent" value="{{ config.percent }}"></label>
+<p>Use a positive percentage for a markup or a negative percentage for a discount on calendar rates. With the stay average selected, enter a markup or leave the percentage blank. Blocked nights already at or above the calculated rate keep their price.</p>
+<div class="grid">
+<label>Minimum booked nights <input type="number" min="1" name="extension_min_nights" value="{{ config.min_nights or '' }}"></label>
+<label>Maximum booked nights <input type="number" min="1" name="extension_max_nights" value="{{ config.max_nights or '' }}"></label>
+</div>
+<p>Blank limits include any booked length on that side of the range.</p>
+
+<div class="grid">
+<label>Save rates (Eastern) <input type="time" name="extension_save" value="{{ config.save }}" required></label>
+<label>Rewrite rates (Eastern) <input type="time" name="extension_restore" value="{{ config.restore }}" required></label>
+</div>
+<button>Save settings</button>
+</form>
+</section>
+<section class="panel">
+<h2>Booked marked-up nights{% if owner %} for {{ owner }}{% endif %}</h2>
+<p>Credit uses the saved markup for nights booked by the requesting guest before the next 2:00 a.m. Eastern PriceLabs sync.</p>
+<div style="overflow-x:auto"><table>
+<thead><tr><th scope="col">Booked night</th><th scope="col">Hostaway listing ID</th><th scope="col" class="amount">Rent at saved rate</th><th scope="col" class="amount">Increase at stay average</th><th scope="col" class="amount">Net increase after markup</th></tr></thead>
+<tbody>
+{% for row in report_rows %}
+<tr><td>{{ row.night }}</td><td>{{ row.listing_id }}</td><td class="amount">{{ row.currency }} {{ row.net_rent }}</td><td class="amount">{% if row.average_only is not none %}{{ row.currency }} {{ row.average_only }}{% else %}—{% endif %}</td><td class="amount">{{ row.currency }} {{ row.rent_increase }}</td></tr>
+{% else %}
+<tr><td colspan="5">No qualifying bookings yet.</td></tr>
+{% endfor %}
+</tbody>
+<tfoot>
+{% for currency, total in report_totals %}
+<tr><th scope="row" colspan="2">Total</th><td class="amount">{{ currency }} {{ total.net_rent }}</td><td class="amount">{% if total.average_only is not none %}{{ currency }} {{ total.average_only }}{% else %}—{% endif %}</td><td class="amount">{{ currency }} {{ total.rent_increase }}</td></tr>
+{% endfor %}
+</tfoot>
+</table></div>
+{% if report_rows %}<p>The stay-average total includes nights with a saved stay average.</p>{% endif %}
+</section>
+
+{% endblock %}
