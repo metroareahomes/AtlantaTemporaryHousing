@@ -225,3 +225,63 @@ def test_previously_adjusted_night_cannot_be_adjusted_again_after_unblock():
     manager = ExtensionPricing(SimpleNamespace(db=db, hostaway=Hostaway()))
     run(manager.start_extension(42, date(2030, 6, 10), dict(DEFAULTS, percent="10")))
     assert db.query("SELECT rate,tracking FROM extension_rates") == [{"rate": "110", "tracking": 0}]
+
+
+@pytest.mark.parametrize("percent, expected", [
+    ("0", [("2030-06-12", "140.00")]),
+    ("10", [("2030-06-12", "154.00"), ("2030-06-13", "154.00")]),
+])
+def test_stay_average_only_raises_nights_below_target(percent, expected):
+    class Hostaway:
+        async def reservation(self, _):
+            return {"status": "new", "listingMapId": 100,
+                    "arrivalDate": "2030-06-05", "departureDate": "2030-06-12"}
+
+        async def finance_fields(self, _):
+            return [{"name": "baseRate", "total": "980.00"},
+                    {"name": "cleaningFee", "total": "100.00"}]
+
+        async def pricing_calendar(self, *args):
+            return [
+                {"date": "2030-06-12", "price": 120, "status": "blocked"},
+                {"date": "2030-06-13", "price": 140, "status": "blocked"},
+                {"date": "2030-06-14", "price": 154, "status": "blocked"},
+                {"date": "2030-06-15", "price": 160, "status": "blocked"},
+                {"date": "2030-06-16", "price": 99, "status": "available"},
+            ]
+
+    db = DB(":memory:")
+    manager = ExtensionPricing(SimpleNamespace(db=db, hostaway=Hostaway()))
+    config = dict(DEFAULTS, use_stay_average=True, percent=percent)
+    run(manager.start_extension(9, date(2030, 6, 10), config))
+    rows = db.query("SELECT night,rate,stay_average_rate FROM extension_rates ORDER BY night")
+    assert [(row["night"], row["rate"]) for row in rows] == expected
+    assert all(row["stay_average_rate"] == "140.00" for row in rows)
+    row = db.query("SELECT * FROM extension_rates ORDER BY night")[0]
+    run(manager.apply_rate(row, {"price": 170, "status": "blocked"}, "2030-06-10", "18:00", config))
+    assert db.query("SELECT applied FROM extension_rates WHERE night=?", (row["night"],)) == [{"applied": 0}]
+
+
+def test_ledger_compares_average_only_with_final_price():
+    from decimal import Decimal
+
+    from guest_extension_pricing.app.report import report_rows
+
+    db = DB(":memory:")
+    for night, base, average, final, increase in (
+        ("2030-06-11", "120", "140", "154", "34"),
+        ("2030-06-12", "150", "140", "154", "4"),
+        ("2030-06-13", "120", None, "132", "12"),
+    ):
+        db.execute(
+            "INSERT INTO extension_rates(listing_id,night,base_rate,stay_average_rate,rate) VALUES (100,?,?,?,?)",
+            (night, base, average, final),
+        )
+        db.execute(
+            "INSERT INTO extension_booked_nights VALUES (100,?,9,'USD',?,?)",
+            (night, final, increase),
+        )
+    rows, totals = report_rows(db)
+    assert [row["average_only"] for row in rows] == [None, Decimal("0.00"), Decimal("20.00")]
+    assert dict(totals)["USD"]["average_only"] == Decimal("20.00")
+    assert dict(totals)["USD"]["rent_increase"] == Decimal("50.00")

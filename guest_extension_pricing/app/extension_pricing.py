@@ -14,7 +14,7 @@ TZ = ZoneInfo("America/New_York")
 
 DEFAULTS = {
     "enabled": False, "percent": "0", "save": "00:45", "restore": "04:00",
-    "min_nights": None, "max_nights": None, "tags": [],
+    "min_nights": None, "max_nights": None, "tags": [], "use_stay_average": False,
 }
 SETTINGS_KEY = "extension_pricing"
 SYNC_TIME = "02:00"
@@ -82,12 +82,16 @@ def read_settings(db):
 
 def validate_settings(form):
     config = {key: str(form.get(f"extension_{key}", "")).strip() for key in ("percent", "save", "restore")}
+    config["use_stay_average"] = form.get("extension_use_stay_average") == "on"
+    config["percent"] = config["percent"] or "0"
     try:
         percent = Decimal(config["percent"])
         if not percent.is_finite() or percent <= -100 or percent != percent.quantize(Decimal(".01")):
             raise ValueError
     except (InvalidOperation, ValueError):
         raise ValueError("Enter a percentage above -100 with up to two decimal places.") from None
+    if config["use_stay_average"] and percent < 0:
+        raise ValueError("Enter zero or a positive markup when using the stay average.")
     if any(not re.fullmatch(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]", config[key])
            for key in ("save", "restore")):
         raise ValueError("Enter valid save and rewrite times.")
@@ -161,7 +165,8 @@ class ExtensionPricing:
 
     async def start_extension(self, reservation_id, today, config):
         percent = Decimal(config["percent"])
-        if not percent:
+        use_stay_average = config.get("use_stay_average", False)
+        if not percent and not use_stay_average:
             return
         reservation = await self.s.hostaway.reservation(reservation_id)
         if reservation.get("status") not in ("new", "modified"):
@@ -171,7 +176,7 @@ class ExtensionPricing:
         if first < today:
             return
         minimum, maximum = config["min_nights"], config["max_nights"]
-        if minimum is not None or maximum is not None:
+        if use_stay_average or minimum is not None or maximum is not None:
             nights = (first - date.fromisoformat(reservation["arrivalDate"])).days
             if nights < (minimum or 1) or (maximum is not None and nights > maximum):
                 return
@@ -179,6 +184,19 @@ class ExtensionPricing:
             listing = await self.s.hostaway.listing_details(listing_id)
             if not set(config["tags"]).intersection(owner_tags(listing) or ()):
                 return
+        stay_average = average_target = None
+        if use_stay_average:
+            fields = await self.s.hostaway.finance_fields(reservation_id)
+            rent = [field for field in fields
+                    if str(field.get("name", "")).casefold() in ("baserate", "accommodation")
+                    and field.get("isDeleted") not in (1, "1")]
+            if len(rent) != 1 or rent[0].get("total") is None:
+                raise ValueError("Booked accommodation charge unavailable")
+            stay_average = money(rent[0]["total"]) / nights
+            average_target = (stay_average * (1 + percent / 100)).quantize(
+                Decimal(".01"), rounding=ROUND_HALF_UP,
+            )
+            stay_average = stay_average.quantize(Decimal(".01"), rounding=ROUND_HALF_UP)
         while True:
             last = first + timedelta(days=4)
             calendar = await self.s.hostaway.pricing_calendar(listing_id, first.isoformat(), last.isoformat())
@@ -189,13 +207,19 @@ class ExtensionPricing:
                                  (listing_id, day["date"])):
                     continue
                 base = money(day["price"])
-                rate = (base * (1 + percent / 100)).quantize(Decimal(".01"), rounding=ROUND_HALF_UP)
+                if average_target is not None:
+                    if average_target <= base:
+                        continue
+                    rate = average_target
+                else:
+                    rate = (base * (1 + percent / 100)).quantize(Decimal(".01"), rounding=ROUND_HALF_UP)
                 if rate <= 0 or rate == base:
                     continue
                 self.db.execute(
-                    "INSERT OR IGNORE INTO extension_rates(listing_id,night,rate,base_rate,reservation_id,guest_key) "
-                    "VALUES (?,?,?,?,?,?)",
-                    (listing_id, day["date"], str(rate), str(base), reservation_id, guest_key(reservation)),
+                    "INSERT OR IGNORE INTO extension_rates(listing_id,night,rate,base_rate,reservation_id,guest_key,use_stay_average,stay_average_rate) "
+                    "VALUES (?,?,?,?,?,?,?,?)",
+                    (listing_id, day["date"], str(rate), str(base), reservation_id, guest_key(reservation),
+                     use_stay_average, str(stay_average) if stay_average is not None else None),
                 )
             first = last + timedelta(days=1)
 
@@ -219,7 +243,11 @@ class ExtensionPricing:
             return
         target = (row["snapshot_rate"] if restore_due and row["captured_on"] == service_date
                   else row["rate"])
-        if money(day["price"]) != money(target):
+        current = money(day["price"])
+        target_price = money(target)
+        if row["use_stay_average"] and current > target_price:
+            return
+        if current != target_price:
             live = self.s.now().astimezone(TZ)
             if live.date().isoformat() != service_date or SYNC_TIME <= live.strftime("%H:%M") < config["restore"]:
                 return
