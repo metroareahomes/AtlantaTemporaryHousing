@@ -70,7 +70,7 @@ with sync_playwright() as p:
         page.get_by_role('button',name='Send recipient test',exact=True).click()
         assert page.evaluate('window.tests[0].recipient_id')=='1'
         page.goto('https://ha.example.com/setup')
-        page.locator('#earlier-pricing-previews > summary').click()
+        assert page.locator('#earlier-pricing-previews').count() == 0
         assert 'never-show-this-secret' not in page.content()
         assert page.locator('[name=smtp_password]').input_value()==''
         page.evaluate("window.sent=[];document.addEventListener('submit',e=>{e.preventDefault();window.sent.push({id:e.target.id,values:Object.fromEntries(new FormData(e.target))})})")
