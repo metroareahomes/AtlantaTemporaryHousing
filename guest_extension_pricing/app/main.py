@@ -21,6 +21,7 @@ from fastapi.templating import Jinja2Templates
 from .db import DB
 from .extension_pricing import ExtensionPricing, SETTINGS_KEY, TZ, read_settings, validate_settings
 from .hostaway import HostawayClient
+from .report import report_rows
 
 log = logging.getLogger(__name__)
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
@@ -75,11 +76,13 @@ def create_app(options, db_path, supervisor_token, *, hostaway=None, stdin=False
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 
     def page(request, message="", status=200):
+        rows, totals = report_rows(db)
         return templates.TemplateResponse(
             request, "index.html", {
                 "config": read_settings(db), "csrf": csrf, "message": message,
                 "connected": db.get_setting("connected"),
                 "last_message": db.get_setting("last_message_event"),
+                "report_rows": rows, "report_totals": totals,
             }, status_code=status,
         )
 

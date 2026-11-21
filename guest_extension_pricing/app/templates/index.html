@@ -11,6 +11,10 @@ label { display: block; margin: .75rem 0; }
 button, input { font: inherit; }
 button { padding: .45rem .75rem; }
 .grid { display: flex; flex-wrap: wrap; column-gap: 2rem; }
+table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: .5rem; border-bottom: 1px solid gray; }
+.amount { text-align: right; }
+tfoot { font-weight: bold; }
 </style>
 <h1>Guest Extension Pricing</h1>
 {% if message %}<p role="status"><strong>{{ message }}</strong></p>{% endif %}
@@ -49,5 +53,24 @@ button { padding: .45rem .75rem; }
 </div>
 <button>Save settings</button>
 </form>
+</section>
+<section>
+<h2>Booked marked-up nights</h2>
+<p>Credit uses the saved markup for nights booked by the requesting guest before the next 2:00 a.m. Eastern PriceLabs sync.</p>
+<table>
+<thead><tr><th scope="col">Booked night</th><th scope="col">Hostaway listing ID</th><th scope="col" class="amount">Rent at saved rate</th><th scope="col" class="amount">Added by automation</th></tr></thead>
+<tbody>
+{% for row in report_rows %}
+<tr><td>{{ row.night }}</td><td>{{ row.listing_id }}</td><td class="amount">{{ row.currency }} {{ row.net_rent }}</td><td class="amount">{{ row.currency }} {{ row.rent_increase }}</td></tr>
+{% else %}
+<tr><td colspan="4">No qualifying bookings yet.</td></tr>
+{% endfor %}
+</tbody>
+<tfoot>
+{% for currency, total in report_totals %}
+<tr><th scope="row" colspan="2">Total</th><td class="amount">{{ currency }} {{ total.net_rent }}</td><td class="amount">{{ currency }} {{ total.rent_increase }}</td></tr>
+{% endfor %}
+</tfoot>
+</table>
 </section>
 </html>
