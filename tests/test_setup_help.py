@@ -46,7 +46,7 @@ class SetupControls(HTMLParser):
 
 
 def page(syncer):
-    response = TestClient(create_app(syncer)).get("/setup")
+    response = TestClient(create_app(syncer)).get("/setup?section=all")
     assert response.status_code == 200
     parsed = SetupControls()
     parsed.feed(response.text)

@@ -545,7 +545,7 @@ def test_thermostat_settings_validated_then_saved(cm):
     assert cm.db.get_setting("vac_summer") is None  # nothing saved by the rejected posts
     assert c.post("/thermostat-settings-save", data={**good, "vac_summer": "80"}).status_code == 303
     assert cm.db.get_int("vac_summer", 0) == 80
-    assert "Thermostat automation" in c.get("/setup").text
+    assert "Thermostat automation" in c.get("/setup?section=thermostats").text
 
 
 def test_saving_thermostat_settings_reapplies_vacant_only(cm):

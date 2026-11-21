@@ -155,13 +155,13 @@ def test_invalid_settings_are_atomic(syncer,patch):
 def test_setup_variables_save_and_simulate_with_no_live_activation_route(syncer):
     cfg=configure(syncer)
     c=TestClient(create_app(syncer))
-    assert 'Weekend last-minute pricing' in c.get('/setup').text
+    assert 'Weekend last-minute pricing' in c.get('/setup?section=pricing').text
     r=c.post('/pricing-settings-save',data={**cfg,'pricing_discount':'12.5','pricing_simulation_enabled':'on'},follow_redirects=False)
     assert r.status_code==303
     assert not syncer.db.get_bool('pricing_enabled')
     r=c.post('/pricing-simulate',data={'pricing_preview_at':'2030-06-14T14:00'},follow_redirects=False)
     assert r.status_code==303 and syncer.db.one('SELECT id FROM pricing_simulations')
-    html=c.get('/setup').text
+    html=c.get('/setup?section=pricing').text
     assert '218.75' in html and 'Simulation only' in html
     assert c.post('/pricing-activate').status_code==404
     c.post('/pricing-settings-save',data=dict(cfg,pricing_property='0'),follow_redirects=False)

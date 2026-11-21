@@ -1,8 +1,14 @@
 {% extends "base.html" %}{% set active = 'setup' %}
 {% from "_setup_fields.html" import help, number, text, checkbox with context %}
 {% block body %}
-<div class="page-head"><h1>Setup</h1><p>Choose when guest codes are added, where alerts go, and how each home is kept comfortable.</p></div>
+<div class="page-head"><h1>Setup</h1></div>
+<nav class="setup-tabs" aria-label="Setup sections">
+{% for key, title in setup_sections %}
+<a href="setup?section={{ key }}" {% if setup_section == key %}aria-current="page"{% endif %}>{{ title }}</a>
+{% endfor %}
+</nav>
 <div class="narrow">
+{% if setup_section in ("connections", "all") %}
 <section class="panel">
 <h2>Connections</h2>
 <ul class="checks">
@@ -25,6 +31,8 @@
   <button class="primary">Save booking connection</button>
 </form>
 </section>
+{% endif %}
+{% if setup_section in ("locks", "all") %}
 <section class="panel">
 <h2>Lock automation</h2>
 <p class="sub">Applies to the {{ automated }} homes with Lock automation ticked on Properties. Hostaway's own lock automation
@@ -54,6 +62,8 @@
   <button class="primary">Save lock and alert settings</button>
 </form>
 </section>
+{% endif %}
+{% if setup_section in ("thermostats", "all") %}
 <section class="panel">
 <h2>Thermostat automation</h2>
 <p class="sub">Applies to the {{ thermostat_homes }} homes with Thermostat automation ticked on Properties. Summer uses cool,
@@ -110,6 +120,8 @@ Changes are staggered, with at least the selected gap between thermostat command
   <button class="primary">Save extra thermostats</button>
 </form>
 </section>
+{% endif %}
+{% if setup_section in ("pricing", "all") %}
 <section class="panel">
 <h2>The Thursday Special</h2>
 <p>Preview discounts for Thursday, Friday and Saturday, with a three-night minimum for Thursday arrivals.</p>
@@ -118,6 +130,8 @@ Changes are staggered, with at least the selected gap between thermostat command
 <details id="earlier-pricing-previews"><summary>Earlier pricing previews</summary>
 {% include "_pricing_setup.html" %}
 </details>
+{% endif %}
+{% if setup_section in ("alerts", "all") %}
 <section class="panel"><h2>Email server for staff alerts</h2>
 <p class="sub">Use your email provider’s SMTP settings. Some providers need an app password.</p>
 <form method="post" action="smtp-settings-save" id="save-email-settings" data-save-label="Save email settings" class="stack cols">
@@ -134,6 +148,7 @@ Changes are staggered, with at least the selected gap between thermostat command
 <p class="sub">Save your alert destination above, then send a test. Check your phone to confirm it arrived.</p>
 <form method="post" action="test-alert" class="inline"><button>Send test alert</button></form>
 </section>
+{% endif %}
 {% if not is_addon %}<p class="sub">Running outside Home Assistant (development mode).</p>{% endif %}
 </div>
 {% endblock %}

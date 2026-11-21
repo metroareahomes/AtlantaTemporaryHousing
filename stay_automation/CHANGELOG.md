@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.39 — Setup navigation
+
+- Split Setup into Connections, Locks and guest access, Thermostats, Pricing rules, and Staff email alerts.
+- Keep daily temperature checks and extra thermostat selection on the Thermostats page.
+- Add Guest Extension Pricing to the Pricing menu.
+
 ## 0.6.38 — Thermostat verification grace for both integrations
 
 - Give Honeywell Lyric and HACS Resideo up to two minutes to confirm mode and setpoint changes.

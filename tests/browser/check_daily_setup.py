@@ -12,7 +12,7 @@ from app.web import create_app
 from test_sync import SETTINGS, FakeHA, FakeHostaway
 
 syncer = Syncer(DB(':memory:'), SETTINGS, FakeHostaway(), FakeHA())
-html = TestClient(create_app(syncer)).get('/setup').text
+html = TestClient(create_app(syncer)).get('/setup?section=thermostats').text
 static = root / 'stay_automation' / 'app' / 'static'
 
 with sync_playwright() as p:

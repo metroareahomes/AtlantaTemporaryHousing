@@ -320,7 +320,7 @@ def test_adjustment_exception_is_attempted_once_and_logged_unconfirmed(cm):
 
 
 def test_default_setup_temperatures_and_disabled_feature(cm):
-    html = TestClient(create_app(cm.s)).get('/setup').text
+    html = TestClient(create_app(cm.s)).get('/setup?section=thermostats').text
     assert 'name="daily_winter" value="70"' in html
     assert 'name="daily_summer" value="73"' in html
     assert 'name="occupied_reset_hour" value="10"' in html
@@ -476,7 +476,7 @@ def test_crossing_midnight_during_preflight_cannot_write_on_departure_day(cm):
 
 def test_setup_spacing_validation_and_default(cm):
     c = TestClient(create_app(cm.s), follow_redirects=False)
-    html = c.get('/setup').text
+    html = c.get('/setup?section=thermostats').text
     assert 'name="occupied_reset_spacing_seconds" value="90"' in html
     for invalid in ('0', '29', '3601', 'abc'):
         assert c.post('/daily-temperature-settings-save', data=dict(DEFAULTS, occupied_reset_spacing_seconds=invalid)).status_code == 400

@@ -212,6 +212,8 @@ p > button.primary { margin-top: 8px; }
   button, .chip { min-height: 40px; display: inline-flex; align-items: center; }
   .bar-left { width: 100%; gap: 8px 20px; }
   nav { gap: 0 16px; max-width: 100%; }
+  .bar-left nav { position: relative; }
+  .bar-left .menu { position: static; }
   .menu-panel { left: auto; right: 0; }
   nav > a, .menu > summary { min-height: 44px; display: inline-flex; align-items: center; }
   .meta { padding-bottom: 10px; }
@@ -301,3 +303,7 @@ body { padding-bottom: var(--save-bar-height); }
   .save-bar, .floating-columns { display: none !important; }
   body { padding-bottom: 0; }
 }
+
+.setup-tabs { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-bottom: 18px; }
+.setup-tabs a { padding: 6px 0; color: var(--accent); }
+.setup-tabs a[aria-current="page"] { font-weight: 700; }

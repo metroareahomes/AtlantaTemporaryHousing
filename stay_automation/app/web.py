@@ -103,6 +103,15 @@ def _board_back(show: str, sort: str, q: str, notice: str = "") -> str:
     return ".?" + urlencode(args)
 
 
+SETUP_SECTIONS = (
+    ("connections", "Connections"),
+    ("locks", "Locks and guest access"),
+    ("thermostats", "Thermostats"),
+    ("pricing", "Pricing rules"),
+    ("alerts", "Staff email alerts"),
+)
+
+
 def _done(url: str, notice: str) -> RedirectResponse:
     """Redirect back to a page with a one-line confirmation the page shows once."""
     return RedirectResponse(url + ("&" if "?" in url else "?") + urlencode({"notice": notice}), status_code=303)
@@ -373,9 +382,7 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, 
     async def hostaway_failed(request: Request, exc: HostawayError):
         """Show what is wrong (usually the credentials) instead of a 500 stack trace."""
         db.log("hostaway.error", str(exc), level="error")
-        return templates.TemplateResponse(
-            request, "error.html",
-            {"message": str(exc), "last_sync": "", "last_webhook": ""}, status_code=502)
+        return page(request, "error.html", response_status=502, message=str(exc))
 
     @app.exception_handler(StarletteHTTPException)
     async def bad_input(request: Request, exc: StarletteHTTPException):
@@ -383,12 +390,15 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, 
         Webhooks and other machine callers keep the normal response."""
         if exc.status_code != 400 or "webhook" in request.url.path:
             return await http_exception_handler(request, exc)
-        return templates.TemplateResponse(
-            request, "error.html",
-            {"title": "That was not saved", "message": exc.detail, "last_sync": "", "last_webhook": ""},
-            status_code=400)
+        return page(request, "error.html", response_status=400, title="That was not saved", message=exc.detail)
 
-    def page(request: Request, name: str, **ctx: Any) -> HTMLResponse:
+    def extension_pricing_slug() -> str:
+        slug = db.get_setting("addon_slug") or ""
+        match = re.fullmatch(r"([a-f0-9]{8}|local)_stay_automation", slug)
+        prefix = match.group(1) if match else "ce3f4ab0"
+        return f"{prefix}_guest_extension_pricing"
+
+    def page(request: Request, name: str, *, response_status: int = 200, **ctx: Any) -> HTMLResponse:
         now = syncer.now()
         sync_ago, sync_stale = _ago(
             db.get_setting("last_sync_at"), now,
@@ -401,8 +411,10 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, 
             "sync_stale": sync_stale,
             "webhook_ago": webhook_ago,
             "notice": request.query_params.get("notice", "")[:200],
+            "setup_sections": SETUP_SECTIONS,
+            "extension_pricing_url": "/hassio/ingress/" + extension_pricing_slug(),
             **ctx,
-        })
+        }, status_code=response_status)
 
     @app.get("/", response_class=HTMLResponse)
     async def status(request: Request, q: str = "", show: str = "attention", sort: str = "attention"):
@@ -854,14 +866,20 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, 
         return _done(_board_back(show, sort, q), notice)
 
     @app.get("/setup", response_class=HTMLResponse)
-    async def setup(request: Request):
+    async def setup(request: Request, section: str = "connections"):
+        if section == "daily-temperature":
+            return RedirectResponse("setup?section=thermostats", status_code=302)
+        if section not in dict(SETUP_SECTIONS) and section != "all":
+            raise HTTPException(404)
         webhook_id = db.get_setting("webhook_id")
         public_url = db.get_setting("public_url", "")
-        try:
-            ha_ok = await syncer.ha.ping()
-            automation = await syncer.ha.webhook_automation_exists()
-        except Exception:
-            ha_ok, automation = False, False
+        ha_ok, automation = False, False
+        if section in ("connections", "all"):
+            try:
+                ha_ok = await syncer.ha.ping()
+                automation = await syncer.ha.webhook_automation_exists()
+            except Exception:
+                ha_ok, automation = False, False
         pricing_values = pricing_config(db)
         pricing_properties = db.query(
             'SELECT id,name,address,owner_scope FROM properties '
@@ -880,6 +898,7 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, 
                 pricing_selection = wright_matches[0]['id']
         return page(
             request, "setup.html",
+            setup_section=section,
             setup_fields=SETUP_FIELDS,
             smtp_values={k: db.get_setting(k, '587' if k == 'smtp_port' else 'starttls' if k == 'smtp_security' else '') or '' for k in SMTP_FIELDS},
             smtp_enabled=db.get_bool('smtp_enabled'),
@@ -933,7 +952,7 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, 
             values['sheet_secret'] = secret
         db.set_settings(values)
         db.log('sheet.settings_saved', 'Property sheet connection settings saved (key hidden)')
-        return _done('setup', 'Sheet connection saved; enabled updates run every five minutes')
+        return _done('setup?section=connections', 'Sheet connection saved; enabled updates run every five minutes')
 
     booking_report_key = "thursday_booking_report"
 
@@ -1025,7 +1044,7 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, 
         values['pricing_simulation_enabled'] = '1' if form.get('pricing_simulation_enabled') else '0'
         db.set_settings(values)
         db.log('pricing.settings_saved', 'Pricing simulation settings saved; live writes and recurring schedule remain unavailable.')
-        return _done('setup', 'Pricing settings saved — simulation only; no recurring schedule activated')
+        return _done('setup?section=pricing', 'Pricing settings saved — simulation only; no recurring schedule activated')
 
     @app.post("/pricing-simulate")
     async def pricing_simulate(request: Request):
@@ -1033,7 +1052,7 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, 
         try:
             if form.get('pricing_action') == 'one_time':
                 await pricing.preview(syncer.now(), manual=manual_settings(form))
-                return _done('setup', 'One-time simulation saved; no rates or minimum stays changed')
+                return _done('setup?section=pricing', 'One-time simulation saved; no rates or minimum stays changed')
             when = datetime.fromisoformat(str(form.get('pricing_preview_at', '')))
             if when.tzinfo is not None:
                 raise ValueError('Use the local Eastern date and time')
@@ -1042,11 +1061,11 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, 
                 raise ValueError('That time does not exist because daylight saving time changes')
             await pricing.preview(when)
         except ValueError as exc:
-            return _done('setup', str(exc) or 'Pricing simulation could not run; no prices changed')
+            return _done('setup?section=pricing', str(exc) or 'Pricing simulation could not run; no prices changed')
         except Exception:
             db.log('pricing.preview_failed', 'Pricing simulation failed; no prices changed.', level='warning')
-            return _done('setup', 'Pricing simulation failed; no prices changed')
-        return _done('setup', 'Simulation saved — no Hostaway or Airbnb prices changed')
+            return _done('setup?section=pricing', 'Pricing simulation failed; no prices changed')
+        return _done('setup?section=pricing', 'Simulation saved — no Hostaway or Airbnb prices changed')
 
     @app.post("/smtp-settings-save")
     async def smtp_settings_save(request: Request):
@@ -1076,7 +1095,7 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, 
         values['smtp_enabled'] = '1' if enabled else '0'
         db.set_settings(values)
         db.log('settings.saved', 'Email server settings saved (password hidden)')
-        return _done('setup', 'Email settings saved')
+        return _done('setup?section=alerts', 'Email settings saved')
 
     @app.post("/settings-save")
     async def settings_save(request: Request):
@@ -1096,7 +1115,7 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, 
         db.set_setting("guest_message", message)
         db.execute("UPDATE locks SET next_check_at = NULL")
         db.log("settings.saved", "Lock automation settings saved")
-        return _done("setup", "Lock settings saved")
+        return _done("setup?section=locks", "Lock settings saved")
 
     @app.post("/additional-thermostats-save")
     async def additional_thermostats_save(lyric_climate_entities: str = Form("")):
@@ -1114,7 +1133,7 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, 
         for eid in old - set(entities):
             db.execute("DELETE FROM thermostats WHERE entity_id=?", (eid,))
         db.log("settings.saved", "Extra thermostat selection saved; manual property assignment required")
-        return _done("setup", "Extra thermostat selection saved. Assign new devices on Properties.")
+        return _done("setup?section=thermostats", "Extra thermostat selection saved. Assign new devices on Properties.")
 
     @app.post("/daily-temperature-settings-save")
     async def daily_temperature_settings_save(request: Request):
@@ -1133,7 +1152,7 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, 
         # Enable last, after all validated settings have been saved. Existing daily records and pauses stay.
         db.set_setting("occupied_reset_enabled", "1" if "occupied_reset_enabled" in form else "0")
         db.log("settings.saved", "Daily occupied temperature settings saved")
-        return _done("setup", "Daily temperature settings saved")
+        return _done("setup?section=thermostats", "Daily temperature settings saved")
 
     @app.post("/thermostat-settings-save")
     async def thermostat_settings_save(request: Request):
@@ -1155,13 +1174,13 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, 
         db.execute("UPDATE thermostats SET last_mode = NULL, last_applied_at = NULL "
                    "WHERE last_mode IS NULL OR last_mode != 'occupied'")
         db.log("settings.saved", "Thermostat settings saved")
-        return _done("setup", "Thermostat settings saved")
+        return _done("setup?section=thermostats", "Thermostat settings saved")
 
     @app.post("/test-alert")
     async def test_alert():
         if locks is not None:
             await locks.alert("Stay Automation test", "Alerts are working.")
-        return _done("setup", "Test alert sent")
+        return _done("setup?section=alerts", "Test alert sent")
 
     @app.post("/setup-webhook")
     async def setup_webhook(public_url: str = Form(...), addon_slug: str = Form(...),
@@ -1185,7 +1204,7 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, 
             await syncer.hostaway.register_webhook(f"{public_url}/api/webhook/{webhook_id}")
             db.set_setting("hostaway_webhook_registered_at", datetime.now(syncer.tz).isoformat())
             db.log("setup.webhook", "Webhook registered with Hostaway")
-        return _done("setup", "Webhook registered")
+        return _done("setup?section=connections", "Webhook registered")
 
     @app.post("/webhook/{secret}")
     async def webhook_direct(secret: str, request: Request):
