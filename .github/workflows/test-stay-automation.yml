@@ -7,6 +7,7 @@ on:
   pull_request:
     paths:
       - 'stay_automation/**'
+      - 'guest_extension_pricing/**'
       - 'tests/**'
       - 'requirements-dev.txt'
 
