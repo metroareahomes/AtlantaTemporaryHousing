@@ -6,7 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.climate import (ClimateManager, DEFAULTS, is_summer, occupancy, setpoint, should_apply, target_call,
-                         took_effect)
+                         took_effect, VERIFY_RECHECK_SECONDS)
 from app.config import Settings
 from app.db import DB
 from app.locks import LockManager
@@ -680,8 +680,11 @@ def test_occupied_guest_change_is_not_treated_as_vacant_drift(cm):
     assert cm.ha.sets == []
 
 
-def test_lyric_waits_for_late_heat_setpoint_without_another_write(cm, monkeypatch):
-    cm.db.set_setting("lyric_climate_entities", "climate.maple")
+@pytest.mark.parametrize("lyric", [True, False])
+def test_waits_for_late_heat_setpoint_without_another_write(cm, monkeypatch, lyric):
+    if lyric:
+        cm.db.set_setting("lyric_climate_entities", "climate.maple")
+    cm.verify_recheck_delay = VERIFY_RECHECK_SECONDS
     cm.verify_delay = 20
     sleeps = []
 
@@ -704,3 +707,19 @@ def test_lyric_waits_for_late_heat_setpoint_without_another_write(cm, monkeypatc
     assert cm.ha.sets == []
     assert not took_effect(target, {**fresh, "state": "auto"})
     assert not took_effect(target, {**fresh, "target_temp": 66})
+
+
+def test_dashboard_defers_a_mismatch_during_verification_but_keeps_offline_warning(cm):
+    cm.s.now = lambda: at("2030-12-10T01:00")
+    cm.ha.climate["climate.maple"].update(state="heat", target_temp=68)
+    asyncio.run(cm.refresh())
+    cm.db.execute("UPDATE thermostats SET fail_count=1,last_error='correction failed'")
+    cm._note_cloud_attempt("climate.maple")
+    page = client(cm).get("/?show=all").text
+    assert "Waiting for thermostat to confirm Heat 55" in page
+    assert "last try failed" not in page
+    cm.s.now = lambda: at("2030-12-10T01:02")
+    assert "last try failed" in client(cm).get("/?show=all").text
+    cm.s.now = lambda: at("2030-12-10T01:01")
+    cm.db.execute("UPDATE thermostats SET offline_since=?,state='unavailable'", (cm.s.now().isoformat(),))
+    assert "Offline since" in client(cm).get("/?show=all").text

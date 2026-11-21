@@ -21,7 +21,7 @@ from fastapi.templating import Jinja2Templates
 from .booking_report import report_window, thursday_bookings
 from .climate import (
     DEFAULTS as CLIMATE_DEFAULTS, LABELS as CLIMATE_LABELS, RANGES as CLIMATE_RANGES,
-    TOLERANCE, is_summer, occupancy, occupying_reservation, setpoint,
+    VERIFY_GRACE_SECONDS, is_summer, occupancy, occupying_reservation, setpoint, took_effect,
 )
 from .daily_temperature import DEFAULTS as DAILY_DEFAULTS, RANGES as DAILY_RANGES, current_stay
 from .alerts import CATEGORIES, OWNERS, SMTP_FIELDS, email_address
@@ -165,13 +165,22 @@ def _climate_views(therms: list[dict], prop: dict, reservations: list[dict], now
         )
         schedule_temp = _clamped(t, wanted)
         on_target = (
-            t["state"] == want_mode and t["target_temp"] is not None
-            and abs(float(t["target_temp"]) - schedule_temp) <= TOLERANCE
+            t["state"] == want_mode and took_effect({"temperature": schedule_temp}, t)
         )
         schedule = f"{want_mode.title()} {schedule_temp}°"
         now_bits = " ".join(x for x in (_deg(t["current_temp"]), t["state"]) if x)
         set_bit = _set_phrase(t)
-        if t["fail_count"] and not adopted:
+        verifying = t.get("verification_started_at")
+        if verifying and not on_target:
+            try:
+                elapsed = now - datetime.fromisoformat(verifying)
+            except (TypeError, ValueError):
+                elapsed = None
+            if elapsed is not None and timedelta(0) <= elapsed < timedelta(seconds=VERIFY_GRACE_SECONDS):
+                views.append({"name": t["name"], "line": f"Waiting for thermostat to confirm {schedule}",
+                              "ok": True, "detail": detail, "problem": None, "action": ""})
+                continue
+        if t["fail_count"] and not adopted and not on_target:
             views.append({
                 "name": t["name"], "line": f"Should be {schedule} · last try failed",
                 "ok": False, "detail": detail, "action": "",
@@ -239,7 +248,11 @@ def dashboard_rows(syncer: Syncer, query: str = "") -> list[dict[str, Any]]:
         locks_by_property.setdefault(lock["property_id"], []).append(lock)
 
     therms_by_property: dict[int, list[dict]] = {}
-    for t in syncer.db.query("SELECT * FROM thermostats WHERE property_id IS NOT NULL ORDER BY name"):
+    for t in syncer.db.query(
+        "SELECT t.*, s.value AS verification_started_at FROM thermostats t "
+        "LEFT JOIN settings s ON s.key = 'thermostat_verifying:' || t.entity_id "
+        "WHERE t.property_id IS NOT NULL ORDER BY t.name"
+    ):
         therms_by_property.setdefault(t["property_id"], []).append(t)
     battery_limit = syncer.db.get_int("battery_alert_percent", CLIMATE_DEFAULTS["battery_alert_percent"])
     cfg = {k: syncer.db.get_int(k, v) for k, v in CLIMATE_DEFAULTS.items()}

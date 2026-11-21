@@ -420,7 +420,7 @@ def test_reasonable_thermostat_does_not_use_cloud_slot(cm):
 def test_normal_cloud_command_delays_daily_queue_without_changing_normal_schedule(cm):
     enable(cm)
     cm.s.now = lambda: at('2030-06-13T09:59:30')
-    cm._note_cloud_attempt()
+    cm._note_cloud_attempt("climate.maple")
     assert queue_tick(cm, at('2030-06-13T10:00')) == 0
     assert queue_tick(cm, at('2030-06-13T10:01')) == 1
 

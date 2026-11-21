@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.38 — Thermostat verification grace for both integrations
+
+- Give Honeywell Lyric and HACS Resideo up to two minutes to confirm mode and setpoint changes.
+- Show verification as pending on the dashboard before flagging a mismatch. Offline warnings still appear.
+
+Source rollback: stable-0.6.37-before-thermostat-grace.
+
 ## 0.6.37 — Slower Lyric temperature verification
 
 - Give configured Honeywell Lyric thermostats up to two minutes to report a requested setpoint.
