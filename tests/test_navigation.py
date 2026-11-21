@@ -54,7 +54,7 @@ def test_navigation_separates_daily_work_from_setup_and_pricing(syncer, active, 
     assert [(link["href"], link["text"]) for link in nav.links if link["nested"]] == [
         *((f"setup?section={key}", title) for key, title in SETUP_SECTIONS),
         ("events", "Activity log"),
-        ("/hassio/ingress/123456ab_guest_extension_pricing", "Guest Extension Pricing"),
+        ("extension-pricing", "Guest Extension Pricing"),
         ("thursday-special", "The Thursday Special"),
     ]
     assert [link["href"] for link in nav.links if link["nested"] and link["current"] == "page"] == (
@@ -66,4 +66,4 @@ def test_navigation_separates_daily_work_from_setup_and_pricing(syncer, active, 
         assert 'action="smtp-settings-save"' not in html
     assert '<summary>Setup</summary>' in html
     assert '<summary>Pricing</summary>' in html
-    assert 'href="/hassio/ingress/123456ab_guest_extension_pricing" target="_top"' in html
+    assert 'href="extension-pricing"' in html

@@ -6,7 +6,7 @@ import pytest
 
 from guest_extension_pricing.app.db import DB
 from guest_extension_pricing.app.extension_pricing import DEFAULTS, ExtensionPricing, SETTINGS_KEY, TZ, extension_intent, validate_settings
-from test_sync import run
+from test_sync import run, syncer
 
 
 def test_extension_language():
@@ -355,3 +355,25 @@ def test_link_reuses_stay_webhook_and_preserves_primary_delivery():
             assert writes[-1]["actions"] == [primary, forward]
 
     run(exercise())
+
+
+def test_extension_pricing_uses_stay_automation_rules_and_webhook(syncer):
+    from fastapi.testclient import TestClient
+    from app.web import create_app
+
+    client = TestClient(create_app(syncer))
+    initial = client.get("/extension-pricing?owner=Mike").text
+    assert 'name="extension_percent" value="0"' in initial
+    assert "Import pricing data" not in initial
+    form = {"owner": "Mike", "extension_percent": "10", "extension_enabled": "on",
+            "extension_save": "00:45", "extension_restore": "04:00"}
+    assert client.post("/extension-pricing-save", data=form, follow_redirects=False).status_code == 303
+    assert 'name="extension_percent" value="10"' in client.get("/extension-pricing?owner=Mike").text
+    assert 'name="extension_percent" value="0"' in client.get("/extension-pricing?owner=Kurt").text
+
+    payload = {"object": "conversationMessage", "event": "message.received", "data": {
+        "accountId": syncer.settings.hostaway_account_id, "id": 5, "reservationId": 9,
+        "isIncoming": 1, "body": "Can we add another night?",
+    }}
+    assert run(syncer.handle_webhook(payload)) == []
+    assert syncer.db.one("SELECT reservation_id FROM extension_messages WHERE id=5") == {"reservation_id": 9}

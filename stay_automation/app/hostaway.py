@@ -105,15 +105,26 @@ class HostawayClient:
     async def listings(self) -> list[dict[str, Any]]:
         return await self._paged("/listings", {"includeResources": 1})
 
-    async def pricing_listing(self, listing_id: int) -> dict[str, Any]:
-        """Read only the metadata required for a pricing simulation."""
+    async def listing_details(self, listing_id: int) -> dict[str, Any]:
+        """Read and verify a listing, including its owner tags."""
         if type(listing_id) is not int or listing_id <= 0:
             raise HostawayError("Invalid pricing listing")
-        body = await self._request("GET", f"/listings/{listing_id}")
+        body = await self._request("GET", f"/listings/{listing_id}", params={"includeResources": 1})
         raw = body.get("result")
         if not isinstance(raw, dict) or str(raw.get("id")) != str(listing_id):
             raise HostawayError("Pricing listing identity mismatch")
+        return raw
+
+    async def pricing_listing(self, listing_id: int) -> dict[str, Any]:
+        raw = await self.listing_details(listing_id)
         return {k: raw.get(k) for k in ('id', 'currencyCode', 'timeZoneName', 'checkInTimeStart')}
+
+    async def finance_fields(self, reservation_id: int) -> list[dict[str, Any]]:
+        body = await self._request("GET", f"/financeField/{reservation_id}")
+        fields = body.get("result")
+        if not isinstance(fields, list) or not all(isinstance(field, dict) for field in fields):
+            raise HostawayError("Unexpected Hostaway finance fields")
+        return fields
 
     async def pricing_calendar(self, listing_id: int, start: str, end: str) -> list[dict[str, Any]]:
         """GET nightly calendar prices, never base prices."""

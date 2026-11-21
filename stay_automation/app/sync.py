@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from .extension_pricing import ExtensionPricing
 from .config import Settings
 from .db import DB, utcnow
 from .matching import match_lock
@@ -24,6 +25,7 @@ RESERVATION_FIELDS = (
 class Syncer:
     def __init__(self, db: DB, settings: Settings, hostaway, ha):
         self.db = db
+        self.extension_pricing = ExtensionPricing(self)
         self.settings = settings
         self.hostaway = hostaway
         self.ha = ha
@@ -281,6 +283,10 @@ class Syncer:
 
     async def handle_webhook(self, payload: Any) -> list[str]:
         """Hostaway unified webhook. The payload only tells us which reservation; the API is the truth."""
+        try:
+            self.extension_pricing.receive(payload)
+        except Exception:
+            self.db.log("pricing.extension_failed", "Could not record an extension webhook event.", level="warning")
         if _other_object(payload):
             return []  # Hostaway also posts guest messages and the like; they are not ours and not worth a line
         self.db.set_setting("last_webhook_at", utcnow())
