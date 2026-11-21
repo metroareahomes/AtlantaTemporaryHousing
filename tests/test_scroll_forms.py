@@ -28,7 +28,7 @@ class Forms(HTMLParser):
     ("/properties", [("save-properties", "properties-save", "Save properties", "post")]),
     ("/staff", [("save-staff", "staff-save", "Save staff", "post"),
                 ("save-recipients", "recipients-save", "Save recipients", "post")]),
-    ("/setup", [("save-lock-settings", "settings-save", "Save lock settings", "post"),
+    ("/setup?section=all", [("save-lock-settings", "settings-save", "Save lock settings", "post"),
                 ("save-thermostat-settings", "thermostat-settings-save", "Save thermostat settings", "post"),
                 ("save-daily-temperature-settings", "daily-temperature-settings-save", "Save daily temperature settings", "post"),
                 ("save-pricing-settings", "pricing-settings-save", "Save pricing settings", "post"),

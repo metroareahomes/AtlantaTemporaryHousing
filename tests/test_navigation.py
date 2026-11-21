@@ -1,9 +1,11 @@
 """Render the navigation to check grouping, ingress-safe links and current-page state."""
 from html.parser import HTMLParser
-from pathlib import Path
 
 import pytest
-from jinja2 import Environment, FileSystemLoader
+from fastapi.testclient import TestClient
+
+from app.web import SETUP_SECTIONS, create_app
+from test_sync import syncer
 
 
 class Navigation(HTMLParser):
@@ -39,20 +41,29 @@ class Navigation(HTMLParser):
 
 
 @pytest.mark.parametrize("active,href", [
-    ("status", "."), ("properties", "properties"), ("staff", "staff"),
-    ("setup", "setup"), ("events", "events"),
+    ("/", "."), ("/properties", "properties"), ("/staff", "staff"),
+    ("/setup?section=locks", "setup?section=locks"), ("/events", "events"),
 ])
-def test_navigation_separates_daily_work_from_system_pages(active, href):
-    templates = Path(__file__).resolve().parents[1] / "stay_automation" / "app" / "templates"
-    env = Environment(loader=FileSystemLoader(templates), autoescape=True)
-    html = env.get_template("base.html").render(active=active, notice=None)
+def test_navigation_separates_daily_work_from_setup_and_pricing(syncer, active, href):
+    syncer.db.set_setting("addon_slug", "123456ab_stay_automation")
+    html = TestClient(create_app(syncer)).get(active).text
     nav = Navigation()
     nav.feed(html)
-    assert [(link["href"], link["text"]) for link in nav.links if not link["nested"]] == [
+    assert [(link["href"], link["text"]) for link in nav.links if not link["nested"]][:3] == [
         (".", "Status"), ("properties", "Properties"), ("staff", "Staff & access")]
     assert [(link["href"], link["text"]) for link in nav.links if link["nested"]] == [
-        ("setup", "Setup & rules"), ("events", "Activity log")]
-    assert [link["href"] for link in nav.links if link["current"] == "page"] == [href]
-    # Relative links preserve Home Assistant ingress prefixes.
-    assert all(not link["href"].startswith("/") for link in nav.links)
-    assert '<summary>System</summary>' in html
+        *((f"setup?section={key}", title) for key, title in SETUP_SECTIONS),
+        ("events", "Activity log"),
+        ("/hassio/ingress/123456ab_guest_extension_pricing", "Guest Extension Pricing"),
+        ("thursday-special", "The Thursday Special"),
+    ]
+    assert [link["href"] for link in nav.links if link["nested"] and link["current"] == "page"] == (
+        [href] if active in ("/setup?section=locks", "/events") else []
+    )
+    if active == "/setup?section=locks":
+        assert 'action="settings-save"' in html
+        assert 'action="thermostat-settings-save"' not in html
+        assert 'action="smtp-settings-save"' not in html
+    assert '<summary>Setup</summary>' in html
+    assert '<summary>Pricing</summary>' in html
+    assert 'href="/hassio/ingress/123456ab_guest_extension_pricing" target="_top"' in html

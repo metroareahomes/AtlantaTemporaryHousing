@@ -15,16 +15,17 @@ s = Syncer(DB(':memory:'), SETTINGS, FakeHostaway(), FakeHA())
 s.db.set_setting('smtp_password','never-show-this-secret')
 s.db.set_setting('sheet_secret','never-show-sheet-secret')
 c = TestClient(create_app(s))
-pages = {p:c.get(p).text for p in ('/staff','/setup','/','/properties')}
+pages = {p:c.get(p).text for p in ('/staff','/','/properties')}
+pages['/setup'] = c.get('/setup?section=alerts').text
 s.db.execute("INSERT INTO alert_recipients(name,target,email,active) VALUES('Saved recipient','','saved@example.com',1)")
 pages['/staff-saved'] = c.get('/staff').text
 pid = s.db.execute("INSERT INTO properties(hostaway_listing_id,name,address,owner_scope) VALUES(100,'Test home','10 Wright St','Kurt')")
 mike_id = s.db.execute("INSERT INTO properties(hostaway_listing_id,name,owner_scope) VALUES(101,'Wright backup','Mike')")
 s.db.execute("INSERT INTO properties(hostaway_listing_id,name) VALUES(102,'Untagged property')")
 s.db.execute("INSERT INTO pricing_simulations(created_at,property_id,simulation_at,config_json,rows_json) VALUES(?,?,?,?,?)", ('2030-06-14T14:00:00-04:00',pid,'2030-06-14T14:00:00-04:00','{}',json.dumps([{'date':'2030-06-14','current':'250','proposed':'225.00','minimum_stay':1,'reason':'Simulation only — calendar date, not first-night-only'}])))
-pages['/setup-pricing'] = c.get('/setup').text
+pages['/setup-pricing'] = c.get('/setup?section=pricing').text
 s.db.set_setting('pricing_simulation_enabled', '1')
-pages['/setup-pricing-enabled'] = c.get('/setup').text
+pages['/setup-pricing-enabled'] = c.get('/setup?section=pricing').text
 s.db.log('lock.failed', 'Spring Road read failed', level='warning', property_id=pid)
 s.db.log('lock.failed', 'Other lock read failed', level='warning', property_id=mike_id)
 s.db.log('system.check', 'Spring Road mentioned in global event', level='warning')
@@ -69,7 +70,7 @@ with sync_playwright() as p:
         page.get_by_role('button',name='Send recipient test',exact=True).click()
         assert page.evaluate('window.tests[0].recipient_id')=='1'
         page.goto('https://ha.example.com/setup')
-        page.locator('#earlier-pricing-previews > summary').click()
+        assert page.locator('#earlier-pricing-previews').count() == 0
         assert 'never-show-this-secret' not in page.content()
         assert page.locator('[name=smtp_password]').input_value()==''
         page.evaluate("window.sent=[];document.addEventListener('submit',e=>{e.preventDefault();window.sent.push({id:e.target.id,values:Object.fromEntries(new FormData(e.target))})})")
