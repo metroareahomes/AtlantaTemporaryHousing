@@ -61,6 +61,7 @@ CREATE TABLE IF NOT EXISTS extension_booked_nights (
             ("guest_key", "TEXT"),
             ("use_stay_average", "INTEGER NOT NULL DEFAULT 0"),
             ("stay_average_rate", "TEXT"),
+            ("owner", "TEXT"),
         ):
             if name not in columns:
                 self.conn.execute(f"ALTER TABLE extension_rates ADD COLUMN {name} {sql_type}")
