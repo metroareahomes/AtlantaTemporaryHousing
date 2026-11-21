@@ -124,6 +124,13 @@ class HostawayClient:
         body = await self._request("GET", f"/reservations/{reservation_id}", params={"includeResources": 1})
         return body["result"]
 
+    async def finance_fields(self, reservation_id: int) -> list[dict[str, Any]]:
+        body = await self._request("GET", f"/financeField/{reservation_id}")
+        fields = body.get("result")
+        if not isinstance(fields, list) or not all(isinstance(field, dict) for field in fields):
+            raise HostawayError("Unexpected Hostaway finance fields")
+        return fields
+
     async def unified_webhooks(self) -> list[dict[str, Any]]:
         body = await self._request("GET", "/webhooks/unifiedWebhooks")
         return body.get("result") or []

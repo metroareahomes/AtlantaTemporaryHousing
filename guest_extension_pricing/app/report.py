@@ -1,7 +1,7 @@
 """Attribute booked nights to the price in effect before the next PriceLabs sync."""
 import hashlib
 from datetime import date, datetime, time, timedelta, timezone
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from zoneinfo import ZoneInfo
 
 TZ = ZoneInfo("America/New_York")
@@ -91,10 +91,19 @@ def reconcile_bookings(db, now):
 
 
 def report_rows(db):
-    rows = db.query("SELECT * FROM extension_booked_nights ORDER BY night DESC, listing_id")
+    rows = db.query(
+        "SELECT booked.*, rates.stay_average_rate, rates.base_rate FROM extension_booked_nights booked "
+        "LEFT JOIN extension_rates rates USING (listing_id, night) ORDER BY booked.night DESC, booked.listing_id"
+    )
     totals = {}
     for row in rows:
-        total = totals.setdefault(row["currency"], {"net_rent": Decimal(0), "rent_increase": Decimal(0)})
+        total = totals.setdefault(row["currency"], {"net_rent": Decimal(0), "rent_increase": Decimal(0), "average_only": None})
         total["net_rent"] += Decimal(row["net_rent"])
         total["rent_increase"] += Decimal(row["rent_increase"])
+        row["average_only"] = None
+        if row["stay_average_rate"] is not None and row["base_rate"] is not None:
+            difference = Decimal(row["stay_average_rate"]) - Decimal(row["base_rate"])
+            average_only = max(Decimal("0.00"), difference.quantize(Decimal(".01"), rounding=ROUND_HALF_UP))
+            row["average_only"] = average_only
+            total["average_only"] = (total["average_only"] or Decimal("0.00")) + average_only
     return rows, sorted(totals.items())

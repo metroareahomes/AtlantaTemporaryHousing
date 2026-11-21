@@ -33,8 +33,9 @@ tfoot { font-weight: bold; }
 <form method="post" action="settings">
 <input type="hidden" name="csrf" value="{{ csrf }}">
 <label><input type="checkbox" name="extension_enabled" {% if config.enabled %}checked{% endif %}> Enable extension pricing</label>
-<label>Rate adjustment (%) <input type="number" step=".01" name="extension_percent" value="{{ config.percent }}" required></label>
-<p>Use a positive percentage for a markup or a negative percentage for a discount.</p>
+<label><input type="checkbox" name="extension_use_stay_average" {% if config.use_stay_average %}checked{% endif %}> Base extension prices on the booked stay’s average nightly rate</label>
+<label>Rate adjustment (%) <input type="number" step=".01" name="extension_percent" value="{{ config.percent }}"></label>
+<p>Use a positive percentage for a markup or a negative percentage for a discount on calendar rates. With the stay average selected, enter a markup or leave the percentage blank. Blocked nights already at or above the calculated rate keep their price.</p>
 <div class="grid">
 <label>Minimum booked nights <input type="number" min="1" name="extension_min_nights" value="{{ config.min_nights or '' }}"></label>
 <label>Maximum booked nights <input type="number" min="1" name="extension_max_nights" value="{{ config.max_nights or '' }}"></label>
@@ -58,19 +59,20 @@ tfoot { font-weight: bold; }
 <h2>Booked marked-up nights</h2>
 <p>Credit uses the saved markup for nights booked by the requesting guest before the next 2:00 a.m. Eastern PriceLabs sync.</p>
 <table>
-<thead><tr><th scope="col">Booked night</th><th scope="col">Hostaway listing ID</th><th scope="col" class="amount">Rent at saved rate</th><th scope="col" class="amount">Added by automation</th></tr></thead>
+<thead><tr><th scope="col">Booked night</th><th scope="col">Hostaway listing ID</th><th scope="col" class="amount">Rent at saved rate</th><th scope="col" class="amount">Increase at stay average</th><th scope="col" class="amount">Net increase after markup</th></tr></thead>
 <tbody>
 {% for row in report_rows %}
-<tr><td>{{ row.night }}</td><td>{{ row.listing_id }}</td><td class="amount">{{ row.currency }} {{ row.net_rent }}</td><td class="amount">{{ row.currency }} {{ row.rent_increase }}</td></tr>
+<tr><td>{{ row.night }}</td><td>{{ row.listing_id }}</td><td class="amount">{{ row.currency }} {{ row.net_rent }}</td><td class="amount">{% if row.average_only is not none %}{{ row.currency }} {{ row.average_only }}{% else %}—{% endif %}</td><td class="amount">{{ row.currency }} {{ row.rent_increase }}</td></tr>
 {% else %}
-<tr><td colspan="4">No qualifying bookings yet.</td></tr>
+<tr><td colspan="5">No qualifying bookings yet.</td></tr>
 {% endfor %}
 </tbody>
 <tfoot>
 {% for currency, total in report_totals %}
-<tr><th scope="row" colspan="2">Total</th><td class="amount">{{ currency }} {{ total.net_rent }}</td><td class="amount">{{ currency }} {{ total.rent_increase }}</td></tr>
+<tr><th scope="row" colspan="2">Total</th><td class="amount">{{ currency }} {{ total.net_rent }}</td><td class="amount">{% if total.average_only is not none %}{{ currency }} {{ total.average_only }}{% else %}—{% endif %}</td><td class="amount">{{ currency }} {{ total.rent_increase }}</td></tr>
 {% endfor %}
 </tfoot>
 </table>
+{% if report_rows %}<p>The stay-average total includes nights with a saved stay average.</p>{% endif %}
 </section>
 </html>
