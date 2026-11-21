@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.42 — Pricing Setup cleanup
+
+- Remove the old weekend pricing simulation and its Save button from Pricing Setup.
+
 ## 0.6.41 — Built-in Guest Extension Pricing
 
 - Open Guest Extension Pricing inside Stay Automation with separate Mike and Kurt rules and ledgers.
