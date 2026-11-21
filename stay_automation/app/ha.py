@@ -240,8 +240,23 @@ class HAClient:
 
     async def create_webhook_automation(self, webhook_id: str, addon_slug: str) -> None:
         """HA receives the Hostaway webhook publicly and hands the JSON to this add-on's stdin."""
+        path = f"/api/config/automation/config/{WEBHOOK_AUTOMATION_ID}"
+        existing = await self._http.get(path)
+        extension_actions = []
+        if existing.status_code == 200:
+            current = existing.json()
+            for action in current.get("actions", current.get("action", [])):
+                data = action.get("data", {}) if isinstance(action, dict) else {}
+                companion = str(data.get("addon", ""))
+                if re.fullmatch(r"(?:[a-f0-9]{8}|local)_guest_extension_pricing", companion) and action == {
+                    "action": "hassio.addon_stdin", "continue_on_error": True,
+                    "data": {"addon": companion, "input": "{{ trigger.json | tojson }}"},
+                }:
+                    extension_actions.append(action)
+        elif existing.status_code != 404:
+            existing.raise_for_status()
         await self._post(
-            f"/api/config/automation/config/{WEBHOOK_AUTOMATION_ID}",
+            path,
             {
                 "id": WEBHOOK_AUTOMATION_ID,
                 "alias": "Stay Automation - Hostaway webhook",
@@ -257,7 +272,7 @@ class HAClient:
                 "actions": [{
                     "action": "hassio.addon_stdin",
                     "data": {"addon": addon_slug, "input": "{{ trigger.json | tojson }}"},
-                }],
+                }, *extension_actions],
             },
         )
 

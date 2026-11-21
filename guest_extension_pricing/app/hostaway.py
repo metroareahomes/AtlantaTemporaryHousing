@@ -1,5 +1,6 @@
 """Hostaway public API client."""
 import asyncio
+from urllib.parse import urlsplit
 from typing import Any, Callable
 
 import httpx
@@ -131,20 +132,10 @@ class HostawayClient:
             raise HostawayError("Unexpected Hostaway finance fields")
         return fields
 
-    async def unified_webhooks(self) -> list[dict[str, Any]]:
+    async def disable_legacy_webhook(self, webhook_id: str) -> None:
         body = await self._request("GET", "/webhooks/unifiedWebhooks")
-        return body.get("result") or []
-
-    async def register_webhook(self, url: str) -> dict[str, Any]:
-        """Point Hostaway's unified webhook at `url`. Already registered (same URL) is success, not an error."""
-        existing = await self.unified_webhooks()
-        for hook in existing:
-            if hook.get("url") == url:
-                if not hook.get("isEnabled"):
-                    body = await self._request("PUT", f"/webhooks/unifiedWebhooks/{hook['id']}",
-                                               json={"isEnabled": 1, "url": url})
-                    return body["result"]
-                return hook
-        body = await self._request("POST", "/webhooks/unifiedWebhooks",
-                                   json={"isEnabled": 1, "url": url}, retry_transient=False)
-        return body["result"]
+        for hook in body.get("result") or []:
+            url = hook.get("url") or ""
+            if hook.get("isEnabled") in (1, "1") and urlsplit(url).path.rstrip("/") == f"/api/webhook/{webhook_id}":
+                await self._request("PUT", f"/webhooks/unifiedWebhooks/{int(hook['id'])}",
+                                    json={"isEnabled": 0, "url": url}, retry_transient=False)

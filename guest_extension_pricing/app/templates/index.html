@@ -21,53 +21,36 @@ nav [aria-current="page"] { font-weight: bold; }
 <h1>Guest Extension Pricing</h1>
 {% if message %}<p role="status"><strong>{{ message }}</strong></p>{% endif %}
 <nav aria-label="Pricing views">
-<a href="./" {% if not owner %}aria-current="page"{% endif %}>All homes</a>
 {% for name in owners %}
 <a href="./?owner={{ name }}" {% if owner == name %}aria-current="page"{% endif %}>{{ name }}’s homes</a>
 {% endfor %}
 </nav>
-{% if owner %}
-<section>
-<h2>{{ owner }}’s markup</h2>
-<form method="post" action="owner-markup">
-<input type="hidden" name="csrf" value="{{ csrf }}">
-<input type="hidden" name="owner" value="{{ owner }}">
-<label>Rate adjustment (%) <input type="number" step=".01" name="percent" value="{{ config.owner_markups.get(owner, '') }}"></label>
-<p>Leave blank for 0% markup.</p>
-<button>Save markup</button>
-</form>
-</section>
-{% else %}
 <section>
 <h2>Hostaway connection</h2>
-<p>{{ 'Webhook registered' if connected else 'Webhook setup required' }}</p>
+<p>{{ 'Stay Automation webhook linked' if connected else 'Link the existing Stay Automation webhook to receive guest messages.' }}</p>
 {% if last_message %}<p>Last message event received {{ last_message }} Eastern.</p>{% endif %}
 <form method="post" action="connect">
 <input type="hidden" name="csrf" value="{{ csrf }}">
-<button>{{ 'Reconnect Hostaway' if connected else 'Connect Hostaway' }}</button>
+<input type="hidden" name="owner" value="{{ owner }}">
+<button>{{ 'Relink Stay Automation webhook' if connected else 'Use Stay Automation webhook' }}</button>
 </form>
 </section>
 <section>
-<h2>Pricing rules</h2>
+<h2>{{ owner }}’s pricing rules</h2>
 <p>Adjust consecutive blocked nights starting on the guest’s booked checkout date. Open nights keep their current price until PriceLabs updates them.</p>
 <form method="post" action="settings">
 <input type="hidden" name="csrf" value="{{ csrf }}">
+<input type="hidden" name="owner" value="{{ owner }}">
 <label><input type="checkbox" name="extension_enabled" {% if config.enabled %}checked{% endif %}> Enable extension pricing</label>
 <label><input type="checkbox" name="extension_use_stay_average" {% if config.use_stay_average %}checked{% endif %}> Base extension prices on the booked stay’s average nightly rate</label>
-<label>Rate adjustment for homes outside the owner tabs (%) <input type="number" step=".01" name="extension_percent" value="{{ config.percent }}"></label>
+<label>Rate adjustment (%) <input type="number" step=".01" name="extension_percent" value="{{ config.percent }}"></label>
 <p>Use a positive percentage for a markup or a negative percentage for a discount on calendar rates. With the stay average selected, enter a markup or leave the percentage blank. Blocked nights already at or above the calculated rate keep their price.</p>
 <div class="grid">
 <label>Minimum booked nights <input type="number" min="1" name="extension_min_nights" value="{{ config.min_nights or '' }}"></label>
 <label>Maximum booked nights <input type="number" min="1" name="extension_max_nights" value="{{ config.max_nights or '' }}"></label>
 </div>
 <p>Blank limits include any booked length on that side of the range.</p>
-<fieldset>
-<legend>Listing tags for the default adjustment</legend>
-{% for name in ['Mike', 'Kurt'] %}
-<label><input type="checkbox" name="extension_tag_{{ name|lower }}" {% if name in config.tags %}checked{% endif %}> {{ name }}</label>
-{% endfor %}
-<p>Leave both unchecked to include all listings.</p>
-</fieldset>
+
 <div class="grid">
 <label>Save rates (Eastern) <input type="time" name="extension_save" value="{{ config.save }}" required></label>
 <label>Rewrite rates (Eastern) <input type="time" name="extension_restore" value="{{ config.restore }}" required></label>
@@ -75,7 +58,6 @@ nav [aria-current="page"] { font-weight: bold; }
 <button>Save settings</button>
 </form>
 </section>
-{% endif %}
 <section>
 <h2>Booked marked-up nights{% if owner %} for {{ owner }}{% endif %}</h2>
 <p>Credit uses the saved markup for nights booked by the requesting guest before the next 2:00 a.m. Eastern PriceLabs sync.</p>

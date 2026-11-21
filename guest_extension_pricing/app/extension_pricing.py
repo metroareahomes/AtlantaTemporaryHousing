@@ -14,7 +14,7 @@ TZ = ZoneInfo("America/New_York")
 
 DEFAULTS = {
     "enabled": False, "percent": "0", "save": "00:45", "restore": "04:00",
-    "min_nights": None, "max_nights": None, "tags": [], "use_stay_average": False, "owner_markups": {},
+    "min_nights": None, "max_nights": None, "use_stay_average": False,
 }
 SETTINGS_KEY = "extension_pricing"
 SYNC_TIME = "02:00"
@@ -77,7 +77,21 @@ def extension_intent(body):
 
 
 def read_settings(db):
-    return {**DEFAULTS, **json.loads(db.get_setting(SETTINGS_KEY, "{}"))}
+    saved = json.loads(db.get_setting(SETTINGS_KEY, "{}"))
+    if "owners" in saved:
+        return {owner: {**DEFAULTS, **saved["owners"].get(owner, {})} for owner in OWNERS}
+
+    # Carry over the prior shared rules and each owner's saved markup on upgrade.
+    return {
+        owner: {
+            **{key: saved.get(key, default) for key, default in DEFAULTS.items()},
+            "enabled": bool(saved.get("enabled") and (
+                not saved.get("tags") or owner in saved["tags"] or owner in saved.get("owner_markups", {})
+            )),
+            "percent": saved.get("owner_markups", {}).get(owner, "0"),
+        }
+        for owner in OWNERS
+    }
 
 
 def validate_percent(value, use_stay_average):
@@ -108,7 +122,6 @@ def validate_settings(form):
         config[key] = int(value) if value else None
     if config["min_nights"] and config["max_nights"] and config["min_nights"] > config["max_nights"]:
         raise ValueError("Minimum stay length must be at most the maximum.")
-    config["tags"] = [tag for tag in OWNERS if form.get(f"extension_tag_{tag.lower()}") == "on"]
     config["enabled"] = form.get("extension_enabled") == "on"
     return config
 
@@ -149,7 +162,7 @@ class ExtensionPricing:
             return False
         if payload.get("object") != "conversationMessage":
             return False
-        if event != "message.received" or not read_settings(self.db)["enabled"]:
+        if event != "message.received" or not any(rule["enabled"] for rule in read_settings(self.db).values()):
             return True
         body = message.get("body")
         if (message.get("isIncoming") not in (1, "1")
@@ -167,11 +180,7 @@ class ExtensionPricing:
             )
         return True
 
-    async def start_extension(self, reservation_id, today, config):
-        use_stay_average = config.get("use_stay_average", False)
-        owner_markups = config.get("owner_markups", {})
-        if not Decimal(config["percent"]) and not owner_markups and not use_stay_average:
-            return
+    async def start_extension(self, reservation_id, today, rules, *, clock=None):
         reservation = await self.s.hostaway.reservation(reservation_id)
         if reservation.get("status") not in ("new", "modified"):
             return
@@ -179,22 +188,27 @@ class ExtensionPricing:
         first = date.fromisoformat(reservation["departureDate"])
         if first < today:
             return
+        listing = await self.s.hostaway.listing_details(listing_id)
+        tags = owner_tags(listing) or set()
+        if len(tags) != 1:
+            if tags:
+                self.db.log("pricing.owner_conflict", f"Listing {listing_id} has both owner tags.", level="warning")
+            return
+        owner = next(iter(tags))
+        config = rules[owner]
+        if not config["enabled"]:
+            return
+        if clock is not None and SYNC_TIME <= clock < config["restore"]:
+            return False
+        percent = Decimal(config["percent"])
+        use_stay_average = config["use_stay_average"]
+        if not percent and not use_stay_average:
+            return
         minimum, maximum = config["min_nights"], config["max_nights"]
         if use_stay_average or minimum is not None or maximum is not None:
             nights = (first - date.fromisoformat(reservation["arrivalDate"])).days
             if nights < (minimum or 1) or (maximum is not None and nights > maximum):
                 return
-        listing = await self.s.hostaway.listing_details(listing_id)
-        tags = owner_tags(listing) or set()
-        owner = next(iter(tags)) if len(tags) == 1 else None
-        if owner not in owner_markups and config["tags"] and not set(config["tags"]).intersection(tags):
-            return
-        if len(tags) > 1 and owner_markups:
-            self.db.log("pricing.owner_conflict", f"Listing {listing_id} has both owner tags.", level="warning")
-            return
-        percent = Decimal(owner_markups.get(owner, "0") if owner else config["percent"])
-        if not percent and not use_stay_average:
-            return
         stay_average = average_target = None
         if use_stay_average:
             fields = await self.s.hostaway.finance_fields(reservation_id)
@@ -279,20 +293,22 @@ class ExtensionPricing:
         self.db.log("pricing.extension_rate", f"Verified listing {listing_id} on {night} at {target}")
 
     async def tick(self):
-        config = read_settings(self.db)
+        rules = read_settings(self.db)
         local = self.s.now().astimezone(TZ)
         today, clock = local.date(), local.strftime("%H:%M")
-        if not config["enabled"]:
+        if not any(rule["enabled"] for rule in rules.values()):
             reconcile_bookings(self.db, local)
             return
         service_date = today.isoformat()
         self.db.execute("UPDATE extension_rates SET tracking=0 WHERE tracking=1 AND night < ?", (service_date,))
-        if not SYNC_TIME <= clock < config["restore"]:
+        if any(rule["enabled"] and not SYNC_TIME <= clock < rule["restore"] for rule in rules.values()):
             for item in self.db.query(
                 "SELECT * FROM extension_messages WHERE processed=0 ORDER BY attempts,id LIMIT 20"
             ):
                 try:
-                    await self.start_extension(item["reservation_id"], today, config)
+                    if await self.start_extension(item["reservation_id"], today, rules, clock=clock) is False:
+                        self.db.execute("UPDATE extension_messages SET attempts=attempts+1 WHERE id=?", (item["id"],))
+                        continue
                 except Exception:
                     self.db.execute("UPDATE extension_messages SET attempts=attempts+1 WHERE id=?", (item["id"],))
                     self.db.log("pricing.extension_failed",
@@ -302,6 +318,9 @@ class ExtensionPricing:
                 self.db.execute("UPDATE extension_messages SET processed=1 WHERE id=?", (item["id"],))
 
         for row in self.db.query("SELECT * FROM extension_rates WHERE tracking=1 ORDER BY listing_id,night"):
+            config = rules.get(row["owner"])
+            if not config or not config["enabled"]:
+                continue
             night = row["night"]
             try:
                 day, = await self.s.hostaway.pricing_calendar(row["listing_id"], night, night)
