@@ -152,3 +152,76 @@ def test_standalone_ingress_settings_persist(tmp_path):
         response = client.get("/")
         assert 'name="extension_min_nights" value="7"' in response.text
         assert 'name="extension_tag_kurt" checked' in response.text
+
+
+@pytest.mark.parametrize("reservation_id, external_guest, hour, minute, restore, credited", [
+    (9, None, 1, 59, False, True),
+    (9, None, 2, 0, False, False),
+    (9, None, 3, 59, False, False),
+    (9, None, 4, 1, True, True),
+    (10, "requester", 1, 59, False, True),
+    (10, "another-guest", 1, 59, False, False),
+    (10, None, 1, 59, False, False),
+])
+def test_only_requesting_guest_bookings_in_price_window_get_credit(
+    reservation_id, external_guest, hour, minute, restore, credited,
+):
+    from guest_extension_pricing.app.report import guest_key, reconcile_bookings, report_rows
+
+    db = DB(":memory:")
+    db.set_setting(SETTINGS_KEY, json.dumps({"enabled": True, "percent": "10"}))
+    now = datetime(2030, 6, 10, 17, tzinfo=TZ)
+    manager = ExtensionPricing(SimpleNamespace(
+        db=db, now=lambda: now, settings=SimpleNamespace(hostaway_account_id="123"),
+    ))
+    db.execute(
+        "INSERT INTO extension_rates(listing_id,night,rate,base_rate,reservation_id,guest_key) "
+        "VALUES (100,'2030-06-12','110.00','100.00',9,?)",
+        (guest_key({"channelId": 20, "guestExternalAccountId": "requester"}),),
+    )
+    config = dict(DEFAULTS, enabled=True)
+    row, = db.query("SELECT * FROM extension_rates")
+    blocked_day = {"status": "blocked", "price": 110}
+    run(manager.apply_rate(row, blocked_day, "2030-06-10", "17:00", config))
+    now = datetime(2030, 6, 11, 4 if restore else hour, 0 if restore else minute, tzinfo=TZ)
+    if restore:
+        row, = db.query("SELECT * FROM extension_rates")
+        run(manager.apply_rate(row, blocked_day, "2030-06-11", "04:00", config))
+        now = now.replace(minute=minute)
+    row, = db.query("SELECT * FROM extension_rates")
+    run(manager.apply_rate(row, {"status": "available", "price": 110},
+                           "2030-06-11", now.strftime("%H:%M"), config))
+    payload = {"object": "reservation", "event": "reservation.updated", "data": {
+        "id": reservation_id, "accountId": 123, "listingMapId": 100, "status": "modified",
+        "arrivalDate": "2030-06-12", "departureDate": "2030-06-14", "currency": "USD",
+        "channelId": 20, "guestExternalAccountId": external_guest,
+    }}
+    manager.receive(payload)
+    reconcile_bookings(db, now)
+    manager.receive(payload)
+    reconcile_bookings(db, now)
+    rows, totals = report_rows(db)
+    assert [row["rent_increase"] for row in rows] == (["10.00"] if credited else [])
+    assert [str(total["rent_increase"]) for _, total in totals] == (["10.00"] if credited else [])
+    assert db.query("SELECT tracking FROM extension_rates") == [{"tracking": 0}]
+
+
+def test_previously_adjusted_night_cannot_be_adjusted_again_after_unblock():
+    db = DB(":memory:")
+    db.execute(
+        "INSERT INTO extension_rates(listing_id,night,rate,applied,tracking) VALUES (100,'2030-06-11','110',1,0)"
+    )
+
+    class Hostaway:
+        async def reservation(self, _):
+            return {"status": "new", "listingMapId": 100, "departureDate": "2030-06-11"}
+
+        async def pricing_calendar(self, *args):
+            return [
+                {"date": "2030-06-11", "price": 110, "status": "blocked"},
+                {"date": "2030-06-12", "price": 110, "status": "available"},
+            ]
+
+    manager = ExtensionPricing(SimpleNamespace(db=db, hostaway=Hostaway()))
+    run(manager.start_extension(42, date(2030, 6, 10), dict(DEFAULTS, percent="10")))
+    assert db.query("SELECT rate,tracking FROM extension_rates") == [{"rate": "110", "tracking": 0}]

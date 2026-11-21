@@ -25,7 +25,43 @@ CREATE TABLE IF NOT EXISTS extension_rates (
     restored_on TEXT,
     PRIMARY KEY (listing_id, night)
 );
+CREATE TABLE IF NOT EXISTS extension_price_windows (
+    listing_id INTEGER NOT NULL,
+    night TEXT NOT NULL,
+    starts_at REAL NOT NULL,
+    cutoff REAL NOT NULL,
+    PRIMARY KEY (listing_id, night, cutoff)
+);
+CREATE TABLE IF NOT EXISTS extension_booking_events (
+    reservation_id INTEGER NOT NULL,
+    listing_id INTEGER NOT NULL,
+    arrival TEXT NOT NULL,
+    departure TEXT NOT NULL,
+    guest_key TEXT,
+    booked_at REAL NOT NULL,
+    currency TEXT NOT NULL,
+    PRIMARY KEY (reservation_id, listing_id, arrival, departure, booked_at)
+);
+CREATE TABLE IF NOT EXISTS extension_booked_nights (
+    listing_id INTEGER NOT NULL,
+    night TEXT NOT NULL,
+    reservation_id INTEGER NOT NULL,
+    currency TEXT NOT NULL,
+    net_rent TEXT NOT NULL,
+    rent_increase TEXT NOT NULL,
+    PRIMARY KEY (listing_id, night)
+);
 """)
+
+        columns = {row["name"] for row in self.conn.execute("PRAGMA table_info(extension_rates)")}
+        for name, sql_type in (
+            ("tracking", "INTEGER NOT NULL DEFAULT 1"),
+            ("base_rate", "TEXT"),
+            ("reservation_id", "INTEGER"),
+            ("guest_key", "TEXT"),
+        ):
+            if name not in columns:
+                self.conn.execute(f"ALTER TABLE extension_rates ADD COLUMN {name} {sql_type}")
 
     def query(self, sql, args=()):
         return [dict(row) for row in self.conn.execute(sql, args)]

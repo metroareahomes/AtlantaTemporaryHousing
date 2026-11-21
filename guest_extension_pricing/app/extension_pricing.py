@@ -7,6 +7,8 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 from zoneinfo import ZoneInfo
 
+from .report import guest_key, record_booking, record_price_window, reconcile_bookings
+
 OWNERS = ("Mike", "Kurt")
 TZ = ZoneInfo("America/New_York")
 
@@ -125,16 +127,21 @@ class ExtensionPricing:
                     payload = json.loads(payload)
                 except ValueError:
                     return False
-        if not isinstance(payload, dict) or payload.get("object") != "conversationMessage":
+        if not isinstance(payload, dict):
             return False
-        config = read_settings(self.db)
-        if not config["enabled"] or payload.get("event") != "message.received":
-            return True
         message = payload.get("data", payload)
-        if not isinstance(message, dict):
-            return True
-        if any(str(item.get("accountId")) != str(self.s.settings.hostaway_account_id)
-               for item in (payload, message) if item.get("accountId") is not None):
+        if not isinstance(message, dict) or any(
+            str(item.get("accountId")) != str(self.s.settings.hostaway_account_id)
+            for item in (payload, message) if item.get("accountId") is not None
+        ):
+            return False
+        event = payload.get("event")
+        if payload.get("object") == "reservation" and event in ("reservation.created", "reservation.updated"):
+            record_booking(self.db, message, event, self.s.now())
+            return False
+        if payload.get("object") != "conversationMessage":
+            return False
+        if event != "message.received" or not read_settings(self.db)["enabled"]:
             return True
         body = message.get("body")
         if (message.get("isIncoming") not in (1, "1")
@@ -178,13 +185,18 @@ class ExtensionPricing:
             for day in sorted(calendar, key=lambda item: item["date"]):
                 if not blocked(day):
                     return
-                rate = (money(day["price"]) * (1 + percent / 100)).quantize(
-                    Decimal(".01"), rounding=ROUND_HALF_UP)
-                if rate > 0:
-                    self.db.execute(
-                        "INSERT OR IGNORE INTO extension_rates(listing_id,night,rate) VALUES (?,?,?)",
-                        (listing_id, day["date"], str(rate)),
-                    )
+                if self.db.query("SELECT 1 FROM extension_rates WHERE listing_id=? AND night=?",
+                                 (listing_id, day["date"])):
+                    continue
+                base = money(day["price"])
+                rate = (base * (1 + percent / 100)).quantize(Decimal(".01"), rounding=ROUND_HALF_UP)
+                if rate <= 0 or rate == base:
+                    continue
+                self.db.execute(
+                    "INSERT OR IGNORE INTO extension_rates(listing_id,night,rate,base_rate,reservation_id,guest_key) "
+                    "VALUES (?,?,?,?,?,?)",
+                    (listing_id, day["date"], str(rate), str(base), reservation_id, guest_key(reservation)),
+                )
             first = last + timedelta(days=1)
 
     async def apply_rate(self, row, day, service_date, clock, config):
@@ -192,7 +204,7 @@ class ExtensionPricing:
         key = (listing_id, night)
         if not blocked(day):
             if day.get("status") in ("available", "reserved", "pending"):
-                self.db.execute("DELETE FROM extension_rates WHERE listing_id=? AND night=?", key)
+                self.db.execute("UPDATE extension_rates SET tracking=0 WHERE listing_id=? AND night=?", key)
             return
 
         if config["save"] <= clock < SYNC_TIME and row["captured_on"] != service_date:
@@ -217,6 +229,10 @@ class ExtensionPricing:
             after, = await self.s.hostaway.pricing_calendar(listing_id, night, night)
             if money(after["price"]) != money(target):
                 raise ValueError("Extension price readback did not match")
+        verified_at = self.s.now().astimezone(TZ)
+        if verified_at.date().isoformat() != service_date or SYNC_TIME <= verified_at.strftime("%H:%M") < config["restore"]:
+            return
+        record_price_window(self.db, row, verified_at)
         self.db.execute(
             "UPDATE extension_rates SET applied=1, restored_on=? WHERE listing_id=? AND night=?",
             (service_date if restore_due else row["restored_on"], *key),
@@ -225,12 +241,13 @@ class ExtensionPricing:
 
     async def tick(self):
         config = read_settings(self.db)
-        if not config["enabled"]:
-            return
         local = self.s.now().astimezone(TZ)
         today, clock = local.date(), local.strftime("%H:%M")
+        if not config["enabled"]:
+            reconcile_bookings(self.db, local)
+            return
         service_date = today.isoformat()
-        self.db.execute("DELETE FROM extension_rates WHERE night < ?", (service_date,))
+        self.db.execute("UPDATE extension_rates SET tracking=0 WHERE tracking=1 AND night < ?", (service_date,))
         if not SYNC_TIME <= clock < config["restore"]:
             for item in self.db.query(
                 "SELECT * FROM extension_messages WHERE processed=0 ORDER BY attempts,id LIMIT 20"
@@ -245,7 +262,7 @@ class ExtensionPricing:
                     continue
                 self.db.execute("UPDATE extension_messages SET processed=1 WHERE id=?", (item["id"],))
 
-        for row in self.db.query("SELECT * FROM extension_rates ORDER BY listing_id,night"):
+        for row in self.db.query("SELECT * FROM extension_rates WHERE tracking=1 ORDER BY listing_id,night"):
             night = row["night"]
             try:
                 day, = await self.s.hostaway.pricing_calendar(row["listing_id"], night, night)
@@ -253,3 +270,4 @@ class ExtensionPricing:
             except Exception:
                 self.db.log("pricing.extension_failed", f"Could not verify extension price for "
                             f"listing {row['listing_id']} on {night}; will retry", level="warning")
+        reconcile_bookings(self.db, self.s.now())
