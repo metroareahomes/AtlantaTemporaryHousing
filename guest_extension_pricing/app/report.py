@@ -90,10 +90,12 @@ def reconcile_bookings(db, now):
     db.execute("DELETE FROM extension_price_windows WHERE cutoff < ?", ((now - timedelta(days=30)).timestamp(),))
 
 
-def report_rows(db):
+def report_rows(db, owner=None):
     rows = db.query(
         "SELECT booked.*, rates.stay_average_rate, rates.base_rate FROM extension_booked_nights booked "
-        "LEFT JOIN extension_rates rates USING (listing_id, night) ORDER BY booked.night DESC, booked.listing_id"
+        "LEFT JOIN extension_rates rates USING (listing_id, night) "
+        "WHERE (? IS NULL OR rates.owner=?) ORDER BY booked.night DESC, booked.listing_id",
+        (owner, owner),
     )
     totals = {}
     for row in rows:

@@ -28,6 +28,9 @@ def test_extension_rates_survive_sync_and_stop_when_unblocked():
     writes = []
 
     class Hostaway:
+        async def listing_details(self, _):
+            return {"listingTags": ["Mike"]}
+
         async def reservation(self, reservation_id):
             assert reservation_id == 9
             return dict(status="new", listingMapId=100, departureDate=dates[0])
@@ -46,7 +49,7 @@ def test_extension_rates_survive_sync_and_stop_when_unblocked():
                 writes.append((night, row["price"]))
 
     db = DB(":memory:")
-    db.set_setting(SETTINGS_KEY, json.dumps({"enabled": True, "percent": "-10"}))
+    db.set_setting(SETTINGS_KEY, json.dumps({"enabled": True, "owner_markups": {"Mike": "-10"}}))
     now = datetime(2030, 6, 10, 17, tzinfo=TZ)
     manager = ExtensionPricing(SimpleNamespace(
         db=db, hostaway=Hostaway(), now=lambda: now, settings=SimpleNamespace(hostaway_account_id="123")
@@ -109,13 +112,16 @@ def test_extension_filters_booked_nights_and_listing_tags(nights, listing_tags, 
         async def listing_details(self, _):
             return {"listingTags": listing_tags}
 
+        async def finance_fields(self, _):
+            return [{"name": "baseRate", "total": "1400"}]
+
         async def pricing_calendar(self, _, start, end):
             calls.append((start, end))
             return [{"date": start, "status": "available"}]
 
     db = DB(":memory:")
     manager = ExtensionPricing(SimpleNamespace(db=db, hostaway=Hostaway()))
-    config = dict(DEFAULTS, percent="10", min_nights=7, max_nights=14, tags=selected)
+    config = dict(DEFAULTS, percent="10", min_nights=7, max_nights=14, tags=selected, use_stay_average=True)
     run(manager.start_extension(9, today, config))
     assert bool(calls) == eligible
 
@@ -148,10 +154,18 @@ def test_standalone_ingress_settings_persist(tmp_path):
         assert client.post("/settings", data=dict(form, csrf="invalid")).status_code == 403
         assert client.post("/settings", data=dict(form, extension_enabled="on")).status_code == 400
         assert client.post("/settings", data=form).status_code == 200
+        for owner, percent in (("Mike", "10"), ("Kurt", "25")):
+            response = client.post("/owner-markup", data={"owner": owner, "percent": percent, "csrf": form["csrf"]})
+            assert response.status_code == 200
+            assert f'value="{percent}"' in response.text
+            assert 'name="extension_tag_' not in response.text
+        assert client.post("/settings", data=form).status_code == 200
     with TestClient(create_app({}, path, None, hostaway=Hostaway())) as client:
         response = client.get("/")
         assert 'name="extension_min_nights" value="7"' in response.text
         assert 'name="extension_tag_kurt" checked' in response.text
+        assert 'name="percent" value="10"' in client.get("/?owner=Mike").text
+        assert 'name="percent" value="25"' in client.get("/?owner=Kurt").text
 
 
 @pytest.mark.parametrize("reservation_id, external_guest, hour, minute, restore, credited", [
@@ -213,6 +227,9 @@ def test_previously_adjusted_night_cannot_be_adjusted_again_after_unblock():
     )
 
     class Hostaway:
+        async def listing_details(self, _):
+            return {"listingTags": ["Mike"]}
+
         async def reservation(self, _):
             return {"status": "new", "listingMapId": 100, "departureDate": "2030-06-11"}
 
@@ -223,16 +240,20 @@ def test_previously_adjusted_night_cannot_be_adjusted_again_after_unblock():
             ]
 
     manager = ExtensionPricing(SimpleNamespace(db=db, hostaway=Hostaway()))
-    run(manager.start_extension(42, date(2030, 6, 10), dict(DEFAULTS, percent="10")))
+    run(manager.start_extension(42, date(2030, 6, 10), dict(DEFAULTS, owner_markups={"Mike": "10"})))
     assert db.query("SELECT rate,tracking FROM extension_rates") == [{"rate": "110", "tracking": 0}]
 
 
 @pytest.mark.parametrize("percent, expected", [
+    (None, [("2030-06-12", "140.00")]),
     ("0", [("2030-06-12", "140.00")]),
     ("10", [("2030-06-12", "154.00"), ("2030-06-13", "154.00")]),
 ])
 def test_stay_average_only_raises_nights_below_target(percent, expected):
     class Hostaway:
+        async def listing_details(self, _):
+            return {"listingTags": ["Mike"]}
+
         async def reservation(self, _):
             return {"status": "new", "listingMapId": 100,
                     "arrivalDate": "2030-06-05", "departureDate": "2030-06-12"}
@@ -252,11 +273,11 @@ def test_stay_average_only_raises_nights_below_target(percent, expected):
 
     db = DB(":memory:")
     manager = ExtensionPricing(SimpleNamespace(db=db, hostaway=Hostaway()))
-    config = dict(DEFAULTS, use_stay_average=True, percent=percent)
+    config = dict(DEFAULTS, use_stay_average=True, percent="99", tags=["Kurt"] if percent is not None else [], owner_markups={"Mike": percent, "Kurt": "30"} if percent is not None else {"Kurt": "30"})
     run(manager.start_extension(9, date(2030, 6, 10), config))
-    rows = db.query("SELECT night,rate,stay_average_rate FROM extension_rates ORDER BY night")
+    rows = db.query("SELECT night,rate,stay_average_rate,owner FROM extension_rates ORDER BY night")
     assert [(row["night"], row["rate"]) for row in rows] == expected
-    assert all(row["stay_average_rate"] == "140.00" for row in rows)
+    assert all(row["stay_average_rate"] == "140.00" and row["owner"] == "Mike" for row in rows)
     row = db.query("SELECT * FROM extension_rates ORDER BY night")[0]
     run(manager.apply_rate(row, {"price": 170, "status": "blocked"}, "2030-06-10", "18:00", config))
     assert db.query("SELECT applied FROM extension_rates WHERE night=?", (row["night"],)) == [{"applied": 0}]
@@ -274,8 +295,8 @@ def test_ledger_compares_average_only_with_final_price():
         ("2030-06-13", "120", None, "132", "12"),
     ):
         db.execute(
-            "INSERT INTO extension_rates(listing_id,night,base_rate,stay_average_rate,rate) VALUES (100,?,?,?,?)",
-            (night, base, average, final),
+            "INSERT INTO extension_rates(listing_id,night,base_rate,stay_average_rate,rate,owner) VALUES (100,?,?,?,?,?)",
+            (night, base, average, final, "Mike" if night.endswith("11") else "Kurt"),
         )
         db.execute(
             "INSERT INTO extension_booked_nights VALUES (100,?,9,'USD',?,?)",
@@ -285,3 +306,7 @@ def test_ledger_compares_average_only_with_final_price():
     assert [row["average_only"] for row in rows] == [None, Decimal("0.00"), Decimal("20.00")]
     assert dict(totals)["USD"]["average_only"] == Decimal("20.00")
     assert dict(totals)["USD"]["rent_increase"] == Decimal("50.00")
+    mike, mike_totals = report_rows(db, "Mike")
+    kurt, kurt_totals = report_rows(db, "Kurt")
+    assert len(mike) == 1 and dict(mike_totals)["USD"]["rent_increase"] == Decimal("34")
+    assert len(kurt) == 2 and dict(kurt_totals)["USD"]["rent_increase"] == Decimal("16")

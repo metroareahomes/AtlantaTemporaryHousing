@@ -1,5 +1,5 @@
 name: Guest Extension Pricing
-version: "0.1.2"
+version: "0.1.3"
 slug: guest_extension_pricing
 description: Adjust blocked nights after a Hostaway guest asks to extend
 arch:

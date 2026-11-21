@@ -19,7 +19,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.templating import Jinja2Templates
 
 from .db import DB
-from .extension_pricing import ExtensionPricing, SETTINGS_KEY, TZ, read_settings, validate_settings
+from .extension_pricing import ExtensionPricing, OWNERS, SETTINGS_KEY, TZ, read_settings, validate_percent, validate_settings
 from .hostaway import HostawayClient
 from .report import report_rows
 
@@ -75,14 +75,14 @@ def create_app(options, db_path, supervisor_token, *, hostaway=None, stdin=False
 
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 
-    def page(request, message="", status=200):
-        rows, totals = report_rows(db)
+    def page(request, message="", status=200, owner=None):
+        rows, totals = report_rows(db, owner)
         return templates.TemplateResponse(
             request, "index.html", {
                 "config": read_settings(db), "csrf": csrf, "message": message,
                 "connected": db.get_setting("connected"),
                 "last_message": db.get_setting("last_message_event"),
-                "report_rows": rows, "report_totals": totals,
+                "report_rows": rows, "report_totals": totals, "owner": owner, "owners": OWNERS,
             }, status_code=status,
         )
 
@@ -93,20 +93,44 @@ def create_app(options, db_path, supervisor_token, *, hostaway=None, stdin=False
         return form
 
     @app.get("/")
-    async def index(request: Request):
-        return page(request)
+    async def index(request: Request, owner: str | None = None):
+        if owner is not None and owner not in OWNERS:
+            raise HTTPException(404)
+        return page(request, owner=owner)
 
     @app.post("/settings")
     async def settings(request: Request):
         form = await checked_form(request)
         try:
             config = validate_settings(form)
+            config["owner_markups"] = read_settings(db)["owner_markups"]
+            for value in config["owner_markups"].values():
+                validate_percent(value, config["use_stay_average"])
             if config["enabled"] and not db.get_setting("connected"):
                 raise ValueError("Connect Hostaway before enabling the automation.")
         except ValueError as exc:
             return page(request, str(exc), 400)
         db.set_setting(SETTINGS_KEY, json.dumps(config))
         return page(request, "Settings saved.")
+
+    @app.post("/owner-markup")
+    async def owner_markup(request: Request):
+        form = await checked_form(request)
+        owner = form.get("owner")
+        if owner not in OWNERS:
+            raise HTTPException(404)
+        config = read_settings(db)
+        value = str(form.get("percent", "")).strip()
+        if value:
+            try:
+                validate_percent(value, config["use_stay_average"])
+            except ValueError as exc:
+                return page(request, str(exc), 400, owner=owner)
+            config["owner_markups"][owner] = value
+        else:
+            config["owner_markups"].pop(owner, None)
+        db.set_setting(SETTINGS_KEY, json.dumps(config))
+        return page(request, "Markup saved.", owner=owner)
 
     @app.post("/connect")
     async def connect(request: Request):

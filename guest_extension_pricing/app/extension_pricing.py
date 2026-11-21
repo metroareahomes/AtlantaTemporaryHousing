@@ -14,7 +14,7 @@ TZ = ZoneInfo("America/New_York")
 
 DEFAULTS = {
     "enabled": False, "percent": "0", "save": "00:45", "restore": "04:00",
-    "min_nights": None, "max_nights": None, "tags": [], "use_stay_average": False,
+    "min_nights": None, "max_nights": None, "tags": [], "use_stay_average": False, "owner_markups": {},
 }
 SETTINGS_KEY = "extension_pricing"
 SYNC_TIME = "02:00"
@@ -80,18 +80,22 @@ def read_settings(db):
     return {**DEFAULTS, **json.loads(db.get_setting(SETTINGS_KEY, "{}"))}
 
 
-def validate_settings(form):
-    config = {key: str(form.get(f"extension_{key}", "")).strip() for key in ("percent", "save", "restore")}
-    config["use_stay_average"] = form.get("extension_use_stay_average") == "on"
-    config["percent"] = config["percent"] or "0"
+def validate_percent(value, use_stay_average):
     try:
-        percent = Decimal(config["percent"])
+        percent = Decimal(value)
         if not percent.is_finite() or percent <= -100 or percent != percent.quantize(Decimal(".01")):
             raise ValueError
     except (InvalidOperation, ValueError):
         raise ValueError("Enter a percentage above -100 with up to two decimal places.") from None
-    if config["use_stay_average"] and percent < 0:
+    if use_stay_average and percent < 0:
         raise ValueError("Enter zero or a positive markup when using the stay average.")
+
+
+def validate_settings(form):
+    config = {key: str(form.get(f"extension_{key}", "")).strip() for key in ("percent", "save", "restore")}
+    config["use_stay_average"] = form.get("extension_use_stay_average") == "on"
+    config["percent"] = config["percent"] or "0"
+    validate_percent(config["percent"], config["use_stay_average"])
     if any(not re.fullmatch(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]", config[key])
            for key in ("save", "restore")):
         raise ValueError("Enter valid save and rewrite times.")
@@ -164,9 +168,9 @@ class ExtensionPricing:
         return True
 
     async def start_extension(self, reservation_id, today, config):
-        percent = Decimal(config["percent"])
         use_stay_average = config.get("use_stay_average", False)
-        if not percent and not use_stay_average:
+        owner_markups = config.get("owner_markups", {})
+        if not Decimal(config["percent"]) and not owner_markups and not use_stay_average:
             return
         reservation = await self.s.hostaway.reservation(reservation_id)
         if reservation.get("status") not in ("new", "modified"):
@@ -180,10 +184,17 @@ class ExtensionPricing:
             nights = (first - date.fromisoformat(reservation["arrivalDate"])).days
             if nights < (minimum or 1) or (maximum is not None and nights > maximum):
                 return
-        if config["tags"]:
-            listing = await self.s.hostaway.listing_details(listing_id)
-            if not set(config["tags"]).intersection(owner_tags(listing) or ()):
-                return
+        listing = await self.s.hostaway.listing_details(listing_id)
+        tags = owner_tags(listing) or set()
+        owner = next(iter(tags)) if len(tags) == 1 else None
+        if owner not in owner_markups and config["tags"] and not set(config["tags"]).intersection(tags):
+            return
+        if len(tags) > 1 and owner_markups:
+            self.db.log("pricing.owner_conflict", f"Listing {listing_id} has both owner tags.", level="warning")
+            return
+        percent = Decimal(owner_markups.get(owner, "0") if owner else config["percent"])
+        if not percent and not use_stay_average:
+            return
         stay_average = average_target = None
         if use_stay_average:
             fields = await self.s.hostaway.finance_fields(reservation_id)
@@ -216,10 +227,10 @@ class ExtensionPricing:
                 if rate <= 0 or rate == base:
                     continue
                 self.db.execute(
-                    "INSERT OR IGNORE INTO extension_rates(listing_id,night,rate,base_rate,reservation_id,guest_key,use_stay_average,stay_average_rate) "
-                    "VALUES (?,?,?,?,?,?,?,?)",
+                    "INSERT OR IGNORE INTO extension_rates(listing_id,night,rate,base_rate,reservation_id,guest_key,use_stay_average,stay_average_rate,owner) "
+                    "VALUES (?,?,?,?,?,?,?,?,?)",
                     (listing_id, day["date"], str(rate), str(base), reservation_id, guest_key(reservation),
-                     use_stay_average, str(stay_average) if stay_average is not None else None),
+                     use_stay_average, str(stay_average) if stay_average is not None else None, owner),
                 )
             first = last + timedelta(days=1)
 
