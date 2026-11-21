@@ -91,8 +91,8 @@ def test_extension_rates_survive_sync_and_stop_when_unblocked():
     (15, ["Kurt"], ["Kurt"], False),
     (10, ["Kurt"], ["Mike"], False),
     (10, [], ["Mike", "Kurt"], False),
-    (10, [], [], True),
-    (10, ["Mike", "Kurt"], ["Kurt"], True),
+    (10, [], [], False),
+    (10, ["Mike", "Kurt"], ["Kurt"], False),
 ])
 def test_extension_filters_booked_nights_and_listing_tags(nights, listing_tags, selected, eligible):
     today = date(2030, 6, 10)
@@ -121,8 +121,9 @@ def test_extension_filters_booked_nights_and_listing_tags(nights, listing_tags, 
 
     db = DB(":memory:")
     manager = ExtensionPricing(SimpleNamespace(db=db, hostaway=Hostaway()))
-    config = dict(DEFAULTS, percent="10", min_nights=7, max_nights=14, tags=selected, use_stay_average=True)
-    run(manager.start_extension(9, today, config))
+    rules = {owner: dict(DEFAULTS, enabled=owner in selected, percent="10", min_nights=7, max_nights=14)
+             for owner in ("Mike", "Kurt")}
+    run(manager.start_extension(9, today, rules))
     assert bool(calls) == eligible
 
 
@@ -130,7 +131,7 @@ def test_extension_filter_settings_allow_blank_bounds_and_reject_reversed_range(
     form = {"extension_percent": "10", "extension_save": "00:45", "extension_restore": "04:00",
             "extension_min_nights": "", "extension_max_nights": "14", "extension_tag_mike": "on"}
     settings = validate_settings(form)
-    assert (settings["min_nights"], settings["max_nights"], settings["tags"]) == (None, 14, ["Mike"])
+    assert (settings["min_nights"], settings["max_nights"]) == (None, 14)
     with pytest.raises(ValueError, match="Minimum stay length"):
         validate_settings(dict(form, extension_min_nights="15"))
 
@@ -142,7 +143,7 @@ def test_standalone_ingress_settings_persist(tmp_path):
 
     path = tmp_path / "extension.db"
     form = {"extension_percent": "15", "extension_save": "00:45", "extension_restore": "04:00",
-            "extension_min_nights": "7", "extension_max_nights": "14", "extension_tag_kurt": "on"}
+            "extension_min_nights": "7", "extension_max_nights": "14", "owner": "Mike"}
     class Hostaway:
         async def close(self):
             pass
@@ -155,17 +156,19 @@ def test_standalone_ingress_settings_persist(tmp_path):
         assert client.post("/settings", data=dict(form, extension_enabled="on")).status_code == 400
         assert client.post("/settings", data=form).status_code == 200
         for owner, percent in (("Mike", "10"), ("Kurt", "25")):
-            response = client.post("/owner-markup", data={"owner": owner, "percent": percent, "csrf": form["csrf"]})
+            response = client.post("/settings", data=dict(form, owner=owner, extension_percent=percent,
+                                                           extension_min_nights="7" if owner == "Mike" else "3"))
             assert response.status_code == 200
             assert f'value="{percent}"' in response.text
             assert 'name="extension_tag_' not in response.text
-        assert client.post("/settings", data=form).status_code == 200
     with TestClient(create_app({}, path, None, hostaway=Hostaway())) as client:
         response = client.get("/")
         assert 'name="extension_min_nights" value="7"' in response.text
-        assert 'name="extension_tag_kurt" checked' in response.text
-        assert 'name="percent" value="10"' in client.get("/?owner=Mike").text
-        assert 'name="percent" value="25"' in client.get("/?owner=Kurt").text
+        assert 'All homes' not in response.text
+        assert 'name="extension_percent" value="10"' in response.text
+        kurt = client.get("/?owner=Kurt").text
+        assert 'name="extension_min_nights" value="3"' in kurt
+        assert 'name="extension_percent" value="25"' in kurt
 
 
 @pytest.mark.parametrize("reservation_id, external_guest, hour, minute, restore, credited", [
@@ -240,7 +243,7 @@ def test_previously_adjusted_night_cannot_be_adjusted_again_after_unblock():
             ]
 
     manager = ExtensionPricing(SimpleNamespace(db=db, hostaway=Hostaway()))
-    run(manager.start_extension(42, date(2030, 6, 10), dict(DEFAULTS, owner_markups={"Mike": "10"})))
+    run(manager.start_extension(42, date(2030, 6, 10), {"Mike": dict(DEFAULTS, enabled=True, percent="10")}))
     assert db.query("SELECT rate,tracking FROM extension_rates") == [{"rate": "110", "tracking": 0}]
 
 
@@ -273,8 +276,10 @@ def test_stay_average_only_raises_nights_below_target(percent, expected):
 
     db = DB(":memory:")
     manager = ExtensionPricing(SimpleNamespace(db=db, hostaway=Hostaway()))
-    config = dict(DEFAULTS, use_stay_average=True, percent="99", tags=["Kurt"] if percent is not None else [], owner_markups={"Mike": percent, "Kurt": "30"} if percent is not None else {"Kurt": "30"})
-    run(manager.start_extension(9, date(2030, 6, 10), config))
+    config = dict(DEFAULTS, enabled=True, use_stay_average=True, percent=percent or "0")
+    run(manager.start_extension(9, date(2030, 6, 10), {
+        "Mike": config, "Kurt": dict(DEFAULTS, enabled=True, percent="30"),
+    }))
     rows = db.query("SELECT night,rate,stay_average_rate,owner FROM extension_rates ORDER BY night")
     assert [(row["night"], row["rate"]) for row in rows] == expected
     assert all(row["stay_average_rate"] == "140.00" and row["owner"] == "Mike" for row in rows)
@@ -310,3 +315,43 @@ def test_ledger_compares_average_only_with_final_price():
     kurt, kurt_totals = report_rows(db, "Kurt")
     assert len(mike) == 1 and dict(mike_totals)["USD"]["rent_increase"] == Decimal("34")
     assert len(kurt) == 2 and dict(kurt_totals)["USD"]["rent_increase"] == Decimal("16")
+
+
+def test_link_reuses_stay_webhook_and_preserves_primary_delivery():
+    import httpx
+
+    from app.ha import HAClient
+    from guest_extension_pricing.app.main import link_stay_webhook
+
+    original_action = {"action": "hassio.addon_stdin", "data": {
+        "addon": "123456ab_stay_automation", "input": "{{ trigger.json | tojson }}",
+    }}
+    config = {"triggers": [{"trigger": "webhook", "webhook_id": "shared"}],
+              "actions": [original_action]}
+    writes = []
+
+    def handle(request):
+        if request.url.path == "/addons/self/info":
+            return httpx.Response(200, json={"data": {"slug": "123456ab_guest_extension_pricing"}})
+        if request.method == "POST":
+            updated = json.loads(request.content)
+            config.update(updated)
+            writes.append(updated)
+            return httpx.Response(200, json={})
+        return httpx.Response(200, json=config)
+
+    async def exercise():
+        async with httpx.AsyncClient(base_url="http://supervisor/core", transport=httpx.MockTransport(handle)) as client:
+            assert await link_stay_webhook(client) == "shared"
+            assert await link_stay_webhook(client) == "shared"
+            assert len(writes) == 1
+            assert writes[0]["triggers"] == [{"trigger": "webhook", "webhook_id": "shared"}]
+            primary, forward = writes[0]["actions"]
+            assert primary == original_action
+            assert forward["data"]["addon"] == "123456ab_guest_extension_pricing"
+            assert forward["continue_on_error"] is True
+            ha = HAClient("http://supervisor/core", "", http=client)
+            await ha.create_webhook_automation("shared", "123456ab_stay_automation")
+            assert writes[-1]["actions"] == [primary, forward]
+
+    run(exercise())

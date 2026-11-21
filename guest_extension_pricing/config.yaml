@@ -1,5 +1,5 @@
 name: Guest Extension Pricing
-version: "0.1.3"
+version: "0.1.4"
 slug: guest_extension_pricing
 description: Adjust blocked nights after a Hostaway guest asks to extend
 arch:
@@ -17,8 +17,6 @@ stdin: true
 options:
   hostaway_account_id: ""
   hostaway_api_key: ""
-  home_assistant_public_url: ""
 schema:
   hostaway_account_id: str
   hostaway_api_key: password
-  home_assistant_public_url: str

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.40 — Shared Hostaway webhook
+
+- Preserve Guest Extension Pricing delivery when rebuilding the Stay Automation webhook configuration.
+
 ## 0.6.39 — Setup navigation
 
 - Split Setup into Connections, Locks and guest access, Thermostats, Pricing rules, and Staff email alerts.
