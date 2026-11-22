@@ -146,7 +146,7 @@ class Syncer:
                         level='warning', property_id=lock['property_id'])
             return False
 
-    async def read_lock_codes(self, lock: dict[str, Any]) -> None:
+    async def read_lock_codes(self, lock: dict[str, Any]) -> bool:
         try:
             codes = await self.ha.get_codes(lock["entity_id"])
         except Exception as exc:  # network, HA or Schlage cloud
@@ -154,8 +154,9 @@ class Syncer:
                             (str(exc)[:300] or type(exc).__name__, lock["id"]))
             self.db.log("lock.read_failed", f"Could not read codes from {lock['name']}: {exc}",
                         level="warning", property_id=lock["property_id"])
-            return
+            return False
         self.store_lock_snapshot(lock["id"], codes)
+        return True
 
     def store_lock_snapshot(self, lock_id: int, codes: dict[str, str]) -> None:
         self.db.execute(

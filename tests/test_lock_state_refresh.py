@@ -21,6 +21,8 @@ def test_check_lock_refreshes_only_target_availability(syncer,state,offline):
     response=TestClient(create_app(syncer)).post('/lock-refresh',data={'property_id':lock['property_id']},follow_redirects=False)
     assert response.status_code==303
     assert calls==[lock['entity_id']]
+    assert syncer.db.one("SELECT id FROM events WHERE kind='lock.checked' AND property_id=?",
+                         (lock['property_id'],))
     updated=syncer.db.one('SELECT * FROM locks WHERE id=?',(lock['id'],))
     assert (updated['state']=='unavailable') is offline
     assert updated['fail_count']==2 and updated['last_error']=='keep verification failure'
