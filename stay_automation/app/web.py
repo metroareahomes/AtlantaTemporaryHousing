@@ -854,11 +854,27 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, 
     @app.post("/lock-refresh")
     async def lock_refresh(property_id: int = Form(...), show: str = Form("attention"),
                            sort: str = Form("attention"), q: str = Form("")):
-        checked = True
-        for lock in db.query("SELECT * FROM locks WHERE property_id = ?", (property_id,)):
-            checked = await syncer.refresh_lock_state(lock) and checked
-            await syncer.read_lock_codes(lock)
-        notice = "Lock state and codes checked" if checked else "Codes checked; current lock state could not be confirmed. Previous availability retained."
+        locks = db.query("SELECT * FROM locks WHERE property_id = ?", (property_id,))
+        if not locks:
+            return _done(_board_back(show, sort, q), "No locks found for this property.")
+        states_checked = codes_checked = True
+        for lock in locks:
+            state_checked = await syncer.refresh_lock_state(lock)
+            code_checked = await syncer.read_lock_codes(lock)
+            states_checked = states_checked and state_checked
+            codes_checked = codes_checked and code_checked
+            if code_checked:
+                outcome = "codes read"
+                if not state_checked:
+                    outcome += "; current lock state could not be confirmed"
+                db.log("lock.checked", f"Manual check of {lock['name']}: {outcome}",
+                       property_id=property_id)
+        if not codes_checked:
+            notice = "Could not read codes from one or more locks. See the activity log."
+        elif not states_checked:
+            notice = "Codes checked; current lock state could not be confirmed. Previous availability retained."
+        else:
+            notice = "Lock state and codes checked"
         return _done(_board_back(show, sort, q), notice)
 
     @app.get("/extension-pricing", response_class=HTMLResponse)

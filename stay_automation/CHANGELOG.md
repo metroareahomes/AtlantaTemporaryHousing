@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.43 — Manual lock check results
+
+- Log successful manual lock checks and report failed code reads on the Status page.
+
 ## 0.6.42 — Pricing Setup cleanup
 
 - Remove the old weekend pricing simulation and its Save button from Pricing Setup.
