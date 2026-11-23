@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.60 — Reservation review property filter
+
+- Let Kurt and Mike review one property at a time and filter existing reservation cards.
+
 ## 0.6.59 — Mike’s extension automation
 
 - Add Mike’s extension preview, calendar and messaging controls, and inquiry workflow.

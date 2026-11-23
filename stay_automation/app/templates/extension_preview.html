@@ -3,16 +3,31 @@
 <div class="page-head"><h1>{{ extension_owner }}’s Extension Preview</h1></div>
 <section class="panel">
 <p>Review current and upcoming reservations across {{ extension_owner }}’s homes. This preview reads Hostaway conversations without changing the calendar or sending messages.</p>
+<form action="extension-preview" method="get">
+<input type="hidden" name="owner" value="{{ extension_owner }}">
+<label for="review-property">Property</label>
+<select id="review-property" name="listing">
+<option value="0">All properties</option>
+{% for property in live_properties %}
+<option value="{{ property.hostaway_listing_id }}" {% if preview_listing == property.hostaway_listing_id %}selected{% endif %}>{{ property.name }}</option>
+{% endfor %}
+</select>
+<button type="submit">Filter results</button>
+{% if configured and not scan.running %}
+<button type="submit" formmethod="post" formaction="extension-preview?owner={{ extension_owner }}">Review reservations</button>
+{% endif %}
+</form>
 {% if not configured %}
 <p>Add the OpenAI API key in the Stay Automation app’s Configuration tab to run a review.</p>
 {% elif scan.running %}
 <p role="status">Reviewed {{ scan.completed }} of {{ scan.total }} reservations.</p>
-<a href="extension-preview?owner={{ extension_owner }}">Refresh results</a>
-{% else %}
-<form action="extension-preview?owner={{ extension_owner }}" method="post"><button>Review reservations</button></form>
+<a href="extension-preview?owner={{ extension_owner }}&amp;listing={{ preview_listing }}">Refresh results</a>
 {% endif %}
-{% if scan.finished_at %}
-<p>Last review {{ scan.finished_at }} · {{ scan.completed }} reservations</p>
+{% if scan.finished_at or scan.running %}
+{% if scan.listing %}
+<p>Review scope: {% for property in live_properties if property.hostaway_listing_id == scan.listing %}{{ property.name }}{% else %}Selected property{% endfor %}.</p>
+{% endif %}
+<p>Showing {{ preview_rows|length }} reservation cards{% if scan.finished_at %} · Last review {{ scan.finished_at }}{% endif %}.</p>
 {% endif %}
 </section>
 <section class="panel">
@@ -42,7 +57,7 @@ Apply extension and turnover holds to {{ extension_owner }}’s calendars</label
 {% if calendar_refresh.message %}<p role="status">{{ calendar_refresh.message }}</p>{% endif %}
 {% endif %}
 </section>
-{% for row in scan.rows %}
+{% for row in preview_rows %}
 <section class="panel" id="reservation-{{ row.id }}">
 <h2>{{ row.property }} · {{ row.guest_name or 'Guest' }}</h2>
 <p>Reservation {{ row.id }} · {{ row.arrival_date }} to {{ row.departure_date }}</p>
@@ -76,7 +91,7 @@ Apply extension and turnover holds to {{ extension_owner }}’s calendars</label
 {% endif %}
 {% if not row.error %}
 <h3>Dry-run an inquiry</h3>
-<form action="extension-preview-inquiry?owner={{ extension_owner }}#reservation-{{ row.id }}" method="post">
+<form action="extension-preview-inquiry?owner={{ extension_owner }}&amp;listing={{ preview_listing }}#reservation-{{ row.id }}" method="post">
 <input type="hidden" name="reservation" value="{{ row.id }}">
 <label>Inquiry arrival <input type="date" name="arrival" required value="{{ inquiry_arrival if inquiry_reservation == row.id else '' }}"></label>
 <label>Inquiry checkout <input type="date" name="departure" required value="{{ inquiry_departure if inquiry_reservation == row.id else '' }}"></label>
