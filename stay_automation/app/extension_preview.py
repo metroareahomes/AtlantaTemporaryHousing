@@ -1,5 +1,6 @@
 """Read-only calendar and conversation previews for an owner's reservations."""
 import json
+import re
 from datetime import date, datetime, time, timedelta
 
 import httpx
@@ -16,6 +17,15 @@ LABELS = {
     "booked": "Guest reports booking · Verify in Hostaway",
     "unclear": "Extension outlook unknown",
 }
+
+
+def verified_guest_quote(quote, body):
+    """Find the original quote despite typographic apostrophe or whitespace changes."""
+    if not isinstance(quote, str) or not quote.strip():
+        return None
+    words = [re.escape(word).replace("’", "'").replace("'", "['’]") for word in quote.split()]
+    match = re.search(r"\s+".join(words), body)
+    return match.group() if match else None
 
 
 def turnover_nights(arrival, checkout):
@@ -245,7 +255,13 @@ async def review_reservation(syncer, client, row):
     result = await assess(client, thread, checkout, [], outlook=True) if thread else {}
     status = result.get("status", "unclear")
     evidence = thread.get(result.get("guest_message_id"))
-    quote = result.get("extension_evidence_quote")
+    quote = verified_guest_quote(result.get("extension_evidence_quote"), evidence[2]) if evidence and evidence[1] else None
+    if not thread:
+        row["review_detail"] = "No messages were returned for this reservation."
+    elif status != "unclear" and not quote:
+        row["review_detail"] = "The reviewer identified a possible plan but its quote could not be verified against the guest messages."
+    elif status == "unclear":
+        row["review_detail"] = "The reviewer did not identify a clear extension plan in the available messages."
     proposed = result.get("proposed_checkout")
     end = date.fromisoformat(proposed) if proposed else None
     minimum = result.get("minimum_stay_through")
@@ -253,8 +269,7 @@ async def review_reservation(syncer, client, row):
     minimum_only = minimum is not None and minimum >= checkout and (end is None or end <= minimum)
     if minimum_only:
         end = minimum + timedelta(days=1)
-    if (not evidence or not evidence[1] or not isinstance(quote, str)
-            or not quote.strip() or quote.strip() not in evidence[2]
+    if (not quote
             or evidence[2].strip().casefold().rstrip(".") == "alteration request received"
             or (status == "early_checkout" and (end is None or not arrival < end < checkout))
             or (end is not None and end <= checkout and status not in ("early_checkout", "declined"))):
@@ -262,7 +277,7 @@ async def review_reservation(syncer, client, row):
     row["extension_status"] = status
     row["note"] = LABELS.get(status, LABELS["unclear"])
     if evidence and evidence[1] and status != "unclear":
-        row["evidence"] = quote.strip()
+        row["evidence"] = quote
     if status == "early_checkout":
         row["note"] = f"Guest reports an earlier checkout on {end:%b %d, %Y} · Booking change unverified"
         row["next_action"] = "Verify the earlier checkout in Hostaway before releasing any booked nights."
