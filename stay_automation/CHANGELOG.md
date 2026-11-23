@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.44 — Extension follow-up previews
+
+- Preview guest extension follow-ups through staff alerts when an OpenAI API key is configured.
+
 ## 0.6.43 — Manual lock check results
 
 - Log successful manual lock checks and report failed code reads on the Status page.

@@ -17,6 +17,7 @@ CATEGORIES = {'battery': 'Low lock batteries', 'locks': 'Lock failures / offline
               'guest_access': 'Guest codes / backup access', 'thermostats': 'Thermostat failures / offline',
               'integration': 'Integration reauthorization', 'hostaway': 'Hostaway sync failures',
               'temperature_pauses': 'Occupied temperature pauses', 'arrivals': 'Daily arrivals',
+              'extension_followups': 'Extension follow-up previews',
               'system': 'System / unassigned-owner alerts'}
 SMTP_FIELDS = ('smtp_host', 'smtp_port', 'smtp_security', 'smtp_username', 'smtp_from', 'alert_properties_url')
 
