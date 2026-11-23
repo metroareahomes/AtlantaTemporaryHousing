@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.50 — Minimum extension dates
+
+- Preview a guest’s minimum stay when their final checkout is unknown.
+
 ## 0.6.49 — Extension and inquiry previews
 
 - Show proposed Hostaway notes, turnover after a proposed extension, and drafts for eligible alteration reminders and overlapping inquiries.
