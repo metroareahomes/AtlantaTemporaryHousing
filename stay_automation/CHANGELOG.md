@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.51 — Inquiry dry run
+
+- Simulate inquiry dates, guest replies, follow-up timing, and proposed messages without changing Hostaway.
+
 ## 0.6.50 — Minimum extension dates
 
 - Preview a guest’s minimum stay when their final checkout is unknown.

@@ -4,8 +4,10 @@ import json
 import re
 import secrets
 import sqlite3
+
+import httpx
 from contextlib import asynccontextmanager, nullcontext, suppress
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode, urlsplit, parse_qs
@@ -18,7 +20,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from .extension_preview import scan_kurt
+from .extension_preview import interpret_inquiry_reply, local_scenario_time, scan_kurt, simulate_inquiry
 from .extension_pricing import OWNERS as EXTENSION_OWNERS, SETTINGS_KEY as EXTENSION_SETTINGS_KEY
 from .extension_pricing import read_settings as extension_rules, validate_settings as validate_extension_rules
 from .extension_report import report_rows as extension_report_rows
@@ -884,6 +886,68 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, 
     async def show_extension_preview(request: Request):
         return page(request, "extension_preview.html", scan=extension_preview,
                     configured=bool(syncer.settings.extension_ai_api_key))
+
+    @app.post("/extension-preview-inquiry", response_class=HTMLResponse)
+    async def run_extension_inquiry(request: Request, reservation: int = Form(...),
+                                    arrival: str = Form(...), departure: str = Form(...),
+                                    guest_reply: str = Form(""), guest_checkout: str = Form(""),
+                                    reply_text: str = Form(""), reply_at: str = Form(""),
+                                    simulate_at: str = Form(""), deadline_at: str = Form(""),
+                                    acknowledged: bool = Form(False), reminder_sent: bool = Form(False)):
+        result = error = interpretation = None
+        row = next((item for item in extension_preview["rows"] if item["id"] == reservation), None)
+        if row is None or row.get("error"):
+            error = "Review this reservation before running an inquiry simulation."
+        else:
+            try:
+                start, end = date.fromisoformat(arrival), date.fromisoformat(departure)
+                if end <= start:
+                    raise ValueError("Inquiry checkout must be after arrival.")
+                checkout = date.fromisoformat(guest_checkout) if guest_checkout and not reply_text.strip() else None
+                now = syncer.now().astimezone(syncer.tz)
+                received = local_scenario_time(reply_at) if reply_at else now
+                as_of = local_scenario_time(simulate_at) if simulate_at else now
+                deadline = local_scenario_time(deadline_at) if deadline_at else None
+                if as_of < received:
+                    raise ValueError("The simulated time cannot be before the reply arrived.")
+                update_after = None
+                if reply_text.strip():
+                    key = syncer.settings.extension_ai_api_key
+                    if not key:
+                        raise ValueError("Configure the OpenAI API key to interpret a written reply.")
+                    guest_reply, checkout = await interpret_inquiry_reply(
+                        key, reply_text.strip(), received, row["departure_date"],
+                    )
+                    if guest_reply == "wait_until":
+                        update_after, checkout = checkout, None
+                        if update_after < received:
+                            raise ValueError("The promised update is earlier than the reply. Specify the day in the reply.")
+                    interpretation = {
+                        "new_checkout": f"Guest gave a checkout date of {checkout}.",
+                        "booked_checkout": f"Guest confirmed their booked checkout on {row['departure_date']}.",
+                        "undecided": "Guest is still deciding.",
+                        "wait_until": (
+                            f"Guest expects to know after {update_after:%b %d at %I:%M %p %Z}."
+                            if update_after else ""
+                        ),
+                        "clarify": "The reply did not give one usable checkout date.",
+                    }[guest_reply]
+                result = simulate_inquiry(
+                    row, start, end, guest_reply=guest_reply, guest_checkout=checkout,
+                    update_after=update_after, as_of=as_of, inquiry_deadline=deadline,
+                    acknowledged=acknowledged, reminder_sent=reminder_sent,
+                )
+            except ValueError as exc:
+                error = str(exc)
+            except (httpx.HTTPError, KeyError, TypeError, AttributeError, IndexError):
+                error = "Could not interpret the simulated reply. Try again or select a reply option."
+        return page(request, "extension_preview.html", scan=extension_preview,
+                    configured=bool(syncer.settings.extension_ai_api_key), inquiry_reservation=reservation,
+                    inquiry_arrival=arrival, inquiry_departure=departure, inquiry_result=result, inquiry_error=error,
+                    guest_reply=guest_reply, guest_checkout=guest_checkout, reply_text=reply_text,
+                    inquiry_interpretation=interpretation, reply_at=received.strftime("%Y-%m-%dT%H:%M") if not error else reply_at,
+                    simulate_at=simulate_at, deadline_at=deadline_at,
+                    acknowledged=acknowledged, reminder_sent=reminder_sent)
 
     @app.post("/extension-preview")
     async def start_extension_preview(background_tasks: BackgroundTasks):

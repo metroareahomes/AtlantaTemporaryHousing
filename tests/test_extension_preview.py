@@ -38,3 +38,58 @@ def test_turnover_nights_by_stay_length():
         ]
     saturday = friday + timedelta(days=1)
     assert extension_preview.turnover_nights(saturday - timedelta(days=15), saturday)[-1].weekday() == 0
+
+
+def test_inquiry_dry_run_respects_minimum_stay_and_roleplayed_checkout():
+    from datetime import date
+
+    row = {"arrival_date": "2025-12-28", "departure_date": "2026-11-27",
+           "hold_end": date(2026, 12, 26), "projected_turnover": [],
+           "inquiry_message": "Do you need any nights beyond Christmas?"}
+    simulate = extension_preview.simulate_inquiry
+    overlap = simulate(row, date(2026, 12, 23), date(2026, 12, 28))
+    assert "unavailable" in overlap["inquirer"]
+    assert overlap["current_guest"] is None
+
+    later = simulate(row, date(2026, 12, 26), date(2027, 1, 2))
+    assert later["current_guest"] == row["inquiry_message"]
+
+    reply = simulate(row, date(2026, 12, 26), date(2027, 1, 2),
+                     guest_reply="new_checkout", guest_checkout=date(2026, 12, 26))
+    assert "turnover" in reply["reason"]
+    assert reply["current_guest"] is None
+    assert "Dec 28, 2026" in reply["calendar"]
+
+
+def test_ambiguous_roleplay_preserves_hold_and_asks_for_checkout():
+    from datetime import date
+
+    row = {"arrival_date": "2025-12-28", "departure_date": "2026-11-27",
+           "hold_end": date(2026, 12, 26), "projected_turnover": []}
+    reply = extension_preview.simulate_inquiry(
+        row, date(2026, 12, 26), date(2027, 1, 2), guest_reply="clarify",
+    )
+    assert "Keep the proposed holds" in reply["calendar"]
+    assert "What date" in reply["current_guest"]
+
+
+def test_inquiry_waits_then_reminds_once_and_closes_at_deadline():
+    from datetime import date, timedelta
+
+    row = {"arrival_date": "2025-12-28", "departure_date": "2026-11-27",
+           "hold_end": date(2026, 12, 26), "projected_turnover": []}
+    update = extension_preview.local_scenario_time("2026-11-23T17:00")
+    def simulate(hours, **kwargs):
+        return extension_preview.simulate_inquiry(
+            row, date(2026, 12, 26), date(2027, 1, 2),
+            guest_reply="wait_until", update_after=update,
+            as_of=update + timedelta(hours=hours), inquiry_deadline=update + timedelta(hours=2),
+            **kwargs,
+        )
+
+    assert simulate(0)["current_guest"] is None
+    assert simulate(1)["current_guest"]
+    assert simulate(1, reminder_sent=True, acknowledged=True)["current_guest"] is None
+    assert simulate(1, acknowledged=True)["inquirer"] is None
+    assert "couldn’t confirm" in simulate(2)["inquirer"]
+    assert simulate(2)["current_guest"] is None
