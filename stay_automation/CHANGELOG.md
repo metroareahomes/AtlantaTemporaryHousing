@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.55 — Inquiry messages
+
+- Ask the current guest about checkout and acknowledge an inquiry when plans need confirmation at an opted-in Kurt property.
+
 ## 0.6.54 — Kurt extension controls
 
 - Add opt-in calendar holds for Kurt’s homes and per-property checkout check-ins and descriptive hold notes.

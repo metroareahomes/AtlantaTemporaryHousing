@@ -8,6 +8,12 @@ from pathlib import Path
 from typing import Any
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS extension_live_inquiries (
+    id INTEGER PRIMARY KEY,
+    listing_id INTEGER NOT NULL,
+    received_at TEXT NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0
+);
 CREATE TABLE IF NOT EXISTS extension_live_holds (
     listing_id INTEGER NOT NULL,
     night TEXT NOT NULL,

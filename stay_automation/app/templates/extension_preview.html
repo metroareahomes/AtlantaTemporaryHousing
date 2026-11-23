@@ -21,8 +21,8 @@
 <p><label><input type="checkbox" name="calendar_enabled" {% if live_calendar %}checked{% endif %}>
 Apply extension and turnover holds to Kurt’s calendars</label></p>
 <fieldset>
-<legend>Calendar notes and automatic checkout check-ins</legend>
-<p>Select the homes where the automation can add descriptive hold notes and send eligible checkout check-ins.</p>
+<legend>Calendar notes and automatic checkout check-ins and inquiry messages</legend>
+<p>Select the homes where the automation can add descriptive hold notes and send eligible checkout check-ins and messages when a new inquiry requires confirming the current guest’s plans.</p>
 {% for property in live_properties %}
 <p><label><input type="checkbox" name="properties" value="{{ property.hostaway_listing_id }}"
 {% if property.hostaway_listing_id in live_selected %}checked{% endif %}> {{ property.name }}</label></p>

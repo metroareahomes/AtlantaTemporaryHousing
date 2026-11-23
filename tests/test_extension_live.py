@@ -54,3 +54,32 @@ def test_kurt_hold_then_release_only_owned_extension_night(syncer):
     assert writes == [(today.isoformat(), 0), (today.isoformat(), 1)]
     assert days[existing]["note"] == "Host hold"
     assert not syncer.db.query("SELECT 1 FROM extension_live_holds")
+
+
+def test_live_inquiry_is_scoped_and_sends_once(syncer, monkeypatch):
+    from app import extension_inquiry
+    syncer.db.execute(
+        "INSERT INTO properties(hostaway_listing_id,name,owner_scope) VALUES(101,'Kurt home','Kurt')"
+    )
+    syncer.db.set_setting("extension_live_properties", "[101]")
+    syncer.settings = SimpleNamespace(extension_ai_api_key="test", hostaway_account_id="22")
+    sent = []
+
+    async def prepare(*args):
+        return {"id": 17, "departure_date": "2026-12-01"}, 31, 32, "Could you confirm your checkout date?"
+
+    async def send(thread, body):
+        sent.append((thread, body))
+
+    monkeypatch.setattr(extension_inquiry, "prepare_inquiry", prepare)
+    monkeypatch.delenv("ALL_PROXY", raising=False)
+    monkeypatch.delenv("all_proxy", raising=False)
+    syncer.hostaway = SimpleNamespace(send_extension_message=send)
+    raw = {"id": 23, "accountId": 22, "listingMapId": 101, "status": "inquiry"}
+    extension_inquiry.queue_inquiry(syncer, dict(raw, accountId=999), 23)
+    assert not syncer.db.query("SELECT * FROM extension_live_inquiries")
+    extension_inquiry.queue_inquiry(syncer, raw, 23)
+    run(extension_inquiry.run_inquiries(syncer))
+    extension_inquiry.queue_inquiry(syncer, raw, 23)
+    run(extension_inquiry.run_inquiries(syncer))
+    assert sent == [(31, "Could you confirm your checkout date?"), (32, extension_inquiry.WAITING_FOR_GUEST)]

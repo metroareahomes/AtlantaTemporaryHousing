@@ -13,6 +13,7 @@ from .config import load_settings
 from .db import DB
 from .ha import HAClient
 from .extension_followup import preview_followups
+from .extension_inquiry import run_inquiries
 from .extension_live import run_extension_live
 from .hostaway import HostawayClient
 from .locks import LockManager
@@ -120,6 +121,7 @@ def build():
             every(CLIMATE_TICK_MINUTES, "thermostats", climate.tick, db),
             every(0.25, "thursday_special", pricing.tick_thursday_schedule, db),
             every(1, "extension_pricing", syncer.extension_pricing.tick, db),
+            every(0.25, "extension_inquiries", lambda: run_inquiries(syncer), db),
             every(30, "extension_live", lambda: run_extension_live(syncer), db),
             every(30, "extension_followups", lambda: preview_followups(syncer, locks.alert_service), db),
             every(5, "property_sheet", property_sheet.push, db),
