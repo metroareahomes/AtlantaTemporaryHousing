@@ -1,5 +1,5 @@
 """Read-only calendar and conversation previews for Kurt's reservations."""
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
 
 import httpx
 
@@ -14,6 +14,24 @@ LABELS = {
     "booked": "Guest reports booking · Verify in Hostaway",
     "unclear": "Extension outlook unknown",
 }
+
+
+def preview_checkout_checkin(row, result, checkout, now):
+    if result.get("host_followed_up") is True:
+        row["next_action"] = "Wait for a reply to the host’s checkout or extension check-in."
+        return
+    deadline = datetime.combine(checkout - timedelta(days=10), time(9), TZ)
+    stamp = deadline.strftime("%b %d, %Y at %I:%M %p %Z")
+    row["next_action"] = "Ask the guest to confirm checkout or provide an expected extension date."
+    row["followup"] = (
+        f"Hi, are you still planning to check out on {checkout:%B %d}, or might you need to stay longer? "
+        "If you may need extra nights, could you let us know your expected checkout date "
+        "so we can check availability? Thank you!"
+    )
+    if now >= deadline:
+        row["followup_timing"] = f"Due now. The 10-day check-in point was {stamp}."
+    else:
+        row["followup_timing"] = f"Proposed check-in: {stamp} (10 days before booked checkout)."
 
 
 async def review_reservation(syncer, client, row):
@@ -36,37 +54,29 @@ async def review_reservation(syncer, client, row):
     if outgoing:
         row["last_sent_at"] = outgoing[0].astimezone(TZ).strftime("%b %d, %Y %I:%M %p %Z")
         row["last_sent"] = outgoing[1]
-    if not any(incoming for _, incoming, _ in thread.values()):
-        row["note"] = "Extension outlook unknown · No guest messages"
-        return
-
-    result = await assess(client, thread, checkout, [], outlook=True)
+    result = await assess(client, thread, checkout, [], outlook=True) if thread else {}
     status = result.get("status", "unclear")
     evidence = thread.get(result.get("guest_message_id"))
-    if not evidence or not evidence[1]:
+    proposed = result.get("proposed_checkout")
+    end = date.fromisoformat(proposed) if proposed else None
+    if (not evidence or not evidence[1]
+            or evidence[2].strip().casefold().rstrip(".") == "alteration request received"
+            or (end is not None and end <= checkout)):
         status = "unclear"
     row["note"] = LABELS.get(status, LABELS["unclear"])
     if evidence and evidence[1] and status != "unclear":
         row["evidence"] = evidence[2]
-    if status not in ("considering", "confirmed"):
-        row["next_action"] = {
-            "declined": "Keep the original checkout. No extension hold or follow-up is proposed.",
-            "booked": "Verify the extra nights in Hostaway before changing availability.",
-        }.get(status, "Wait for a clear extension update before proposing a hold or a message.")
+    if status == "declined":
+        row["next_action"] = "Keep the booked checkout. No extension hold or follow-up is proposed."
         return
-    proposed = result.get("proposed_checkout")
-    if not proposed or date.fromisoformat(proposed) <= checkout:
-        row["note"] += " · Dates unknown"
-        row["next_action"] = "Wait for the guest to clarify their dates before proposing a hold."
-        if followup_due_at(result, thread, checkout) is not None:
-            row["followup"] = (
-                "Hi, could you let us know which extra nights you might need, or when you expect "
-                "to know? That will help us check availability for you. Thank you!"
-            )
-            row["followup_timing"] = "Optional manual message. The automated follow-up requires specific held nights."
+    if status not in ("considering", "confirmed") or end is None:
+        row["note"] = (
+            "Possible extension · Dates unknown" if status in ("considering", "confirmed")
+            else LABELS["unclear"]
+        )
+        preview_checkout_checkin(row, result, checkout, now)
         return
 
-    end = date.fromisoformat(proposed)
     last = end - timedelta(days=1)
     estimate = "Estimated " if result.get("approximate_date") is True else ""
     row["note"] += f" · {estimate}{end:%b %d, %Y} checkout"

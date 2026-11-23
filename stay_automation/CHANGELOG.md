@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.47 — Checkout check-in preview
+
+- Preview a check-in ten days before the latest booked checkout when the guest’s plans are unknown.
+
 ## 0.6.46 — Extension preview next actions
 
 - Show proposed blocked nights, next actions, and follow-up wording and timing for each reservation.
