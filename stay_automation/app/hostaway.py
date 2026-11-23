@@ -140,7 +140,7 @@ class HostawayClient:
         allowed = ('id', 'date', 'price', 'status', 'isAvailable', 'isProcessed', 'minimumStay', 'maximumStay',
                    'closedOnArrival', 'closedOnDeparture', 'countPendingUnits', 'countReservedUnits',
                    'countBlockingReservations', 'countBlockedUnits', 'countAvailableUnits',
-                   'availableUnitsToSell', 'desiredUnitsToSell', 'updatedAt', 'updatedOn')
+                   'availableUnitsToSell', 'desiredUnitsToSell', 'updatedAt', 'updatedOn', 'note')
         days = []
         for day in raw:
             if not isinstance(day, dict) or not first <= date.fromisoformat(day.get('date', '')) <= last:
@@ -228,6 +228,18 @@ class HostawayClient:
             "POST", f"/conversations/{conversations[0]['id']}/messages",
             json={"body": body, "communicationType": "channel"},
         )
+
+    async def send_extension_checkin(self, reservation_id: int, body: str) -> None:
+        found = await self._request("GET", "/conversations", params={"reservationId": reservation_id})
+        matches = [c for c in found.get("result") or []
+                   if str(c.get("reservationId")) == str(reservation_id)
+                   and str(c.get("accountId")) == str(self._account_id)
+                   and c.get("type") == "channel"]
+        if len(matches) != 1:
+            raise HostawayError("Could not uniquely identify the guest’s booking-channel conversation")
+        conversation_id = int(matches[0]["id"])
+        await self._request("POST", f"/conversations/{conversation_id}/messages",
+                            json={"body": body, "communicationType": "channel"}, retry_transient=False)
 
     async def unified_webhooks(self) -> list[dict[str, Any]]:
         body = await self._request("GET", "/webhooks/unifiedWebhooks")

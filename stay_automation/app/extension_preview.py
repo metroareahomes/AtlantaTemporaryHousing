@@ -45,6 +45,7 @@ def preview_checkout_checkin(row, result, checkout, now):
             f"Hi, we wanted to check in one last time before we make the house available for other bookings. "
             f"Is {checkout:%B} {checkout.day} still your planned checkout date? Thank you!"
         )
+        row["checkout_checkin_due"] = deadline
         row["followup_timing"] = f"Due now. The 10-day check-in point was {stamp}." if now >= deadline else (
             f"Proposed check-in: {stamp} (10 days before booked checkout)."
         )
@@ -256,6 +257,7 @@ async def review_reservation(syncer, client, row):
             or (status == "early_checkout" and (end is None or not arrival < end < checkout))
             or (end is not None and end <= checkout and status not in ("early_checkout", "declined"))):
         status = "unclear"
+    row["extension_status"] = status
     row["note"] = LABELS.get(status, LABELS["unclear"])
     if evidence and evidence[1] and status != "unclear":
         row["evidence"] = quote.strip()
@@ -388,8 +390,12 @@ async def review_reservation(syncer, client, row):
     nights = [rate["night"] for rate in tracked]
     held = len(nights) == (end - checkout).days
     if held:
-        days = await syncer.hostaway.pricing_calendar(row["listing_id"], nights[0], nights[-1])
-        held = sorted(day["date"] for day in days if blocked(day)) == nights
+        for offset in range(0, len(nights), 5):
+            window = nights[offset:offset + 5]
+            days = await syncer.hostaway.pricing_calendar(row["listing_id"], window[0], window[-1])
+            if sorted(day["date"] for day in days if blocked(day)) != window:
+                held = False
+                break
 
     row["followup"] = followup_text(checkout, last)
     stamp = due.astimezone(TZ).strftime("%b %d, %Y at %I:%M %p %Z")

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.54 — Kurt extension controls
+
+- Add opt-in calendar holds for Kurt’s homes and per-property checkout check-ins and descriptive hold notes.
+
 ## 0.6.53 — Short-stay inquiry rules
 
 - Skip routine extension check-ins for stays of one to three nights and limit inquiry follow-ups to potential overlaps the guest raised.
