@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.57 — Manual calendar review
+
+- Add an Update calendar now button and report verification results.
+
 ## 0.6.56 — Turnover holds
 
 - Apply turnover holds from verified reservation dates when AI is unavailable or guest-message review fails.

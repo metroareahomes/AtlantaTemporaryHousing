@@ -20,7 +20,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from .extension_live import live_property, selected_properties
+from .extension_live import live_property, run_extension_live, selected_properties
 from .extension_preview import interpret_inquiry_reply, local_scenario_time, scan_kurt, simulate_inquiry
 from .extension_pricing import OWNERS as EXTENSION_OWNERS, SETTINGS_KEY as EXTENSION_SETTINGS_KEY
 from .extension_pricing import read_settings as extension_rules, validate_settings as validate_extension_rules
@@ -883,8 +883,27 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, 
 
     extension_preview = {"rows": [], "running": False, "completed": 0, "total": 0}
 
+    calendar_refresh = {"running": False, "message": ""}
+
+    async def refresh_extension_calendar():
+        try:
+            calendar_refresh["message"] = await run_extension_live(syncer, calendar_only=True)
+        except Exception:
+            calendar_refresh["message"] = "The calendar review failed. Check the Stay Automation log."
+            db.log("extension.live_calendar_failed", "Manual calendar review failed.", level="warning")
+        finally:
+            calendar_refresh["running"] = False
+
+    @app.post("/extension-calendar-update")
+    async def update_extension_calendar(background_tasks: BackgroundTasks):
+        if db.get_bool("extension_live_calendar") and not calendar_refresh["running"]:
+            calendar_refresh.update(running=True, message="")
+            background_tasks.add_task(refresh_extension_calendar)
+        return RedirectResponse("extension-preview#live-calendar", status_code=303, background=background_tasks)
+
     def extension_live_controls():
         return {
+            "calendar_refresh": calendar_refresh,
             "live_calendar": db.get_bool("extension_live_calendar"),
             "live_selected": selected_properties(db),
             "live_properties": db.query(

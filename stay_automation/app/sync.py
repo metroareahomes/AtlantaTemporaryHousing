@@ -27,6 +27,7 @@ class Syncer:
     def __init__(self, db: DB, settings: Settings, hostaway, ha):
         self.db = db
         self.extension_pricing = ExtensionPricing(self)
+        self.extension_calendar_lock = asyncio.Lock()
         self.settings = settings
         self.hostaway = hostaway
         self.ha = ha
