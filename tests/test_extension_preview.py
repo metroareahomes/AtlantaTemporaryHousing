@@ -116,3 +116,14 @@ def test_unclear_reply_keeps_tentative_overlap_pending():
     assert "waiting for our current guest" in result["inquirer"]
     assert "What date" in result["current_guest"]
     assert "Keep the proposed holds" in result["calendar"]
+
+
+def test_short_stay_inquiry_only_prompts_with_possible_overlap():
+    from datetime import date
+
+    row = {"arrival_date": "2026-11-27", "departure_date": "2026-11-29",
+           "short_stay": True, "hold_end": date(2026, 11, 30),
+           "inquiry_message": "Do you still need Sunday night?"}
+    simulate = extension_preview.simulate_inquiry
+    assert simulate(row, date(2026, 11, 29), date(2026, 11, 30))["current_guest"]
+    assert simulate(row, date(2026, 11, 30), date(2026, 12, 2))["current_guest"] is None

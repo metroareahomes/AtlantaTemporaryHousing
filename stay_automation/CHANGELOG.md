@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.53 — Short-stay inquiry rules
+
+- Skip routine extension check-ins for stays of one to three nights and limit inquiry follow-ups to potential overlaps the guest raised.
+
 ## 0.6.52 — Inquiry decisions and relative dates
 
 - Keep inquiries pending when only tentative extension nights overlap, and interpret Thanksgiving and relative weekdays from the message date.
