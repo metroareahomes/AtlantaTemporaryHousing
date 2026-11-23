@@ -10,6 +10,10 @@ from .extension_preview import WAITING_FOR_GUEST, review_reservation, simulate_i
 from .hostaway import HostawayError
 
 
+INQUIRY_STATUSES = frozenset({"inquiry", "pending", "unconfirmed"})
+BOOKING_REQUEST_STATUSES = INQUIRY_STATUSES - {"inquiry"}
+
+
 def enabled(syncer, listing):
     return (bool(getattr(syncer.settings, "extension_ai_api_key", None))
             and any(listing in selected_properties(syncer.db, owner) and live_property(syncer.db, listing, owner)
@@ -18,7 +22,7 @@ def enabled(syncer, listing):
 
 def queue_inquiry(syncer, reservation, reservation_id):
     listing = reservation.get("listingMapId")
-    if (reservation.get("status") == "inquiry" and type(listing) is int and enabled(syncer, listing)
+    if (reservation.get("status") in INQUIRY_STATUSES and type(listing) is int and enabled(syncer, listing)
             and str(reservation.get("id")) == str(reservation_id)
             and str(reservation.get("accountId")) == str(syncer.settings.hostaway_account_id)):
         syncer.db.execute("INSERT OR IGNORE INTO extension_live_inquiries(id,listing_id,received_at) VALUES(?,?,?)",
@@ -30,7 +34,8 @@ async def prepare_inquiry(syncer, item, client):
     rid, listing = item["id"], item["listing_id"]
     raw = await hostaway.reservation(rid)
     account = syncer.settings.hostaway_account_id
-    if (raw.get("status") != "inquiry" or str(raw.get("id")) != str(rid)
+    status = raw.get("status")
+    if (status not in INQUIRY_STATUSES or str(raw.get("id")) != str(rid)
             or str(raw.get("accountId")) != str(account) or str(raw.get("listingMapId")) != str(listing)):
         return
     arrival, departure = (date.fromisoformat(raw[key]) for key in ("arrivalDate", "departureDate"))
@@ -48,6 +53,20 @@ async def prepare_inquiry(syncer, item, client):
     guest = guests[0]
     await review_reservation(syncer, client, guest)
     result = simulate_inquiry(guest, arrival, departure)
+    if status in BOOKING_REQUEST_STATUSES:
+        checkout = date.fromisoformat(guest["departure_date"])
+        extension_end = guest.get("hold_end")
+        possible_extension = (
+            checkout < departure and guest.get("extension_status") in ("considering", "requested", "confirmed")
+            and (extension_end is None or arrival < extension_end)
+        )
+        if arrival < checkout or possible_extension or result.get("inquirer") == WAITING_FOR_GUEST:
+            syncer.db.log(
+                "extension.booking_request_review",
+                f"Booking request for listing {listing} ({arrival} to {departure}) needs review. "
+                f"Current guest outlook: {guest.get('note', 'Unknown')}. {result['reason']}",
+                level="warning", reservation_id=rid,
+            )
     if not result.get("current_guest") or result.get("inquirer") != WAITING_FOR_GUEST:
         return
     checkout = guest["departure_date"]
