@@ -95,22 +95,30 @@ async def assess(client, thread, checkout, nights, *, outlook=False):
                 "extension update), and update_promised (boolean: the guest has an outstanding promise "
                 "to update, or there's an agreed deadline). Use unclear for ambiguous intent, "
                 "or conflicting statements. Apply the most recent clear change of plans."
-                + (" For the calendar outlook, resolve an unqualified future Thanksgiving using the "
-                   "message’s next_us_thanksgiving field. Checking out on Thanksgiving means leaving "
-                   "that day. Use early_checkout and proposed_checkout when the guest clearly states "
+                + (" For the calendar outlook, interpret the guest's timing in context, including calendar "
+                   "events, relative dates, durations, date ranges, and references to dates discussed earlier. "
+                   "Use the local timestamp of the message containing the date or reference, the booked "
+                   "checkout, and the surrounding conversation to find its intended anchor. "
+                   "Use next_us_thanksgiving when an unqualified future U.S. Thanksgiving is intended. "
+                   "Use early_checkout and proposed_checkout when the guest clearly states "
                    "a departure before the booked checkout. Use declined if they confirm checkout on "
                    "the booked date. Return proposed_checkout as YYYY-MM-DD or null and "
                    "minimum_stay_through as the last night the guest explicitly says they will stay, "
-                   "YYYY-MM-DD or null. For example, 'we're going to stay through Christmas for sure' "
-                   "means confirmed intent through the night of December 25, with final checkout unknown. "
+                   "YYYY-MM-DD or null. Distinguish the day they leave from the last night they occupy. "
+                   "For a checkout window without a single expected date, return checkout_window as "
+                   "{earliest: YYYY-MM-DD, latest: YYYY-MM-DD}, or null when either boundary is unknown. "
+                   "Keep proposed_checkout null for a window. Only return a minimum occupied night "
+                   "when the guest commits to staying at least that long. "
                    "Set minimum_stay_through even if the guest renews in shorter increments. A shorter "
                    "renewal does not cancel the longer stated plan unless they say their plans changed. "
-                   "Cite the exact guest words for the minimum date. An answer to a host check-in "
-                   "supersedes waiting for a reply. "
-                   "Return extension_evidence_quote as an exact short quotation from the cited guest message "
-                   "that directly supports the status for the current checkout. A maintenance request, complaint, "
-                   "or unrelated conversation does not imply an extension. If there is no direct evidence, use unclear "
-                   "and return null for the quote. Also return inquiry_checkin_appropriate=true only when a neutral "
+                   "An answer to a host check-in supersedes waiting for a reply. "
+                   "Cite the guest's own commitment, request, or acknowledgment in guest_message_id. "
+                   "If the timing is in a different message that the guest refers to or accepts, cite that "
+                   "message's integer ID as timing_message_id. Otherwise return null for timing_message_id. "
+                   "A host proposal alone, a maintenance request, or unrelated conversation does not "
+                   "imply an extension. If intent is clear but timing is ambiguous, keep the intent "
+                   "and leave unresolved dates null. If no guest message supports the intent, return "
+                   "unclear and a null guest_message_id. Also return inquiry_checkin_appropriate=true only when a neutral "
                    "checkout confirmation would be appropriate if a competing inquiry arrived now, taking the "
                    "whole conversation into account. Use false if checkout is settled, a decision is already pending "
                    "from the guest, the host already asked, or contact would be sensitive or unwelcome. "
@@ -140,7 +148,8 @@ async def assess(client, thread, checkout, nights, *, outlook=False):
                    if outlook else " Use considering only if the guest’s interest matches exactly the held nights.")
             )},
             {"role": "user", "content": json.dumps({
-                "checkout": checkout.isoformat(), "held_nights": nights, "conversation": transcript,
+                "checkout": checkout.isoformat(), "local_timezone": str(TZ),
+                "held_nights": nights, "conversation": transcript,
             })},
         ],
     })
