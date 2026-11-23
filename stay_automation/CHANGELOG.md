@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.62 — Calendar hold verification
+
+- Continue verifying a property’s calendar holds after an individual night fails, and report failed nights.
+
 ## 0.6.61 — Contextual extension dates
 
 - Interpret guest timing from conversation context and show the cited messages and checkout windows.
