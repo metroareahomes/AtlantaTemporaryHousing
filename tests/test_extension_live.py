@@ -117,3 +117,24 @@ def test_manual_calendar_update_respects_settings(syncer, monkeypatch):
     assert response.status_code == 200
     assert "Calendar review complete." in response.text
     assert len(scans) == 1
+
+
+def test_calendar_intervals_accepts_empty_success():
+    import httpx
+
+    from app.hostaway import HostawayClient
+
+    async def update():
+        def handler(request):
+            assert request.method == "PUT"
+            assert request.url.path.endswith("/listings/101/calendarIntervals")
+            return httpx.Response(204)
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="https://test") as http:
+            client = HostawayClient("1", "key", http=http)
+            client._token = "test"
+            await client.apply_calendar_intervals(101, [
+                {"startDate": "2026-12-01", "endDate": "2026-12-01", "isAvailable": 0}
+            ])
+
+    run(update())

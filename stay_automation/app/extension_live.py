@@ -47,7 +47,7 @@ def unreserved(day):
     )
 
 
-async def update_holds(syncer, listing, rows, today, notes_enabled):
+async def update_holds(syncer, listing, rows, today, notes_enabled, *, report=None):
     db, hostaway = syncer.db, syncer.hostaway
     desired, releasable = calendar_plan(rows, today)
     owned = {
@@ -56,10 +56,12 @@ async def update_holds(syncer, listing, rows, today, notes_enabled):
             (listing, today.isoformat()),
         )
     }
-    changes = 0
+    if report is None:
+        report = {"changes": 0, "candidates": 0, "skipped": 0}
+    report["candidates"] += len(desired)
     for night in sorted(desired.keys() | owned.keys()):
         if not live_property(db, listing) or not db.get_bool("extension_live_calendar"):
-            return changes
+            return
         iso = night.isoformat()
         old = owned.get(night)
         target = desired.get(night)
@@ -67,14 +69,16 @@ async def update_holds(syncer, listing, rows, today, notes_enabled):
             continue
         day, = await hostaway.pricing_calendar(listing, iso, iso)
         if not unreserved(day):
+            report["skipped"] += bool(target)
             continue
         note = day.get("note") or ""
         if target:
             rid, label = target
             marker = f"[Stay Automation hold {listing}/{iso}]"
             owned_block = old and blocked(day) and note in hold_notes(old["marker"])
-            if not owned_block and (note or day.get("status") != "available"
+            if not owned_block and (note or day.get("status") not in (None, "", "available", "open")
                                     or day.get("isAvailable") not in (1, "1", True)):
+                report["skipped"] += 1
                 continue
             if owned_block and old["reservation_id"] != rid and old["reservation_id"] not in releasable:
                 continue
@@ -91,7 +95,7 @@ async def update_holds(syncer, listing, rows, today, notes_enabled):
                 continue
             payload = {"isAvailable": 1, "note": old["original_note"]}
         if not live_property(db, listing) or not db.get_bool("extension_live_calendar"):
-            return changes
+            return
         await hostaway.apply_calendar_intervals(listing, [{"startDate": iso, "endDate": iso} | payload])
         verified, = await hostaway.pricing_calendar(listing, iso, iso)
         if (bool(target) != blocked(verified) or (verified.get("note") or "") != payload["note"]
@@ -99,10 +103,10 @@ async def update_holds(syncer, listing, rows, today, notes_enabled):
             raise ValueError("Hostaway did not verify the calendar change")
         if not target:
             db.execute("DELETE FROM extension_live_holds WHERE listing_id=? AND night=?", (listing, iso))
-        changes += 1
+        report["changes"] += 1
         db.log("extension.live_calendar", f"Verified {'hold' if target else 'release'} for listing {listing} on {iso}.")
 
-    return changes
+    return
 
 
 def live_property(db, listing):
@@ -128,13 +132,14 @@ async def _review_live(syncer, calendar_only):
     by_listing = {}
     for row in state["rows"]:
         by_listing.setdefault(row["listing_id"], []).append(row)
-    changes = failures = 0
+    failures = 0
+    report = {"changes": 0, "candidates": 0, "skipped": 0}
     for listing, rows in by_listing.items():
         if not live_property(db, listing):
             continue
         if calendar_enabled:
             try:
-                changes += await update_holds(syncer, listing, rows, now.date(), listing in selected_properties(db))
+                await update_holds(syncer, listing, rows, now.date(), listing in selected_properties(db), report=report)
             except Exception:
                 failures += 1
                 db.log("extension.live_calendar_failed",
@@ -160,6 +165,7 @@ async def _review_live(syncer, calendar_only):
                        reservation_id=row["id"], level="warning")
     if calendar_only:
         review_errors = sum(bool(row.get("error")) for row in state["rows"])
-        return (f"Calendar review complete. {changes} verified calendar changes, "
+        return (f"Calendar review complete. {report['candidates']} proposed hold nights, "
+                f"{report['changes']} verified calendar changes, {report['skipped']} unavailable or protected nights, "
                 f"{failures} property write or verification failures, and "
                 f"{review_errors} reservation review errors.")

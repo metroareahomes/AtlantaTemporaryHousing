@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.58 — Calendar write verification
+
+- Accept empty successful Hostaway calendar responses and report proposed, verified, and skipped nights.
+
 ## 0.6.57 — Manual calendar review
 
 - Add an Update calendar now button and report verification results.

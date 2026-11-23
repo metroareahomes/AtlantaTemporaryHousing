@@ -61,7 +61,7 @@ class HostawayClient:
         self._save_token(token)
         return token
 
-    async def _request(self, method: str, path: str, *, retry_transient: bool = True, **kwargs: Any) -> dict[str, Any]:
+    async def _request(self, method: str, path: str, *, retry_transient: bool = True, allow_empty: bool = False, **kwargs: Any) -> dict[str, Any]:
         if self._token is None:
             self._token = self._load_token()
         for attempt in range(4):
@@ -80,6 +80,8 @@ class HostawayClient:
                     raise HostawayError(f"{method} {path}: HTTP {resp.status_code}; retry after a fresh read")
                 await asyncio.sleep(2 ** attempt)
                 continue
+            if allow_empty and resp.status_code in (200, 204) and not resp.content.strip():
+                return {"status": "success"}
             if resp.status_code != 200:
                 detail = " ".join((resp.text or "").split())[:300]  # Hostaway says why it refused
                 raise HostawayError(f"{method} {path}: HTTP {resp.status_code}" + (f" - {detail}" if detail else ""))
@@ -154,7 +156,7 @@ class HostawayClient:
 
     async def apply_calendar_intervals(self, listing_id: int, intervals: list[dict]) -> None:
         await self._request("PUT", f"/listings/{listing_id}/calendarIntervals",
-                            json=intervals, retry_transient=False)
+                            json=intervals, retry_transient=False, allow_empty=True)
 
     async def booking_report_reservations(self, departing_from: str) -> list[dict[str, Any]]:
         # A booking created in the window may have a future arrival/departure.
