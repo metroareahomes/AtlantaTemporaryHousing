@@ -16,7 +16,7 @@
 {% endif %}
 </section>
 <section class="panel">
-<h2>Live extension settings</h2>
+<h2 id="live-calendar">Live extension settings</h2>
 <form action="extension-live-settings" method="post">
 <p><label><input type="checkbox" name="calendar_enabled" {% if live_calendar %}checked{% endif %}>
 Apply extension and turnover holds to Kurt’s calendars</label></p>
@@ -32,6 +32,15 @@ Apply extension and turnover holds to Kurt’s calendars</label></p>
 </fieldset>
 <button>Save live extension settings</button>
 </form>
+{% if calendar_refresh.running %}
+<p role="status">Calendar review requested. <a href="extension-preview#live-calendar">Refresh status</a></p>
+{% else %}
+<form action="extension-calendar-update" method="post">
+<button {% if not live_calendar %}disabled{% endif %}>Update calendar now</button>
+</form>
+{% if not live_calendar %}<p>Enable and save calendar holds to run an update.</p>{% endif %}
+{% if calendar_refresh.message %}<p role="status">{{ calendar_refresh.message }}</p>{% endif %}
+{% endif %}
 </section>
 {% for row in scan.rows %}
 <section class="panel" id="reservation-{{ row.id }}">

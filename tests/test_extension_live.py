@@ -94,3 +94,26 @@ def test_verified_turnover_survives_failed_extension_review():
     desired, releasable = calendar_plan([row, unverified], checkout)
     assert desired == {checkout: (17, "Turnover hold")}
     assert not releasable
+
+
+def test_manual_calendar_update_respects_settings(syncer, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from app import extension_live
+    from app.web import create_app
+
+    scans = []
+
+    async def scan(syncer, state, *, turnover_only):
+        scans.append(turnover_only)
+        state["rows"] = []
+
+    monkeypatch.setattr(extension_live, "scan_kurt", scan)
+    client = TestClient(create_app(syncer))
+    assert client.post("/extension-calendar-update", follow_redirects=False).status_code == 303
+    assert not scans
+    syncer.db.set_setting("extension_live_calendar", "1")
+    response = client.post("/extension-calendar-update")
+    assert response.status_code == 200
+    assert "Calendar review complete." in response.text
+    assert len(scans) == 1

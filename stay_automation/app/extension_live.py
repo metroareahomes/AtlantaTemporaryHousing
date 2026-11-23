@@ -56,9 +56,10 @@ async def update_holds(syncer, listing, rows, today, notes_enabled):
             (listing, today.isoformat()),
         )
     }
+    changes = 0
     for night in sorted(desired.keys() | owned.keys()):
         if not live_property(db, listing) or not db.get_bool("extension_live_calendar"):
-            return
+            return changes
         iso = night.isoformat()
         old = owned.get(night)
         target = desired.get(night)
@@ -90,7 +91,7 @@ async def update_holds(syncer, listing, rows, today, notes_enabled):
                 continue
             payload = {"isAvailable": 1, "note": old["original_note"]}
         if not live_property(db, listing) or not db.get_bool("extension_live_calendar"):
-            return
+            return changes
         await hostaway.apply_calendar_intervals(listing, [{"startDate": iso, "endDate": iso} | payload])
         verified, = await hostaway.pricing_calendar(listing, iso, iso)
         if (bool(target) != blocked(verified) or (verified.get("note") or "") != payload["note"]
@@ -98,7 +99,10 @@ async def update_holds(syncer, listing, rows, today, notes_enabled):
             raise ValueError("Hostaway did not verify the calendar change")
         if not target:
             db.execute("DELETE FROM extension_live_holds WHERE listing_id=? AND night=?", (listing, iso))
+        changes += 1
         db.log("extension.live_calendar", f"Verified {'hold' if target else 'release'} for listing {listing} on {iso}.")
+
+    return changes
 
 
 def live_property(db, listing):
@@ -106,28 +110,37 @@ def live_property(db, listing):
                   (listing,)) is not None
 
 
-async def run_extension_live(syncer):
+async def run_extension_live(syncer, *, calendar_only=False):
+    async with syncer.extension_calendar_lock:
+        return await _review_live(syncer, calendar_only)
+
+
+async def _review_live(syncer, calendar_only):
     db = syncer.db
     calendar_enabled = db.get_bool("extension_live_calendar")
     selected = selected_properties(db)
     ai_enabled = bool(syncer.settings.extension_ai_api_key)
-    if not calendar_enabled and not (ai_enabled and selected):
-        return
+    if not calendar_enabled and (calendar_only or not (ai_enabled and selected)):
+        return "Calendar holds are disabled."
     state = {}
     await scan_kurt(syncer, state, turnover_only=not ai_enabled)
     now = syncer.now()
     by_listing = {}
     for row in state["rows"]:
         by_listing.setdefault(row["listing_id"], []).append(row)
+    changes = failures = 0
     for listing, rows in by_listing.items():
         if not live_property(db, listing):
             continue
         if calendar_enabled:
             try:
-                await update_holds(syncer, listing, rows, now.date(), listing in selected_properties(db))
+                changes += await update_holds(syncer, listing, rows, now.date(), listing in selected_properties(db))
             except Exception:
+                failures += 1
                 db.log("extension.live_calendar_failed",
                        f"Calendar change could not be verified for listing {listing}.", level="warning")
+        if calendar_only:
+            continue
         for row in rows:
             try:
                 if listing not in selected_properties(db) or not live_property(db, listing):
@@ -145,3 +158,8 @@ async def run_extension_live(syncer):
             except Exception:
                 db.log("extension.live_message_failed", "Checkout check-in could not be verified.",
                        reservation_id=row["id"], level="warning")
+    if calendar_only:
+        review_errors = sum(bool(row.get("error")) for row in state["rows"])
+        return (f"Calendar review complete. {changes} verified calendar changes, "
+                f"{failures} property write or verification failures, and "
+                f"{review_errors} reservation review errors.")
