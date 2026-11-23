@@ -125,6 +125,11 @@ def simulate_inquiry(row, arrival, departure, *, guest_reply="", guest_checkout=
         if hold_end == row.get("hold_end") else row.get("booked_turnover", [])
     )
     replied = bool(guest_reply)
+    inquiry_message = row.get("inquiry_message")
+    tentative_end = row.get("hold_end")
+    if row.get("short_stay") and tentative_end and (
+            arrival >= tentative_end or departure <= checkout):
+        inquiry_message = None
     calendar = "Keep the proposed holds. Recheck availability and turnover once checkout plans are known."
     if guest_reply == "booked_checkout" or guest_reply == "new_checkout":
         final_checkout = guest_checkout if guest_reply == "new_checkout" else checkout
@@ -188,7 +193,7 @@ def simulate_inquiry(row, arrival, departure, *, guest_reply="", guest_checkout=
             else "Confirm the current guest’s plans and check the full calendar before offering these dates."
         )
         waiting_for_guest = guest_reply in ("undecided", "clarify") or (
-            not replied and bool(row.get("inquiry_message"))
+            not replied and bool(inquiry_message)
         )
         inquirer_message = WAITING_FOR_GUEST if waiting_for_guest else (
             "Thanks for your inquiry! We’re checking availability for your dates and will follow up once we can confirm."
@@ -198,7 +203,7 @@ def simulate_inquiry(row, arrival, departure, *, guest_reply="", guest_checkout=
             "inquirer": None if acknowledged else inquirer_message,
             "current_guest": (
                 "Thanks for the update. What date are you planning to check out? An estimate is fine."
-                if guest_reply == "clarify" else None if replied else row.get("inquiry_message")
+                if guest_reply == "clarify" else None if replied else inquiry_message
             ),
             "calendar": calendar,
         }
@@ -224,6 +229,7 @@ async def review_reservation(syncer, client, row):
         raise ValueError("Reservation ended")
     row["departure_date"] = checkout.isoformat()
     arrival = date.fromisoformat(raw.get("arrivalDate") or row["arrival_date"])
+    row["short_stay"] = 1 <= (checkout - arrival).days <= 3
     row["booked_turnover"] = turnover_nights(arrival, checkout)
     row["turnover_dates"] = ", ".join(day.strftime("%a, %b %d") for day in row["booked_turnover"]) or "None"
     thread = conversation(await syncer.hostaway.guest_messages(rid), rid,
@@ -259,6 +265,10 @@ async def review_reservation(syncer, client, row):
         if arrival <= now.date():
             row["inquiry_action"] = row["next_action"]
         return
+    extension_raised = status in ("considering", "requested", "confirmed")
+    contact_for_extension = not row["short_stay"] or (
+        extension_raised and result.get("contact_appropriate") is True
+    )
     if arrival <= now.date():
         row["inquiry_action"] = {
             "declined": "Use the confirmed checkout and check availability after turnover.",
@@ -267,7 +277,8 @@ async def review_reservation(syncer, client, row):
             "booked": "Verify the extension booking in Hostaway before responding.",
         }.get(status, "Review the requested dates and current guest’s plans internally.")
         if (status not in ("declined", "booked", "confirmed", "requested")
-                and end is None
+                and (end is None or (row["short_stay"] and status == "considering"))
+                and contact_for_extension
                 and result.get("inquiry_checkin_appropriate") is True
                 and result.get("host_followed_up") is False
                 and result.get("update_promised") is False):
@@ -290,7 +301,12 @@ async def review_reservation(syncer, client, row):
             "Possible extension · Dates unknown" if status in ("considering", "requested", "confirmed")
             else LABELS["unclear"]
         )
-        preview_checkout_checkin(row, result, checkout, now)
+        if row["short_stay"]:
+            row["next_action"] = "Use the booked checkout when checking availability."
+            if not contact_for_extension:
+                return
+        else:
+            preview_checkout_checkin(row, result, checkout, now)
         if (status == "considering" and result.get("contact_appropriate") is True
                 and "followup" not in row and followup_due_at(result, thread, checkout) is not None):
             row["followup"] = (
