@@ -85,6 +85,14 @@ CREATE TABLE IF NOT EXISTS pricing_simulations (
     rows_json TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS holiday_calendar_changes (
+    listing_id INTEGER NOT NULL,
+    night TEXT NOT NULL,
+    field TEXT NOT NULL,
+    original_note TEXT NOT NULL,
+    PRIMARY KEY (listing_id, night, field)
+);
+
 CREATE TABLE IF NOT EXISTS properties (
     id INTEGER PRIMARY KEY,
     hostaway_listing_id INTEGER UNIQUE,
