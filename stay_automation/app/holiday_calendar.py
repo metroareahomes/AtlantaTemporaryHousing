@@ -1,5 +1,5 @@
 """Keep Thanksgiving and Christmas turnovers off the Hostaway calendar."""
-from datetime import date, datetime, timedelta
+from datetime import date
 
 from httpx import HTTPError
 
@@ -19,10 +19,10 @@ def is_holiday(day):
     )
 
 
-def desired_changes(db, today, tz):
+def desired_changes(db, today):
     changes = set()
     rows = db.query(
-        "SELECT r.listing_id, r.arrival_date, r.departure_date, r.check_out_at "
+        "SELECT r.listing_id, r.arrival_date, r.departure_date "
         "FROM reservations r JOIN properties p ON p.hostaway_listing_id=r.listing_id "
         "WHERE p.active=1 AND p.owner_scope IN ('Mike','Kurt') "
         "AND r.status IN ('new','modified','confirmed','ownerStay') AND r.departure_date>=?",
@@ -33,9 +33,8 @@ def desired_changes(db, today, tz):
         departure = date.fromisoformat(row["departure_date"])
         if arrival >= today and is_holiday(arrival):
             changes.add((row["listing_id"], arrival.isoformat(), "closedOnDeparture"))
-        if (is_holiday(departure)
-                and datetime.fromisoformat(row["check_out_at"]).astimezone(tz).hour < 12):
-            changes.add((row["listing_id"], departure.isoformat(), "isAvailable"))
+        if is_holiday(departure):
+            changes.add((row["listing_id"], departure.isoformat(), "closedOnArrival"))
     return changes
 
 
@@ -48,12 +47,12 @@ def matches(day, payload):
         elif expected == 1:
             if value not in TRUE_VALUES:
                 return False
-        elif value not in FALSE_VALUES and not (field == "closedOnDeparture" and value is None):
+        elif value not in FALSE_VALUES and not (field != "isAvailable" and value is None):
             return False
     return True
 
 
-async def reconcile_change(syncer, key, wanted, existing):
+async def reconcile_change(syncer, key, wanted, existing, *, protect_checkout=False):
     listing, night, field = key
     db, hostaway = syncer.db, syncer.hostaway
     day, = await hostaway.pricing_calendar(listing, night, night)
@@ -61,7 +60,7 @@ async def reconcile_change(syncer, key, wanted, existing):
     if block:
         # Protect confirmed reservations, including a same-day arrival. The
         # no-checkout rule is independent and can still apply to that arrival.
-        if not unreserved(day):
+        if not unreserved(day) or (protect_checkout and not matches(day, {"closedOnArrival": 1})):
             return
         note = day.get("note") or ""
         original_note = existing["original_note"] if existing else note
@@ -73,8 +72,8 @@ async def reconcile_change(syncer, key, wanted, existing):
                         or matches(day, original) and day.get("status") in (None, "", "available", "open"))):
             return
     else:
-        original = {"closedOnDeparture": 0}
-        applied = {"closedOnDeparture": 1}
+        original = {field: 0}
+        applied = {field: 1}
         original_note = ""
     target = applied if wanted else original
     if matches(day, target):
@@ -95,7 +94,7 @@ async def reconcile_change(syncer, key, wanted, existing):
         raise ValueError("Hostaway did not verify the holiday change")
     if not wanted:
         db.execute(DELETE_CHANGE, key)
-    action = ("blocked holiday night" if block else "enabled no check-out") if wanted else f"restored {field}"
+    action = f"enabled {field}" if wanted else f"restored {field}"
     db.log("holiday.calendar", f"Listing {listing} on {night}: {action}.")
 
 
@@ -103,17 +102,23 @@ async def reconcile_holidays(syncer):
     async with syncer.extension_calendar_lock:
         db = syncer.db
         today = syncer.now().date()
-        wanted = desired_changes(db, today, syncer.tz)
+        wanted = desired_changes(db, today)
         db.execute("DELETE FROM holiday_calendar_changes WHERE night<?", (today.isoformat(),))
         existing = {
             (row["listing_id"], row["night"], row["field"]): row
             for row in db.query("SELECT * FROM holiday_calendar_changes")
         }
         for key in sorted(wanted | existing.keys()):
+            listing, night, field = key
+            has_checkout = (listing, night, "closedOnArrival") in wanted
+            if field == "closedOnDeparture" and key in wanted and has_checkout:
+                message = f"Listing {listing} already has a check-in and checkout on {night}. Review the holiday turnover."
+                if not db.one("SELECT 1 FROM events WHERE kind=? AND message=? LIMIT 1",
+                              ("holiday.turnover_conflict", message)):
+                    db.log("holiday.turnover_conflict", message, level="warning")
             try:
-                await reconcile_change(syncer, key, key in wanted, existing.get(key))
+                await reconcile_change(syncer, key, key in wanted, existing.get(key), protect_checkout=has_checkout)
             except (HostawayError, HTTPError, ValueError) as exc:
-                listing, night, field = key
                 db.log("holiday.calendar_failed",
                        f"Listing {listing} on {night}: could not verify {field} ({type(exc).__name__}).",
                        level="warning")
