@@ -16,22 +16,41 @@ LABELS = {
 }
 
 
+def turnover_nights(arrival, checkout):
+    length = (checkout - arrival).days
+    if length <= 3:
+        return []
+    if length <= 14:
+        return [checkout]
+    if checkout.weekday() == 4:
+        return [checkout + timedelta(days=i) for i in (1, 2, 3)]
+    count = 3 if checkout.weekday() == 5 else 2
+    return [checkout + timedelta(days=i) for i in range(count)]
+
+
 def preview_checkout_checkin(row, result, checkout, now):
     if result.get("host_followed_up") is True:
         row["next_action"] = "Wait for a reply to the host’s checkout or extension check-in."
         return
     deadline = datetime.combine(checkout - timedelta(days=10), time(9), TZ)
     stamp = deadline.strftime("%b %d, %Y at %I:%M %p %Z")
-    row["next_action"] = "Ask the guest to confirm checkout or provide an expected extension date."
-    row["followup"] = (
-        f"Hi, are you still planning to check out on {checkout:%B %d}, or might you need to stay longer? "
-        "If you may need extra nights, could you let us know your expected checkout date "
-        "so we can check availability? Thank you!"
+    row["next_action"] = (
+        "Review checkout plans internally. Contact the guest only if a checkout confirmation is needed."
     )
+    if result.get("checkout_checkin_appropriate") is True and result.get("update_promised") is not True:
+        row["next_action"] = "Confirm the guest’s checkout plans before releasing any extension hold."
+        row["followup"] = (
+            f"Hi, we wanted to check in one last time before we make the house available for other bookings. "
+            f"Is {checkout:%B} {checkout.day} still your planned checkout date? Thank you!"
+        )
+        row["followup_timing"] = f"Due now. The 10-day check-in point was {stamp}." if now >= deadline else (
+            f"Proposed check-in: {stamp} (10 days before booked checkout)."
+        )
+        return
     if now >= deadline:
-        row["followup_timing"] = f"Due now. The 10-day check-in point was {stamp}."
+        row["followup_timing"] = f"Internal review due now. The 10-day review point was {stamp}."
     else:
-        row["followup_timing"] = f"Proposed check-in: {stamp} (10 days before booked checkout)."
+        row["followup_timing"] = f"Internal review: {stamp} (10 days before booked checkout)."
 
 
 async def review_reservation(syncer, client, row):
@@ -47,6 +66,10 @@ async def review_reservation(syncer, client, row):
     if checkout < now.date():
         raise ValueError("Reservation ended")
     row["departure_date"] = checkout.isoformat()
+    arrival = date.fromisoformat(raw.get("arrivalDate") or row["arrival_date"])
+    row["turnover_dates"] = ", ".join(
+        day.strftime("%a, %b %d") for day in turnover_nights(arrival, checkout)
+    ) or "None"
     thread = conversation(await syncer.hostaway.guest_messages(rid), rid,
                           syncer.settings.hostaway_account_id, syncer.now())
     outgoing = next(((stamp, body) for stamp, incoming, body in reversed(thread.values())
@@ -67,7 +90,10 @@ async def review_reservation(syncer, client, row):
     if evidence and evidence[1] and status != "unclear":
         row["evidence"] = evidence[2]
     if status == "declined":
-        row["next_action"] = "Keep the booked checkout. No extension hold or follow-up is proposed."
+        row["next_action"] = (
+            "Keep the booked checkout. Release any extension-only hold for nights the guest no longer needs. "
+            "Keep the turnover nights blocked."
+        )
         return
     if status not in ("considering", "confirmed") or end is None:
         row["note"] = (
@@ -75,13 +101,25 @@ async def review_reservation(syncer, client, row):
             else LABELS["unclear"]
         )
         preview_checkout_checkin(row, result, checkout, now)
+        if (status == "considering" and result.get("contact_appropriate") is True
+                and "followup" not in row and followup_due_at(result, thread, checkout) is not None):
+            row["followup"] = (
+                "Following up on the extra nights you mentioned. If you still need them, "
+                "could you share your expected checkout date so we can check availability?"
+            )
         return
 
     last = end - timedelta(days=1)
     estimate = "Estimated " if result.get("approximate_date") is True else ""
     row["note"] += f" · {estimate}{end:%b %d, %Y} checkout"
     row["block_dates"] = f"{checkout:%b %d, %Y} through {last:%b %d, %Y} (nights)"
-    row["next_action"] = "Propose holding the listed nights, subject to calendar availability."
+    row["next_action"] = (
+        "Hold the proposed extension nights, subject to calendar availability. "
+        "Release extension-only nights when the guest’s plans indicate they’re unlikely to need them."
+    )
+    if result.get("contact_appropriate") is not True:
+        row["next_action"] += " Review checkout plans internally before contacting the guest."
+        return
     if status == "confirmed":
         row["next_action"] += " Wait for the extension booking to appear in Hostaway."
         return

@@ -26,3 +26,15 @@ def test_scan_limits_to_current_and_upcoming_kurt_reservations(syncer, monkeypat
     assert state["completed"] == state["total"] == 1
     assert state["rows"][0]["id"] == 101
     assert state["rows"][0]["note"] == "Possible extension"
+
+
+def test_turnover_nights_by_stay_length():
+    from datetime import date, timedelta
+
+    friday = date(2026, 11, 27)
+    for length, offsets in [(1, []), (3, []), (4, [0]), (14, [0]), (15, [1, 2, 3])]:
+        assert extension_preview.turnover_nights(friday - timedelta(days=length), friday) == [
+            friday + timedelta(days=offset) for offset in offsets
+        ]
+    saturday = friday + timedelta(days=1)
+    assert extension_preview.turnover_nights(saturday - timedelta(days=15), saturday)[-1].weekday() == 0

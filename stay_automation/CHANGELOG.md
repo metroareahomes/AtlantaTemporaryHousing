@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.48 — Turnover holds and checkout wording
+
+- Preview turnover holds separately from extension holds and use a neutral checkout check-in.
+
 ## 0.6.47 — Checkout check-in preview
 
 - Preview a check-in ten days before the latest booked checkout when the guest’s plans are unknown.
