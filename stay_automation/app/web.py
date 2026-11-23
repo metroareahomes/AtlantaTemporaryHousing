@@ -933,10 +933,19 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, 
         })
         return RedirectResponse(f"extension-preview?owner={owner}", status_code=303)
 
-    @app.get("/extension-preview", response_class=HTMLResponse)
-    async def show_extension_preview(request: Request, owner: str = "Kurt"):
+    def preview_filter(owner, listing):
         validate_owner(owner)
+        if listing and not live_property(db, listing, owner):
+            raise HTTPException(404)
+        return [row for row in previews[owner]["rows"]
+                if (not listing or row["listing_id"] == listing)
+                and live_property(db, row["listing_id"], owner)]
+
+    @app.get("/extension-preview", response_class=HTMLResponse)
+    async def show_extension_preview(request: Request, owner: str = "Kurt", listing: int = 0):
+        rows = preview_filter(owner, listing)
         return page(request, "extension_preview.html", scan=previews[owner],
+                    preview_rows=rows, preview_listing=listing,
                     configured=bool(syncer.settings.extension_ai_api_key), **extension_live_controls(owner))
 
     @app.post("/extension-preview-inquiry", response_class=HTMLResponse)
@@ -946,10 +955,10 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, 
                                     reply_text: str = Form(""), reply_at: str = Form(""),
                                     simulate_at: str = Form(""), deadline_at: str = Form(""),
                                     acknowledged: bool = Form(False), reminder_sent: bool = Form(False),
-                                    owner: str = "Kurt"):
-        validate_owner(owner)
+                                    owner: str = "Kurt", listing: int = 0):
+        rows = preview_filter(owner, listing)
         result = error = interpretation = None
-        row = next((item for item in previews[owner]["rows"] if item["id"] == reservation), None)
+        row = next((item for item in rows if item["id"] == reservation), None)
         if row is None or row.get("error"):
             error = "Review this reservation before running an inquiry simulation."
         else:
@@ -996,7 +1005,7 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, 
             except (httpx.HTTPError, KeyError, TypeError, AttributeError, IndexError):
                 error = "Could not interpret the simulated reply. Try again or select a reply option."
         return page(request, "extension_preview.html", scan=previews[owner],
-                    configured=bool(syncer.settings.extension_ai_api_key), inquiry_reservation=reservation,
+                    preview_rows=rows, preview_listing=listing, configured=bool(syncer.settings.extension_ai_api_key), inquiry_reservation=reservation,
                     inquiry_arrival=arrival, inquiry_departure=departure, inquiry_result=result, inquiry_error=error,
                     guest_reply=guest_reply, guest_checkout=guest_checkout, reply_text=reply_text,
                     inquiry_interpretation=interpretation, reply_at=received.strftime("%Y-%m-%dT%H:%M") if not error else reply_at,
@@ -1004,13 +1013,13 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, 
                     acknowledged=acknowledged, reminder_sent=reminder_sent, **extension_live_controls(owner))
 
     @app.post("/extension-preview")
-    async def start_extension_preview(background_tasks: BackgroundTasks, owner: str = "Kurt"):
-        validate_owner(owner)
+    async def start_extension_preview(background_tasks: BackgroundTasks, owner: str = "Kurt", listing: int = Form(0)):
+        preview_filter(owner, listing)
         extension_preview = previews[owner]
         if syncer.settings.extension_ai_api_key and not extension_preview["running"]:
-            extension_preview.update(rows=[], running=True, completed=0, total=0, finished_at=None)
-            background_tasks.add_task(scan_extensions, syncer, extension_preview, owner=owner)
-        return RedirectResponse(f"extension-preview?owner={owner}", status_code=303, background=background_tasks)
+            extension_preview.update(rows=[], running=True, completed=0, total=0, finished_at=None, listing=listing)
+            background_tasks.add_task(scan_extensions, syncer, extension_preview, owner=owner, listing=listing)
+        return RedirectResponse(f"extension-preview?owner={owner}&listing={listing}", status_code=303, background=background_tasks)
 
     @app.get("/extension-pricing", response_class=HTMLResponse)
     async def extension_pricing(request: Request, owner: str = EXTENSION_OWNERS[0]):

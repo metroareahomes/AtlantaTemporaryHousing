@@ -166,3 +166,37 @@ def test_mike_settings_are_independent_and_listing_scoped(syncer):
     assert not calendar_enabled_for(syncer.db, "Kurt")
     assert enabled(syncer, 102)
     assert not enabled(syncer, 101)
+
+
+def test_extension_preview_property_filter_scopes_review_and_cards(syncer, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from app import web
+
+    syncer.settings = replace(syncer.settings, extension_ai_api_key="test")
+    properties = [(101, "Kurt", "Moonlight"), (102, "Kurt", "Other Kurt home"),
+                  (103, "Mike", "Mike home")]
+    for listing, owner, name in properties:
+        syncer.db.execute(
+            "INSERT INTO properties(hostaway_listing_id,name,owner_scope) VALUES(?,?,?)",
+            (listing, name, owner),
+        )
+    scopes = []
+
+    async def scan(syncer, state, *, owner, listing):
+        scopes.append((owner, listing))
+        rows = [{"id": lid, "listing_id": lid, "property": name}
+                for lid, scope, name in properties if scope == owner and (not listing or lid == listing)]
+        state.update(rows=rows, running=False, finished_at="Now")
+
+    monkeypatch.setattr(web, "scan_extensions", scan)
+    client = TestClient(web.create_app(syncer))
+    assert client.post("/extension-preview?owner=Kurt").status_code == 200
+    response = client.get("/extension-preview?owner=Kurt&listing=101")
+    assert 'id="reservation-101"' in response.text
+    assert 'id="reservation-102"' not in response.text
+    assert client.post("/extension-preview?owner=Mike", data={"listing": 101}).status_code == 404
+    response = client.post("/extension-preview?owner=Mike", data={"listing": 103})
+    assert scopes == [("Kurt", 0), ("Mike", 103)]
+    assert 'id="reservation-103"' in response.text
+    assert 'id="reservation-101"' not in response.text
