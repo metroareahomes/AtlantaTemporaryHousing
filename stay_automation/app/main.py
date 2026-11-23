@@ -16,6 +16,7 @@ from .extension_followup import preview_followups
 from .extension_inquiry import run_inquiries
 from .extension_live import run_extension_live
 from .hostaway import HostawayClient
+from .holiday_calendar import reconcile_holidays
 from .locks import LockManager
 from .property_sheet import PropertySheet
 from .sync import Syncer
@@ -88,12 +89,14 @@ def build():
 
     async def sync_with_alerts():
         try:
-            return await syncer.sync_reservations()
+            changed = await syncer.sync_reservations()
         except Exception:
             await locks.alert("Hostaway synchronization failed", "Booking updates could not be refreshed. Check the Hostaway connection; the last saved reservations remain available.",
                               key=f"hostaway_sync:{syncer.now().strftime('%Y-%m-%dT%H')}", category="hostaway",
                               property_ids=[p['id'] for p in db.query("SELECT id FROM properties WHERE active=1")])
             raise
+        await run_logged("holiday_calendar", lambda: reconcile_holidays(syncer), db)
+        return changed
 
     async def retry_staff_alerts():
         await locks.alert_service.flush(channel='ha')
