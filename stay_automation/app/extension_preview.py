@@ -244,8 +244,11 @@ async def review_reservation(syncer, client, row):
         row["last_sent"] = outgoing[1]
     result = await assess(client, thread, checkout, [], outlook=True) if thread else {}
     status = result.get("status", "unclear")
-    evidence = thread.get(result.get("guest_message_id"))
-    quote = result.get("extension_evidence_quote")
+    guest_id = result.get("guest_message_id")
+    evidence = thread.get(guest_id) if type(guest_id) is int else None
+    timing_id = result.get("timing_message_id")
+    timing = thread.get(timing_id) if type(timing_id) is int else None
+    window = result.get("checkout_window")
     proposed = result.get("proposed_checkout")
     end = date.fromisoformat(proposed) if proposed else None
     minimum = result.get("minimum_stay_through")
@@ -253,16 +256,27 @@ async def review_reservation(syncer, client, row):
     minimum_only = minimum is not None and minimum >= checkout and (end is None or end <= minimum)
     if minimum_only:
         end = minimum + timedelta(days=1)
-    if (not evidence or not evidence[1] or not isinstance(quote, str)
-            or not quote.strip() or quote.strip() not in evidence[2]
+    if (not evidence or not evidence[1]
+            or (timing_id is not None and not timing)
             or evidence[2].strip().casefold().rstrip(".") == "alteration request received"
             or (status == "early_checkout" and (end is None or not arrival < end < checkout))
             or (end is not None and end <= checkout and status not in ("early_checkout", "declined"))):
         status = "unclear"
     row["extension_status"] = status
     row["note"] = LABELS.get(status, LABELS["unclear"])
-    if evidence and evidence[1] and status != "unclear":
-        row["evidence"] = quote.strip()
+    if evidence and status != "unclear":
+        row["evidence"] = evidence[2].strip()
+        if timing and timing_id != guest_id:
+            row["timing_evidence"] = timing[2].strip()
+    if status in ("considering", "requested", "confirmed") and isinstance(window, dict):
+        try:
+            earliest = date.fromisoformat(window["earliest"])
+            latest = date.fromisoformat(window["latest"])
+        except (KeyError, TypeError, ValueError):
+            pass
+        else:
+            if checkout <= earliest <= latest:
+                row["checkout_window"] = f"{earliest:%b %d, %Y} to {latest:%b %d, %Y}"
     if status == "early_checkout":
         row["note"] = f"Guest reports an earlier checkout on {end:%b %d, %Y} · Booking change unverified"
         row["next_action"] = "Verify the earlier checkout in Hostaway before releasing any booked nights."

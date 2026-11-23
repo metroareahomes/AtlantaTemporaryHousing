@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.61 — Contextual extension dates
+
+- Interpret guest timing from conversation context and show the cited messages and checkout windows.
+
 ## 0.6.60 — Reservation review property filter
 
 - Let Kurt and Mike review one property at a time and filter existing reservation cards.

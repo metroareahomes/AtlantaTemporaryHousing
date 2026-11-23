@@ -78,7 +78,9 @@ Apply extension and turnover holds to {{ extension_owner }}’s calendars</label
 </blockquote>
 {% endif %}
 <p><strong>Next action</strong> {{ row.next_action if not row.error else "Retry the reservation review." }}</p>
+{% if row.checkout_window %}<p><strong>Estimated checkout window</strong> {{ row.checkout_window }}</p>{% endif %}
 {% if row.evidence %}<p><strong>Guest message supporting this note</strong></p><blockquote>{{ row.evidence }}</blockquote>{% endif %}
+{% if row.timing_evidence %}<p><strong>Message the guest referenced for timing</strong></p><blockquote>{{ row.timing_evidence }}</blockquote>{% endif %}
 </div>
 <div>
 <h3>Proposed guest follow-up</h3>
