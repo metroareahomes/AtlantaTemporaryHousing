@@ -1,6 +1,6 @@
 """Preview extension follow-ups for dates already tracked by extension pricing."""
 import json
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 
 import httpx
 
@@ -30,19 +30,24 @@ def conversation(messages, reservation_id, account_id, now):
     return dict(sorted(thread.items(), key=lambda item: (item[1][0], item[0])))
 
 
-def qualifies(result, thread, checkout, now):
-    if result.get("status") != "considering" or result.get("host_followed_up") is not False:
-        return False
-    if result.get("update_promised") is not False:
-        return False
+def followup_due_at(result, thread, checkout):
+    if (result.get("status") != "considering"
+            or result.get("host_followed_up") is not False
+            or result.get("update_promised") is not False):
+        return None
     evidence = thread.get(result.get("guest_message_id"))
     update = thread.get(result.get("last_update_message_id"))
     if not evidence or not evidence[1] or not update or update[0] < evidence[0]:
-        return False
-    age = now - update[0]
-    return age >= timedelta(days=3) or (
-        checkout - now.astimezone(TZ).date() <= timedelta(days=3) and age >= timedelta(days=1)
-    )
+        return None
+    # The expedited rule starts at midnight local time three calendar days before checkout.
+    updated = update[0].astimezone(timezone.utc)
+    expedited = datetime.combine(checkout - timedelta(days=3), time.min, TZ)
+    return min(updated + timedelta(days=3), max(updated + timedelta(days=1), expedited))
+
+
+def qualifies(result, thread, checkout, now):
+    due = followup_due_at(result, thread, checkout)
+    return due is not None and now >= due
 
 
 async def assess(client, thread, checkout, nights, *, outlook=False):
@@ -65,7 +70,10 @@ async def assess(client, thread, checkout, nights, *, outlook=False):
                 "or conflicting statements. Apply the most recent clear change of plans."
                 + (" For the calendar outlook, return proposed_checkout as YYYY-MM-DD or null. "
                    "Use the latest clear guest position, even if dates are unknown. "
-                   "Only give a date supported by the guest’s latest plans and message timestamps. "
+                   "Resolve relative dates using the message timestamp and the booked checkout. "
+                   "If the guest says a duration like two extra nights, add it to booked checkout. "
+                   "If the guest gives an approximate but usable date, return it and set approximate_date "
+                   "to true. If there is no usable date or duration, return null. "
                    "Use the supplied booked checkout as the start of the proposed extension. "
                    "A guest agreeing to dates is confirmed, even if they have not booked. "
                    "Use booked only when the thread reports a completed booking."

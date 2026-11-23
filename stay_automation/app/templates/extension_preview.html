@@ -24,12 +24,14 @@
 <div>
 <h3>Calendar note preview</h3>
 <p>{{ row.note or 'Unavailable' }}</p>
-{% if row.span %}<p>{{ row.span }}</p>{% endif %}
+<p><strong>Dates to block</strong> {{ row.block_dates if not row.error else "Unavailable" }}</p>
+<p><strong>Next action</strong> {{ row.next_action if not row.error else "Retry the reservation review." }}</p>
 {% if row.evidence %}<blockquote>{{ row.evidence }}</blockquote>{% endif %}
 </div>
 <div>
 <h3>Proposed guest follow-up</h3>
-<p>{{ row.followup or ('Unavailable' if row.error else 'No follow-up due') }}</p>
+<p>{{ row.followup or ('Unavailable' if row.error else 'No message planned') }}</p>
+{% if row.followup_timing %}<p>{{ row.followup_timing }}</p>{% endif %}
 <h3>Latest sent message</h3>
 {% if row.last_sent %}
 <p>{{ row.last_sent_at }}</p>

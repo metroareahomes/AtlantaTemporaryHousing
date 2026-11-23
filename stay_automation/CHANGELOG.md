@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.46 — Extension preview next actions
+
+- Show proposed blocked nights, next actions, and follow-up wording and timing for each reservation.
+
 ## 0.6.45 — Kurt’s Extension Preview
 
 - Add a read-only dashboard for proposed calendar notes and guest follow-ups across Kurt’s homes.
