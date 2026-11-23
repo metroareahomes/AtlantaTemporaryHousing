@@ -47,7 +47,7 @@ def test_inquiry_dry_run_respects_minimum_stay_and_roleplayed_checkout():
            "hold_end": date(2026, 12, 26), "projected_turnover": [],
            "inquiry_message": "Do you need any nights beyond Christmas?"}
     simulate = extension_preview.simulate_inquiry
-    overlap = simulate(row, date(2026, 12, 23), date(2026, 12, 28))
+    overlap = simulate(row | {"firm_hold_end": row["hold_end"]}, date(2026, 12, 23), date(2026, 12, 28))
     assert "unavailable" in overlap["inquirer"]
     assert overlap["current_guest"] is None
 
@@ -93,3 +93,26 @@ def test_inquiry_waits_then_reminds_once_and_closes_at_deadline():
     assert simulate(1, acknowledged=True)["inquirer"] is None
     assert "couldn’t confirm" in simulate(2)["inquirer"]
     assert simulate(2)["current_guest"] is None
+
+
+def test_next_wednesday_is_one_week_after_the_nearest_wednesday():
+    from datetime import date
+
+    dates = extension_preview.relative_weekdays(date(2026, 11, 23))
+    assert dates["this Wednesday"] == "2026-11-25"
+    assert dates["next Wednesday"] == "2026-12-02"
+    assert extension_preview.relative_weekdays(date(2026, 11, 22))["next Wednesday"] == "2026-12-02"
+
+
+
+def test_unclear_reply_keeps_tentative_overlap_pending():
+    from datetime import date
+
+    row = {"arrival_date": "2026-11-01", "departure_date": "2026-11-27",
+           "hold_end": date(2026, 12, 26)}
+    result = extension_preview.simulate_inquiry(
+        row, date(2026, 12, 23), date(2026, 12, 28), guest_reply="clarify",
+    )
+    assert "waiting for our current guest" in result["inquirer"]
+    assert "What date" in result["current_guest"]
+    assert "Keep the proposed holds" in result["calendar"]

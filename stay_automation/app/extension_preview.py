@@ -4,7 +4,7 @@ from datetime import date, datetime, time, timedelta
 
 import httpx
 
-from .extension_followup import assess, conversation, followup_due_at, followup_text
+from .extension_followup import assess, conversation, followup_due_at, followup_text, next_us_thanksgiving, relative_weekdays
 from .extension_pricing import TZ, blocked
 from .hostaway import HostawayError
 
@@ -70,7 +70,11 @@ async def interpret_inquiry_reply(api_key, reply, reference_at, booked_checkout)
                     "with status booked_checkout, new_checkout, undecided, or clarify and checkout "
                     "(YYYY-MM-DD or null). Use the supplied local reference date to interpret relative dates. "
                     "Use new_checkout only when the guest indicates a definite checkout with one usable "
-                    "calendar day. For a promised update return status wait_until and update_after as a local "
+                    "calendar day. For phrases like next Wednesday, use the exact date in relative_weekdays. "
+                    "'Next Wednesday' is one week after the nearest Wednesday; 'this Wednesday' is "
+                    "the nearest Wednesday on or after the reference date. Ask before using a date that has already passed. "
+                    "For an unqualified future Thanksgiving use next_us_thanksgiving. "
+                    "Checking out on Thanksgiving means departing that day. For a promised update return status wait_until and update_after as a local "
                     "YYYY-MM-DDTHH:MM timestamp. Interpret a bare time such as after 5 pm on the reply date "
                     "if still upcoming, otherwise ask for clarification if the day is unclear. Never guess a day: 'next week' and 'extend to 2029' both require clarification. "
                     "A statement about staying through a date without saying when they leave is not a final checkout."
@@ -78,6 +82,8 @@ async def interpret_inquiry_reply(api_key, reply, reference_at, booked_checkout)
                 {"role": "user", "content": json.dumps({
                     "reply": reply, "local_reference_time": reference_at.isoformat(),
                     "booked_checkout": booked_checkout,
+                    "relative_weekdays": relative_weekdays(reference_at.astimezone(TZ).date()),
+                    "next_us_thanksgiving": next_us_thanksgiving(reference_at.astimezone(TZ).date()).isoformat(),
                 })},
             ],
         })
@@ -113,8 +119,11 @@ def simulate_inquiry(row, arrival, departure, *, guest_reply="", guest_checkout=
         raise ValueError("Inquiry checkout must be after arrival.")
     checkout = date.fromisoformat(row["departure_date"])
     first = date.fromisoformat(row["arrival_date"])
-    hold_end = row.get("hold_end")
-    turnover = row.get("projected_turnover", row.get("booked_turnover", []))
+    hold_end = row.get("firm_hold_end")
+    turnover = (
+        row.get("projected_turnover", row.get("booked_turnover", []))
+        if hold_end == row.get("hold_end") else row.get("booked_turnover", [])
+    )
     replied = bool(guest_reply)
     calendar = "Keep the proposed holds. Recheck availability and turnover once checkout plans are known."
     if guest_reply == "booked_checkout" or guest_reply == "new_checkout":
@@ -143,7 +152,7 @@ def simulate_inquiry(row, arrival, departure, *, guest_reply="", guest_checkout=
     if arrival < checkout and first < departure:
         reason = "The inquiry overlaps nights already booked by the current guest."
     elif hold_end and arrival < hold_end and checkout < departure:
-        reason = "The inquiry overlaps nights the current guest says they may need."
+        reason = "The inquiry overlaps nights the current guest has said they need."
     elif any(arrival <= night < departure for night in turnover):
         reason = "The inquiry overlaps proposed turnover nights."
     else:
@@ -238,11 +247,18 @@ async def review_reservation(syncer, client, row):
     if (not evidence or not evidence[1] or not isinstance(quote, str)
             or not quote.strip() or quote.strip() not in evidence[2]
             or evidence[2].strip().casefold().rstrip(".") == "alteration request received"
-            or (end is not None and end <= checkout)):
+            or (status == "early_checkout" and (end is None or not arrival < end < checkout))
+            or (end is not None and end <= checkout and status not in ("early_checkout", "declined"))):
         status = "unclear"
     row["note"] = LABELS.get(status, LABELS["unclear"])
     if evidence and evidence[1] and status != "unclear":
         row["evidence"] = quote.strip()
+    if status == "early_checkout":
+        row["note"] = f"Guest reports an earlier checkout on {end:%b %d, %Y} · Booking change unverified"
+        row["next_action"] = "Verify the earlier checkout in Hostaway before releasing any booked nights."
+        if arrival <= now.date():
+            row["inquiry_action"] = row["next_action"]
+        return
     if arrival <= now.date():
         row["inquiry_action"] = {
             "declined": "Use the confirmed checkout and check availability after turnover.",
@@ -286,6 +302,10 @@ async def review_reservation(syncer, client, row):
     last = end - timedelta(days=1)
     estimate = "Estimated " if result.get("approximate_date") is True else ""
     row["hold_end"] = end
+    if minimum is not None and minimum >= checkout:
+        row["firm_hold_end"] = minimum + timedelta(days=1)
+    if status == "confirmed" and not minimum_only and result.get("approximate_date") is not True:
+        row["firm_hold_end"] = end
     if minimum_only:
         row["projected_turnover"] = []
         if (result.get("inquiry_checkin_appropriate") is True
