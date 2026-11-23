@@ -24,3 +24,12 @@ def test_preview_requires_clear_stale_interest(patch, expected):
     result = dict(status="considering", host_followed_up=False, update_promised=False,
                   guest_message_id=1, last_update_message_id=1)
     assert qualifies(result | patch, thread, date(2026, 11, 30), now) is expected
+
+
+def test_us_thanksgiving_resolves_from_message_date():
+    from datetime import date
+    from app.extension_followup import next_us_thanksgiving
+
+    assert next_us_thanksgiving(date(2026, 11, 23)) == date(2026, 11, 26)
+    assert next_us_thanksgiving(date(2026, 11, 26)) == date(2026, 11, 26)
+    assert next_us_thanksgiving(date(2026, 11, 27)) == date(2027, 11, 25)

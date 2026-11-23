@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.52 — Inquiry decisions and relative dates
+
+- Keep inquiries pending when only tentative extension nights overlap, and interpret Thanksgiving and relative weekdays from the message date.
+
 ## 0.6.51 — Inquiry dry run
 
 - Simulate inquiry dates, guest replies, follow-up timing, and proposed messages without changing Hostaway.
