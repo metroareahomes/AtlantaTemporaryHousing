@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.56 — Turnover holds
+
+- Apply turnover holds from verified reservation dates when AI is unavailable or guest-message review fails.
+
 ## 0.6.55 — Inquiry messages
 
 - Ask the current guest about checkout and acknowledge an inquiry when plans need confirmation at an opted-in Kurt property.

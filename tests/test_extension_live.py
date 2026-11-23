@@ -83,3 +83,14 @@ def test_live_inquiry_is_scoped_and_sends_once(syncer, monkeypatch):
     extension_inquiry.queue_inquiry(syncer, raw, 23)
     run(extension_inquiry.run_inquiries(syncer))
     assert sent == [(31, "Could you confirm your checkout date?"), (32, extension_inquiry.WAITING_FOR_GUEST)]
+
+
+def test_verified_turnover_survives_failed_extension_review():
+    checkout = date(2026, 12, 1)
+    row = {"id": 17, "departure_date": checkout.isoformat(),
+           "booked_turnover": [checkout], "error": "Could not evaluate this reservation.",
+           "extension_status": "declined", "hold_end": date(2026, 12, 3)}
+    unverified = {"id": 18, "error": "Reservation could not be verified"}
+    desired, releasable = calendar_plan([row, unverified], checkout)
+    assert desired == {checkout: (17, "Turnover hold")}
+    assert not releasable

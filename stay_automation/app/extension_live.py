@@ -13,16 +13,16 @@ def selected_properties(db):
 def calendar_plan(rows, today):
     desired, releasable = {}, set()
     for row in rows:
+        rid = row["id"]
+        for night in row.get("booked_turnover", []):
+            if night >= today:
+                desired.setdefault(night, (rid, "Turnover hold"))
         if row.get("error"):
             continue
-        rid = row["id"]
         checkout = date.fromisoformat(row["departure_date"])
         end = row.get("hold_end")
         if (end and end == row.get("firm_hold_end")) or row.get("extension_status") == "declined":
             releasable.add(rid)
-        for night in row["booked_turnover"]:
-            if night >= today:
-                desired.setdefault(night, (rid, "Turnover hold"))
         if end:
             for offset in range((end - checkout).days):
                 night = checkout + timedelta(days=offset)
@@ -110,10 +110,11 @@ async def run_extension_live(syncer):
     db = syncer.db
     calendar_enabled = db.get_bool("extension_live_calendar")
     selected = selected_properties(db)
-    if not syncer.settings.extension_ai_api_key or not (calendar_enabled or selected):
+    ai_enabled = bool(syncer.settings.extension_ai_api_key)
+    if not calendar_enabled and not (ai_enabled and selected):
         return
     state = {}
-    await scan_kurt(syncer, state)
+    await scan_kurt(syncer, state, turnover_only=not ai_enabled)
     now = syncer.now()
     by_listing = {}
     for row in state["rows"]:

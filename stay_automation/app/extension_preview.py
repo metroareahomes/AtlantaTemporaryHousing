@@ -233,6 +233,8 @@ async def review_reservation(syncer, client, row):
     row["short_stay"] = 1 <= (checkout - arrival).days <= 3
     row["booked_turnover"] = turnover_nights(arrival, checkout)
     row["turnover_dates"] = ", ".join(day.strftime("%a, %b %d") for day in row["booked_turnover"]) or "None"
+    if client is None:
+        return
     thread = conversation(await syncer.hostaway.guest_messages(rid), rid,
                           syncer.settings.hostaway_account_id, syncer.now())
     outgoing = next(((stamp, body) for stamp, incoming, body in reversed(thread.values())
@@ -407,7 +409,7 @@ async def review_reservation(syncer, client, row):
     row["next_action"] += " Recheck the conversation and the hold before sending a follow-up."
 
 
-async def scan_kurt(syncer, state):
+async def scan_kurt(syncer, state, *, turnover_only=False):
     state.update(rows=[], running=True, completed=0, total=0)
     try:
         rows = syncer.db.query("""
@@ -421,7 +423,7 @@ async def scan_kurt(syncer, state):
                                      headers={"Authorization": f"Bearer {syncer.settings.extension_ai_api_key}"}) as client:
             for row in rows:
                 try:
-                    await review_reservation(syncer, client, row)
+                    await review_reservation(syncer, None if turnover_only else client, row)
                 except (HostawayError, httpx.HTTPError, ValueError, KeyError, TypeError, AttributeError, IndexError):
                     row["error"] = "Could not evaluate this reservation."
                 state["rows"].append(row)
