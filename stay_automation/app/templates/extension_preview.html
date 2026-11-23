@@ -16,7 +16,7 @@
 {% endif %}
 </section>
 {% for row in scan.rows %}
-<section class="panel">
+<section class="panel" id="reservation-{{ row.id }}">
 <h2>{{ row.property }} · {{ row.guest_name or 'Guest' }}</h2>
 <p>Reservation {{ row.id }} · {{ row.arrival_date }} to {{ row.departure_date }}</p>
 {% if row.error %}<p>{{ row.error }}</p>{% endif %}
@@ -46,6 +46,46 @@
 <h3>If an inquiry comes in for dates after booked checkout</h3>
 <p>{{ row.inquiry_action }}</p>
 <p>{{ row.inquiry_message or "No message to the current guest proposed." }}</p>
+{% endif %}
+{% if not row.error %}
+<h3>Dry-run an inquiry</h3>
+<form action="extension-preview-inquiry#reservation-{{ row.id }}" method="post">
+<input type="hidden" name="reservation" value="{{ row.id }}">
+<label>Inquiry arrival <input type="date" name="arrival" required value="{{ inquiry_arrival if inquiry_reservation == row.id else '' }}"></label>
+<label>Inquiry checkout <input type="date" name="departure" required value="{{ inquiry_departure if inquiry_reservation == row.id else '' }}"></label>
+<label>Write a reply as the current guest
+<textarea name="reply_text" maxlength="2000" rows="3" placeholder="I’m leaving next week.">{{ reply_text if inquiry_reservation == row.id else '' }}</textarea>
+</label>
+<p>A written reply takes precedence over the choices below.</p>
+<label>Or choose a reply
+<select name="guest_reply">
+<option value="">No reply yet</option>
+<option value="booked_checkout" {{ 'selected' if inquiry_reservation == row.id and guest_reply == 'booked_checkout' }}>I’ll leave on my booked checkout date</option>
+<option value="new_checkout" {{ 'selected' if inquiry_reservation == row.id and guest_reply == 'new_checkout' }}>I want to stay until a different checkout date</option>
+<option value="undecided" {{ 'selected' if inquiry_reservation == row.id and guest_reply == 'undecided' }}>I’m still deciding</option>
+</select>
+</label>
+<label>New checkout if extending <input type="date" name="guest_checkout" value="{{ guest_checkout if inquiry_reservation == row.id else '' }}"></label>
+<details{% if inquiry_reservation == row.id %} open{% endif %}>
+<summary>Simulate follow-through timing</summary>
+<label>When the guest replied (Eastern) <input type="datetime-local" name="reply_at" value="{{ reply_at if inquiry_reservation == row.id else '' }}"></label>
+<label>Simulate as of (Eastern) <input type="datetime-local" name="simulate_at" value="{{ simulate_at if inquiry_reservation == row.id else '' }}"></label>
+<label>Inquirer’s deadline (Eastern) <input type="datetime-local" name="deadline_at" value="{{ deadline_at if inquiry_reservation == row.id else '' }}"></label>
+<label><input type="checkbox" name="acknowledged" value="true" {{ 'checked' if inquiry_reservation == row.id and acknowledged }}> Inquirer already acknowledged</label>
+<label><input type="checkbox" name="reminder_sent" value="true" {{ 'checked' if inquiry_reservation == row.id and reminder_sent }}> Current guest already reminded</label>
+</details>
+<button>Run inquiry dry run</button>
+</form>
+{% endif %}
+{% if inquiry_reservation == row.id %}
+{% if inquiry_error %}<p role="alert">{{ inquiry_error }}</p>{% endif %}
+{% if inquiry_result %}
+{% if inquiry_interpretation %}<p><strong>Reply interpreted as</strong> {{ inquiry_interpretation }}</p>{% endif %}
+<p>{{ inquiry_result.reason }}</p>
+<p><strong>To the inquirer</strong> {{ inquiry_result.inquirer or "No message proposed." }}</p>
+<p><strong>To the current guest</strong> {{ inquiry_result.current_guest or 'No message proposed.' }}</p>
+<p><strong>Calendar recommendation</strong> {{ inquiry_result.calendar }}</p>
+{% endif %}
 {% endif %}
 <h3>Latest sent message</h3>
 {% if row.last_sent %}
