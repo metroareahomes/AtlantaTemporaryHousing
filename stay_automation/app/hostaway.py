@@ -229,17 +229,22 @@ class HostawayClient:
             json={"body": body, "communicationType": "channel"},
         )
 
-    async def send_extension_checkin(self, reservation_id: int, body: str) -> None:
+    async def extension_conversation(self, reservation_id: int, listing_id: int | None = None) -> int:
         found = await self._request("GET", "/conversations", params={"reservationId": reservation_id})
         matches = [c for c in found.get("result") or []
                    if str(c.get("reservationId")) == str(reservation_id)
                    and str(c.get("accountId")) == str(self._account_id)
-                   and c.get("type") == "channel"]
+                   and (listing_id is None or str(c.get("listingMapId")) == str(listing_id))]
         if len(matches) != 1:
-            raise HostawayError("Could not uniquely identify the guest’s booking-channel conversation")
-        conversation_id = int(matches[0]["id"])
+            raise HostawayError("Could not uniquely identify the guest’s conversation")
+        return int(matches[0]["id"])
+
+    async def send_extension_message(self, conversation_id: int, body: str) -> None:
         await self._request("POST", f"/conversations/{conversation_id}/messages",
                             json={"body": body, "communicationType": "channel"}, retry_transient=False)
+
+    async def send_extension_checkin(self, reservation_id: int, body: str) -> None:
+        await self.send_extension_message(await self.extension_conversation(reservation_id), body)
 
     async def unified_webhooks(self) -> list[dict[str, Any]]:
         body = await self._request("GET", "/webhooks/unifiedWebhooks")

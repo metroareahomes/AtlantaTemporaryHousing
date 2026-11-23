@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from .extension_inquiry import queue_inquiry
 from .extension_pricing import ExtensionPricing
 from .config import Settings
 from .db import DB, utcnow
@@ -298,6 +299,7 @@ class Syncer:
                         level="warning")
             return []
         raw = await self.hostaway.reservation(reservation_id)
+        queue_inquiry(self, raw, reservation_id)
         self.db.log("webhook.received", f"Webhook for reservation {reservation_id}")
         what = self.upsert_reservation(raw)
         await self.wake_thermostats()

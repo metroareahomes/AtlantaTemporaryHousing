@@ -136,11 +136,9 @@ async def run_extension_live(syncer):
                 if (row.get("error") or not due or not due <= now < due + timedelta(days=1) or
                         not date.fromisoformat(row["arrival_date"]) <= now.date() < date.fromisoformat(checkout)):
                     continue
-                if db.one("SELECT 1 FROM extension_live_messages WHERE reservation_id=? AND checkout=?",
+                if not db.one("INSERT OR IGNORE INTO extension_live_messages VALUES (?,?) RETURNING reservation_id",
                           (row["id"], checkout)):
                     continue
-                # Claim before sending: an uncertain delivery must not be retried automatically.
-                db.execute("INSERT INTO extension_live_messages VALUES (?,?)", (row["id"], checkout))
                 await syncer.hostaway.send_extension_checkin(row["id"], row["followup"])
                 db.log("extension.live_message", "Sent checkout check-in.", reservation_id=row["id"])
             except Exception:
