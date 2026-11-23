@@ -84,6 +84,11 @@ async def review_reservation(syncer, client, row):
     quote = result.get("extension_evidence_quote")
     proposed = result.get("proposed_checkout")
     end = date.fromisoformat(proposed) if proposed else None
+    minimum = result.get("minimum_stay_through")
+    minimum = date.fromisoformat(minimum) if minimum else None
+    minimum_only = minimum is not None and minimum >= checkout and (end is None or end <= minimum)
+    if minimum_only:
+        end = minimum + timedelta(days=1)
     if (not evidence or not evidence[1] or not isinstance(quote, str)
             or not quote.strip() or quote.strip() not in evidence[2]
             or evidence[2].strip().casefold().rstrip(".") == "alteration request received"
@@ -134,6 +139,14 @@ async def review_reservation(syncer, client, row):
 
     last = end - timedelta(days=1)
     estimate = "Estimated " if result.get("approximate_date") is True else ""
+    if minimum_only:
+        row["note"] = f"Guest plans to stay through at least {last:%b %d, %Y} · Final checkout unknown"
+        row["block_dates"] = f"{checkout:%b %d, %Y} through {last:%b %d, %Y} (minimum nights)"
+        row["next_action"] = (
+            "Hold at least the stated extension nights, subject to calendar availability. "
+            "Reassess turnover when the guest provides a final checkout date."
+        )
+        return
     row["note"] += f" · {estimate}{end:%b %d, %Y} checkout"
     row["block_dates"] = f"{checkout:%b %d, %Y} through {last:%b %d, %Y} (nights)"
     row["extended_turnover_dates"] = ", ".join(
