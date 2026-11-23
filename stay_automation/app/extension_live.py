@@ -2,12 +2,20 @@
 import json
 from datetime import date, timedelta
 
-from .extension_preview import scan_kurt
+from .extension_preview import scan_extensions, scan_kurt
 from .extension_pricing import blocked
 
 
-def selected_properties(db):
-    return set(json.loads(db.get_setting("extension_live_properties", "[]")))
+def owner_setting(key, owner):
+    return key if owner == "Kurt" else f"{key}_{owner.lower()}"
+
+
+def calendar_enabled_for(db, owner):
+    return db.get_bool(owner_setting("extension_live_calendar", owner))
+
+
+def selected_properties(db, owner="Kurt"):
+    return set(json.loads(db.get_setting(owner_setting("extension_live_properties", owner), "[]")))
 
 
 def calendar_plan(rows, today):
@@ -47,7 +55,7 @@ def unreserved(day):
     )
 
 
-async def update_holds(syncer, listing, rows, today, notes_enabled, *, report=None):
+async def update_holds(syncer, listing, rows, today, notes_enabled, *, report=None, owner="Kurt"):
     db, hostaway = syncer.db, syncer.hostaway
     desired, releasable = calendar_plan(rows, today)
     owned = {
@@ -60,7 +68,7 @@ async def update_holds(syncer, listing, rows, today, notes_enabled, *, report=No
         report = {"changes": 0, "candidates": 0, "skipped": 0}
     report["candidates"] += len(desired)
     for night in sorted(desired.keys() | owned.keys()):
-        if not live_property(db, listing) or not db.get_bool("extension_live_calendar"):
+        if not live_property(db, listing, owner) or not calendar_enabled_for(db, owner):
             return
         iso = night.isoformat()
         old = owned.get(night)
@@ -94,7 +102,7 @@ async def update_holds(syncer, listing, rows, today, notes_enabled, *, report=No
             if not blocked(day) or note not in hold_notes(old["marker"]):
                 continue
             payload = {"isAvailable": 1, "note": old["original_note"]}
-        if not live_property(db, listing) or not db.get_bool("extension_live_calendar"):
+        if not live_property(db, listing, owner) or not calendar_enabled_for(db, owner):
             return
         await hostaway.apply_calendar_intervals(listing, [{"startDate": iso, "endDate": iso} | payload])
         verified, = await hostaway.pricing_calendar(listing, iso, iso)
@@ -109,25 +117,28 @@ async def update_holds(syncer, listing, rows, today, notes_enabled, *, report=No
     return
 
 
-def live_property(db, listing):
-    return db.one("SELECT 1 FROM properties WHERE hostaway_listing_id=? AND active=1 AND owner_scope='Kurt'",
-                  (listing,)) is not None
+def live_property(db, listing, owner="Kurt"):
+    return db.one("SELECT 1 FROM properties WHERE hostaway_listing_id=? AND active=1 AND owner_scope=?",
+                  (listing, owner)) is not None
 
 
-async def run_extension_live(syncer, *, calendar_only=False):
+async def run_extension_live(syncer, *, calendar_only=False, owner="Kurt"):
     async with syncer.extension_calendar_lock:
-        return await _review_live(syncer, calendar_only)
+        return await _review_live(syncer, calendar_only, owner)
 
 
-async def _review_live(syncer, calendar_only):
+async def _review_live(syncer, calendar_only, owner):
     db = syncer.db
-    calendar_enabled = db.get_bool("extension_live_calendar")
-    selected = selected_properties(db)
+    calendar_enabled = calendar_enabled_for(db, owner)
+    selected = selected_properties(db, owner)
     ai_enabled = bool(syncer.settings.extension_ai_api_key)
     if not calendar_enabled and (calendar_only or not (ai_enabled and selected)):
         return "Calendar holds are disabled."
     state = {}
-    await scan_kurt(syncer, state, turnover_only=not ai_enabled)
+    if owner == "Kurt":
+        await scan_kurt(syncer, state, turnover_only=not ai_enabled)
+    else:
+        await scan_extensions(syncer, state, owner=owner, turnover_only=not ai_enabled)
     now = syncer.now()
     by_listing = {}
     for row in state["rows"]:
@@ -135,11 +146,11 @@ async def _review_live(syncer, calendar_only):
     failures = 0
     report = {"changes": 0, "candidates": 0, "skipped": 0}
     for listing, rows in by_listing.items():
-        if not live_property(db, listing):
+        if not live_property(db, listing, owner):
             continue
         if calendar_enabled:
             try:
-                await update_holds(syncer, listing, rows, now.date(), listing in selected_properties(db), report=report)
+                await update_holds(syncer, listing, rows, now.date(), listing in selected_properties(db, owner), report=report, owner=owner)
             except Exception:
                 failures += 1
                 db.log("extension.live_calendar_failed",
@@ -148,7 +159,7 @@ async def _review_live(syncer, calendar_only):
             continue
         for row in rows:
             try:
-                if listing not in selected_properties(db) or not live_property(db, listing):
+                if listing not in selected_properties(db, owner) or not live_property(db, listing, owner):
                     break
                 due = row.get("checkout_checkin_due")
                 checkout = row["departure_date"]

@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import date
 from types import SimpleNamespace
 
@@ -138,3 +139,30 @@ def test_calendar_intervals_accepts_empty_success():
             ])
 
     run(update())
+
+
+def test_mike_settings_are_independent_and_listing_scoped(syncer):
+    from fastapi.testclient import TestClient
+
+    from app.extension_inquiry import enabled
+    from app.extension_live import calendar_enabled_for, selected_properties
+    from app.web import create_app
+
+    for listing, owner in [(101, "Kurt"), (102, "Mike")]:
+        syncer.db.execute(
+            "INSERT INTO properties(hostaway_listing_id,name,owner_scope) VALUES(?,?,?)",
+            (listing, owner + " home", owner),
+        )
+    syncer.settings = replace(syncer.settings, extension_ai_api_key="test")
+    client = TestClient(create_app(syncer))
+    assert not calendar_enabled_for(syncer.db, "Mike")
+    response = client.post("/extension-live-settings?owner=Mike",
+                           data={"calendar_enabled": "true", "properties": ["101", "102"]})
+    assert response.status_code == 200
+    assert "Mike home" in response.text and "Kurt home" not in response.text
+    assert selected_properties(syncer.db, "Mike") == {102}
+    assert selected_properties(syncer.db, "Kurt") == set()
+    assert calendar_enabled_for(syncer.db, "Mike")
+    assert not calendar_enabled_for(syncer.db, "Kurt")
+    assert enabled(syncer, 102)
+    assert not enabled(syncer, 101)

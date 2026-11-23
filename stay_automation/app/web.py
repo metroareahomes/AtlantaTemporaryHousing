@@ -20,8 +20,8 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from .extension_live import live_property, run_extension_live, selected_properties
-from .extension_preview import interpret_inquiry_reply, local_scenario_time, scan_kurt, simulate_inquiry
+from .extension_live import calendar_enabled_for, live_property, owner_setting, run_extension_live, selected_properties
+from .extension_preview import interpret_inquiry_reply, local_scenario_time, scan_extensions, simulate_inquiry
 from .extension_pricing import OWNERS as EXTENSION_OWNERS, SETTINGS_KEY as EXTENSION_SETTINGS_KEY
 from .extension_pricing import read_settings as extension_rules, validate_settings as validate_extension_rules
 from .extension_report import report_rows as extension_report_rows
@@ -881,13 +881,19 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, 
             notice = "Lock state and codes checked"
         return _done(_board_back(show, sort, q), notice)
 
-    extension_preview = {"rows": [], "running": False, "completed": 0, "total": 0}
+    previews = {owner: {"rows": [], "running": False, "completed": 0, "total": 0}
+                for owner in EXTENSION_OWNERS}
 
-    calendar_refresh = {"running": False, "message": ""}
+    refreshes = {owner: {"running": False, "message": ""} for owner in EXTENSION_OWNERS}
 
-    async def refresh_extension_calendar():
+    def validate_owner(owner):
+        if owner not in EXTENSION_OWNERS:
+            raise HTTPException(404)
+
+    async def refresh_extension_calendar(owner):
+        calendar_refresh = refreshes[owner]
         try:
-            calendar_refresh["message"] = await run_extension_live(syncer, calendar_only=True)
+            calendar_refresh["message"] = await run_extension_live(syncer, calendar_only=True, owner=owner)
         except Exception:
             calendar_refresh["message"] = "The calendar review failed. Check the Stay Automation log."
             db.log("extension.live_calendar_failed", "Manual calendar review failed.", level="warning")
@@ -895,38 +901,43 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, 
             calendar_refresh["running"] = False
 
     @app.post("/extension-calendar-update")
-    async def update_extension_calendar(background_tasks: BackgroundTasks):
-        if db.get_bool("extension_live_calendar") and not calendar_refresh["running"]:
+    async def update_extension_calendar(background_tasks: BackgroundTasks, owner: str = "Kurt"):
+        validate_owner(owner)
+        calendar_refresh = refreshes[owner]
+        if calendar_enabled_for(db, owner) and not calendar_refresh["running"]:
             calendar_refresh.update(running=True, message="")
-            background_tasks.add_task(refresh_extension_calendar)
-        return RedirectResponse("extension-preview#live-calendar", status_code=303, background=background_tasks)
+            background_tasks.add_task(refresh_extension_calendar, owner)
+        return RedirectResponse(f"extension-preview?owner={owner}#live-calendar", status_code=303, background=background_tasks)
 
-    def extension_live_controls():
+    def extension_live_controls(owner):
         return {
-            "calendar_refresh": calendar_refresh,
-            "live_calendar": db.get_bool("extension_live_calendar"),
-            "live_selected": selected_properties(db),
+            "calendar_refresh": refreshes[owner],
+            "extension_owner": owner,
+            "live_calendar": calendar_enabled_for(db, owner),
+            "live_selected": selected_properties(db, owner),
             "live_properties": db.query(
                 "SELECT name, hostaway_listing_id FROM properties "
-                "WHERE active=1 AND owner_scope='Kurt' AND hostaway_listing_id IS NOT NULL ORDER BY name"
+                "WHERE active=1 AND owner_scope=? AND hostaway_listing_id IS NOT NULL ORDER BY name", (owner,)
             ),
         }
 
     @app.post("/extension-live-settings")
     async def save_extension_live_settings(calendar_enabled: bool = Form(False),
-                                           properties: list[int] = Form(default=[])):
+                                           properties: list[int] = Form(default=[]), owner: str = "Kurt"):
+        validate_owner(owner)
         db.set_settings({
-            "extension_live_calendar": "1" if calendar_enabled else "0",
-            "extension_live_properties": json.dumps(sorted({
-                listing for listing in properties if live_property(db, listing)
+            owner_setting("extension_live_calendar", owner): "1" if calendar_enabled else "0",
+            owner_setting("extension_live_properties", owner): json.dumps(sorted({
+                listing for listing in properties if live_property(db, listing, owner)
             })),
         })
-        return RedirectResponse("extension-preview", status_code=303)
+        return RedirectResponse(f"extension-preview?owner={owner}", status_code=303)
 
     @app.get("/extension-preview", response_class=HTMLResponse)
-    async def show_extension_preview(request: Request):
-        return page(request, "extension_preview.html", scan=extension_preview,
-                    configured=bool(syncer.settings.extension_ai_api_key), **extension_live_controls())
+    async def show_extension_preview(request: Request, owner: str = "Kurt"):
+        validate_owner(owner)
+        return page(request, "extension_preview.html", scan=previews[owner],
+                    configured=bool(syncer.settings.extension_ai_api_key), **extension_live_controls(owner))
 
     @app.post("/extension-preview-inquiry", response_class=HTMLResponse)
     async def run_extension_inquiry(request: Request, reservation: int = Form(...),
@@ -934,9 +945,11 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, 
                                     guest_reply: str = Form(""), guest_checkout: str = Form(""),
                                     reply_text: str = Form(""), reply_at: str = Form(""),
                                     simulate_at: str = Form(""), deadline_at: str = Form(""),
-                                    acknowledged: bool = Form(False), reminder_sent: bool = Form(False)):
+                                    acknowledged: bool = Form(False), reminder_sent: bool = Form(False),
+                                    owner: str = "Kurt"):
+        validate_owner(owner)
         result = error = interpretation = None
-        row = next((item for item in extension_preview["rows"] if item["id"] == reservation), None)
+        row = next((item for item in previews[owner]["rows"] if item["id"] == reservation), None)
         if row is None or row.get("error"):
             error = "Review this reservation before running an inquiry simulation."
         else:
@@ -982,20 +995,22 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, 
                 error = str(exc)
             except (httpx.HTTPError, KeyError, TypeError, AttributeError, IndexError):
                 error = "Could not interpret the simulated reply. Try again or select a reply option."
-        return page(request, "extension_preview.html", scan=extension_preview,
+        return page(request, "extension_preview.html", scan=previews[owner],
                     configured=bool(syncer.settings.extension_ai_api_key), inquiry_reservation=reservation,
                     inquiry_arrival=arrival, inquiry_departure=departure, inquiry_result=result, inquiry_error=error,
                     guest_reply=guest_reply, guest_checkout=guest_checkout, reply_text=reply_text,
                     inquiry_interpretation=interpretation, reply_at=received.strftime("%Y-%m-%dT%H:%M") if not error else reply_at,
                     simulate_at=simulate_at, deadline_at=deadline_at,
-                    acknowledged=acknowledged, reminder_sent=reminder_sent, **extension_live_controls())
+                    acknowledged=acknowledged, reminder_sent=reminder_sent, **extension_live_controls(owner))
 
     @app.post("/extension-preview")
-    async def start_extension_preview(background_tasks: BackgroundTasks):
+    async def start_extension_preview(background_tasks: BackgroundTasks, owner: str = "Kurt"):
+        validate_owner(owner)
+        extension_preview = previews[owner]
         if syncer.settings.extension_ai_api_key and not extension_preview["running"]:
             extension_preview.update(rows=[], running=True, completed=0, total=0, finished_at=None)
-            background_tasks.add_task(scan_kurt, syncer, extension_preview)
-        return RedirectResponse("extension-preview", status_code=303, background=background_tasks)
+            background_tasks.add_task(scan_extensions, syncer, extension_preview, owner=owner)
+        return RedirectResponse(f"extension-preview?owner={owner}", status_code=303, background=background_tasks)
 
     @app.get("/extension-pricing", response_class=HTMLResponse)
     async def extension_pricing(request: Request, owner: str = EXTENSION_OWNERS[0]):

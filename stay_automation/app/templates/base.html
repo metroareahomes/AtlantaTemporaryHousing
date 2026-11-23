@@ -36,7 +36,8 @@
           <summary>Pricing</summary>
           <div class="menu-panel">
             <a href="extension-pricing" {{ 'aria-current=page' if active == 'extension-pricing' }}>Guest Extension Pricing</a>
-            <a href="extension-preview" {{ 'aria-current=page' if active == 'extension-preview' }}>Kurt’s Extension Preview</a>
+            <a href="extension-preview" {{ 'aria-current=page' if active == 'extension-preview' and extension_owner == 'Kurt' }}>Kurt’s Extension Preview</a>
+            <a href="extension-preview?owner=Mike" {{ 'aria-current=page' if active == 'extension-preview' and extension_owner == 'Mike' }}>Mike’s Extension Preview</a>
             <a href="thursday-special">The Thursday Special</a>
           </div>
         </details>

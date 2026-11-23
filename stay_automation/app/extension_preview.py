@@ -1,4 +1,4 @@
-"""Read-only calendar and conversation previews for Kurt's reservations."""
+"""Read-only calendar and conversation previews for an owner's reservations."""
 import json
 from datetime import date, datetime, time, timedelta
 
@@ -410,14 +410,18 @@ async def review_reservation(syncer, client, row):
 
 
 async def scan_kurt(syncer, state, *, turnover_only=False):
+    await scan_extensions(syncer, state, owner="Kurt", turnover_only=turnover_only)
+
+
+async def scan_extensions(syncer, state, *, owner, turnover_only=False):
     state.update(rows=[], running=True, completed=0, total=0)
     try:
         rows = syncer.db.query("""
             SELECT r.id, r.listing_id, r.guest_name, r.arrival_date, r.departure_date, p.name AS property
             FROM reservations r JOIN properties p ON p.hostaway_listing_id=r.listing_id
-            WHERE r.active=1 AND p.active=1 AND p.owner_scope='Kurt' AND julianday(r.check_out_at) > julianday(?)
+            WHERE r.active=1 AND p.active=1 AND p.owner_scope=? AND julianday(r.check_out_at) > julianday(?)
             ORDER BY r.arrival_date, p.name, r.id
-        """, (syncer.now().isoformat(),))
+        """, (owner, syncer.now().isoformat()))
         state["total"] = len(rows)
         async with httpx.AsyncClient(base_url="https://api.openai.com", timeout=30,
                                      headers={"Authorization": f"Bearer {syncer.settings.extension_ai_api_key}"}) as client:
