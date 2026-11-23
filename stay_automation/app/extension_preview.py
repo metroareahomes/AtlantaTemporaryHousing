@@ -8,6 +8,7 @@ from .extension_pricing import TZ, blocked
 from .hostaway import HostawayError
 
 LABELS = {
+    "requested": "Extension requested · Awaiting host confirmation",
     "considering": "Possible extension",
     "confirmed": "Guest confirmed · Booking pending",
     "declined": "Extension declined · Original checkout",
@@ -80,24 +81,46 @@ async def review_reservation(syncer, client, row):
     result = await assess(client, thread, checkout, [], outlook=True) if thread else {}
     status = result.get("status", "unclear")
     evidence = thread.get(result.get("guest_message_id"))
+    quote = result.get("extension_evidence_quote")
     proposed = result.get("proposed_checkout")
     end = date.fromisoformat(proposed) if proposed else None
-    if (not evidence or not evidence[1]
+    if (not evidence or not evidence[1] or not isinstance(quote, str)
+            or not quote.strip() or quote.strip() not in evidence[2]
             or evidence[2].strip().casefold().rstrip(".") == "alteration request received"
             or (end is not None and end <= checkout)):
         status = "unclear"
     row["note"] = LABELS.get(status, LABELS["unclear"])
     if evidence and evidence[1] and status != "unclear":
-        row["evidence"] = evidence[2]
+        row["evidence"] = quote.strip()
+    if arrival <= now.date():
+        row["inquiry_action"] = {
+            "declined": "Use the confirmed checkout and check availability after turnover.",
+            "confirmed": "Check the inquiry against the extension and turnover dates first.",
+            "requested": "Resolve the existing extension request before committing overlapping dates.",
+            "booked": "Verify the extension booking in Hostaway before responding.",
+        }.get(status, "Review the requested dates and current guest’s plans internally.")
+        if (status not in ("declined", "booked", "confirmed", "requested")
+                and end is None
+                and result.get("inquiry_checkin_appropriate") is True
+                and result.get("host_followed_up") is False
+                and result.get("update_promised") is False):
+            row["inquiry_action"] = (
+                "If the inquiry overlaps dates the current guest may need, confirm their plans before responding."
+            )
+            row["inquiry_message"] = (
+                f"Hi, we’re checking availability for dates after your scheduled checkout on "
+                f"{checkout:%B} {checkout.day}. Could you confirm whether you’re still planning "
+                "to check out that day? Thank you!"
+            )
     if status == "declined":
         row["next_action"] = (
             "Keep the booked checkout. Release any extension-only hold for nights the guest no longer needs. "
             "Keep the turnover nights blocked."
         )
         return
-    if status not in ("considering", "confirmed") or end is None:
+    if status not in ("considering", "requested", "confirmed") or end is None:
         row["note"] = (
-            "Possible extension · Dates unknown" if status in ("considering", "confirmed")
+            "Possible extension · Dates unknown" if status in ("considering", "requested", "confirmed")
             else LABELS["unclear"]
         )
         preview_checkout_checkin(row, result, checkout, now)
@@ -113,12 +136,30 @@ async def review_reservation(syncer, client, row):
     estimate = "Estimated " if result.get("approximate_date") is True else ""
     row["note"] += f" · {estimate}{end:%b %d, %Y} checkout"
     row["block_dates"] = f"{checkout:%b %d, %Y} through {last:%b %d, %Y} (nights)"
+    row["extended_turnover_dates"] = ", ".join(
+        day.strftime("%a, %b %d") for day in turnover_nights(arrival, end)
+    ) or "None"
     row["next_action"] = (
-        "Hold the proposed extension nights, subject to calendar availability. "
+        "Hold the proposed extension and subsequent turnover nights, subject to calendar availability. "
         "Release extension-only nights when the guest’s plans indicate they’re unlikely to need them."
     )
     if result.get("contact_appropriate") is not True:
         row["next_action"] += " Review checkout plans internally before contacting the guest."
+        return
+    alteration = thread.get(result.get("pending_alteration_message_id"))
+    if (alteration and not alteration[1] and result.get("approval_reminder_appropriate") is True
+            and result.get("host_followed_up") is False and result.get("update_promised") is False):
+        row["note"] = f"Alteration sent · Awaiting guest approval · {end:%b %d, %Y} checkout"
+        row["followup"] = (
+            f"Hi, just checking in on the alteration request we sent for a {end:%B} {end.day} checkout. "
+            "If those dates still work for you, could you approve the request when you have a chance? "
+            "If your plans have changed, just let us know. Thank you!"
+        )
+        row["followup_timing"] = "Draft for host review."
+        row["next_action"] += " Follow up on the outstanding alteration request."
+        return
+    if status == "requested":
+        row["next_action"] += " Confirm availability before agreeing to the request."
         return
     if status == "confirmed":
         row["next_action"] += " Wait for the extension booking to appear in Hostaway."
