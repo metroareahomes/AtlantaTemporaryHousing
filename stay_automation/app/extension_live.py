@@ -1,6 +1,7 @@
 """Opt-in Hostaway calendar holds and selected-property checkout messages."""
 import json
 from datetime import date, timedelta
+from itertools import groupby
 
 from httpx import HTTPError
 
@@ -91,6 +92,7 @@ async def update_holds(syncer, listing, rows, today, notes_enabled, *, report=No
     if report is None:
         report = {"changes": 0, "candidates": 0, "skipped": 0}
     report["candidates"] += len(desired)
+    changes = []
     for night in sorted(desired.keys() | owned.keys()):
         if not live_property(db, listing, owner) or not calendar_enabled_for(db, owner):
             return
@@ -105,10 +107,14 @@ async def update_holds(syncer, listing, rows, today, notes_enabled, *, report=No
                 report["skipped"] += bool(target)
                 continue
             note = day.get("note") or ""
+            daily_marker = f"[Stay Automation hold {listing}/{iso}]"
+            owned_block = old and blocked(day) and any(
+                is_hold_note(note, marker)
+                for marker in (old["marker"], daily_marker, f"[Stay Automation hold {listing}/stay-{old['reservation_id']}]")
+            )
             if target:
                 rid, label = target
-                marker = f"[Stay Automation hold {listing}/{iso}]"
-                owned_block = old and blocked(day) and is_hold_note(note, old["marker"])
+                marker = f"[Stay Automation hold {listing}/stay-{rid}]" if notes_enabled else daily_marker
                 if not owned_block and (note or day.get("status") not in (None, "", "available", "open")
                                         or day.get("isAvailable") not in (1, "1", True)):
                     report["skipped"] += 1
@@ -124,27 +130,56 @@ async def update_holds(syncer, listing, rows, today, notes_enabled, *, report=No
                 )
                 payload = {"isAvailable": 0, "note": text}
             else:
-                if not blocked(day) or not is_hold_note(note, old["marker"]):
+                if not owned_block:
                     continue
                 payload = {"isAvailable": 1, "note": old["original_note"]}
-            if not live_property(db, listing, owner) or not calendar_enabled_for(db, owner):
-                return
-            await hostaway.apply_calendar_intervals(listing, [{"startDate": iso, "endDate": iso} | payload])
-            verified, = await hostaway.pricing_calendar(listing, iso, iso)
-            if (bool(target) != blocked(verified) or (verified.get("note") or "") != payload["note"]
-                    or (not target and verified.get("isAvailable") not in (1, "1", True))):
-                raise ValueError("Hostaway did not verify the calendar change")
-            if not target:
+            changes.append((night, payload))
+        except (HostawayError, HTTPError, ValueError) as exc:
+            log_failed_night(db, listing, iso, report, exc)
+
+    def interval_key(item):
+        index, (night, payload) = item
+        # Any skipped or protected night creates a gap between intervals.
+        if payload["isAvailable"]:
+            return night.toordinal(), 1, payload["note"]
+        return night.toordinal() - index, 0, payload["note"]
+
+    for _, group in groupby(enumerate(changes), key=interval_key):
+        interval = [change for _, change in group]
+        first, payload = interval[0]
+        last = interval[-1][0]
+        if not live_property(db, listing, owner) or not calendar_enabled_for(db, owner):
+            return
+        try:
+            await hostaway.apply_calendar_intervals(listing, [
+                {"startDate": first.isoformat(), "endDate": last.isoformat()} | payload
+            ])
+        except (HostawayError, HTTPError, ValueError) as exc:
+            for night, _ in interval:
+                log_failed_night(db, listing, night.isoformat(), report, exc)
+            continue
+
+        for night, _ in interval:
+            iso = night.isoformat()
+            holding = payload["isAvailable"] == 0
+            try:
+                verified, = await hostaway.pricing_calendar(listing, iso, iso)
+                if (holding != blocked(verified) or (verified.get("note") or "") != payload["note"]
+                        or (not holding and verified.get("isAvailable") not in (1, "1", True))):
+                    raise ValueError("Hostaway did not verify the calendar change")
+            except (HostawayError, HTTPError, ValueError) as exc:
+                log_failed_night(db, listing, iso, report, exc)
+                continue
+            if not holding:
                 db.execute("DELETE FROM extension_live_holds WHERE listing_id=? AND night=?", (listing, iso))
             report["changes"] += 1
-            db.log("extension.live_calendar", f"Verified {'hold' if target else 'release'} for listing {listing} on {iso}.")
-        except (HostawayError, HTTPError, ValueError) as exc:
-            report["failed_nights"] = report.get("failed_nights", 0) + 1
-            db.log("extension.live_calendar_failed",
-                   f"Calendar change could not be verified for listing {listing} on {iso} "
-                   f"({type(exc).__name__}).", level="warning")
+            db.log("extension.live_calendar", f"Verified {'hold' if holding else 'release'} for listing {listing} on {iso}.")
 
-    return
+def log_failed_night(db, listing, iso, report, exc):
+    report["failed_nights"] = report.get("failed_nights", 0) + 1
+    db.log("extension.live_calendar_failed",
+           f"Calendar change could not be verified for listing {listing} on {iso} "
+           f"({type(exc).__name__}).", level="warning")
 
 
 def live_property(db, listing, owner="Kurt"):
