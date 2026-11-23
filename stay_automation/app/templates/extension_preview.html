@@ -15,6 +15,24 @@
 <p>Last review {{ scan.finished_at }} · {{ scan.completed }} reservations</p>
 {% endif %}
 </section>
+<section class="panel">
+<h2>Live extension settings</h2>
+<form action="extension-live-settings" method="post">
+<p><label><input type="checkbox" name="calendar_enabled" {% if live_calendar %}checked{% endif %}>
+Apply extension and turnover holds to Kurt’s calendars</label></p>
+<fieldset>
+<legend>Calendar notes and automatic checkout check-ins</legend>
+<p>Select the homes where the automation can add descriptive hold notes and send eligible checkout check-ins.</p>
+{% for property in live_properties %}
+<p><label><input type="checkbox" name="properties" value="{{ property.hostaway_listing_id }}"
+{% if property.hostaway_listing_id in live_selected %}checked{% endif %}> {{ property.name }}</label></p>
+{% else %}
+<p>No active properties are tagged Kurt.</p>
+{% endfor %}
+</fieldset>
+<button>Save live extension settings</button>
+</form>
+</section>
 {% for row in scan.rows %}
 <section class="panel" id="reservation-{{ row.id }}">
 <h2>{{ row.property }} · {{ row.guest_name or 'Guest' }}</h2>

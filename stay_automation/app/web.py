@@ -20,6 +20,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from .extension_live import live_property, selected_properties
 from .extension_preview import interpret_inquiry_reply, local_scenario_time, scan_kurt, simulate_inquiry
 from .extension_pricing import OWNERS as EXTENSION_OWNERS, SETTINGS_KEY as EXTENSION_SETTINGS_KEY
 from .extension_pricing import read_settings as extension_rules, validate_settings as validate_extension_rules
@@ -882,10 +883,31 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, 
 
     extension_preview = {"rows": [], "running": False, "completed": 0, "total": 0}
 
+    def extension_live_controls():
+        return {
+            "live_calendar": db.get_bool("extension_live_calendar"),
+            "live_selected": selected_properties(db),
+            "live_properties": db.query(
+                "SELECT name, hostaway_listing_id FROM properties "
+                "WHERE active=1 AND owner_scope='Kurt' AND hostaway_listing_id IS NOT NULL ORDER BY name"
+            ),
+        }
+
+    @app.post("/extension-live-settings")
+    async def save_extension_live_settings(calendar_enabled: bool = Form(False),
+                                           properties: list[int] = Form(default=[])):
+        db.set_settings({
+            "extension_live_calendar": "1" if calendar_enabled else "0",
+            "extension_live_properties": json.dumps(sorted({
+                listing for listing in properties if live_property(db, listing)
+            })),
+        })
+        return RedirectResponse("extension-preview", status_code=303)
+
     @app.get("/extension-preview", response_class=HTMLResponse)
     async def show_extension_preview(request: Request):
         return page(request, "extension_preview.html", scan=extension_preview,
-                    configured=bool(syncer.settings.extension_ai_api_key))
+                    configured=bool(syncer.settings.extension_ai_api_key), **extension_live_controls())
 
     @app.post("/extension-preview-inquiry", response_class=HTMLResponse)
     async def run_extension_inquiry(request: Request, reservation: int = Form(...),
@@ -947,7 +969,7 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, 
                     guest_reply=guest_reply, guest_checkout=guest_checkout, reply_text=reply_text,
                     inquiry_interpretation=interpretation, reply_at=received.strftime("%Y-%m-%dT%H:%M") if not error else reply_at,
                     simulate_at=simulate_at, deadline_at=deadline_at,
-                    acknowledged=acknowledged, reminder_sent=reminder_sent)
+                    acknowledged=acknowledged, reminder_sent=reminder_sent, **extension_live_controls())
 
     @app.post("/extension-preview")
     async def start_extension_preview(background_tasks: BackgroundTasks):
