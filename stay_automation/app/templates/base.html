@@ -32,10 +32,11 @@
             <a href="events" class="{{ 'on' if active == 'events' }}" {{ 'aria-current=page' if active == 'events' }}>Activity log</a>
           </div>
         </details>
-        <details class="menu {{ 'on' if active in ['thursday-special', 'thursday-bookings', 'extension-pricing'] }}">
+        <details class="menu {{ 'on' if active in ['thursday-special', 'thursday-bookings', 'extension-pricing', 'extension-preview'] }}">
           <summary>Pricing</summary>
           <div class="menu-panel">
             <a href="extension-pricing" {{ 'aria-current=page' if active == 'extension-pricing' }}>Guest Extension Pricing</a>
+            <a href="extension-preview" {{ 'aria-current=page' if active == 'extension-preview' }}>Kurt’s Extension Preview</a>
             <a href="thursday-special">The Thursday Special</a>
           </div>
         </details>

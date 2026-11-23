@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode, urlsplit, parse_qs
 
-from fastapi import FastAPI, Form, HTTPException, Request
+from fastapi import BackgroundTasks, FastAPI, Form, HTTPException, Request
 from fastapi.exception_handlers import http_exception_handler
 from starlette.datastructures import FormData
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -18,6 +18,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from .extension_preview import scan_kurt
 from .extension_pricing import OWNERS as EXTENSION_OWNERS, SETTINGS_KEY as EXTENSION_SETTINGS_KEY
 from .extension_pricing import read_settings as extension_rules, validate_settings as validate_extension_rules
 from .extension_report import report_rows as extension_report_rows
@@ -876,6 +877,20 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, 
         else:
             notice = "Lock state and codes checked"
         return _done(_board_back(show, sort, q), notice)
+
+    extension_preview = {"rows": [], "running": False, "completed": 0, "total": 0}
+
+    @app.get("/extension-preview", response_class=HTMLResponse)
+    async def show_extension_preview(request: Request):
+        return page(request, "extension_preview.html", scan=extension_preview,
+                    configured=bool(syncer.settings.extension_ai_api_key))
+
+    @app.post("/extension-preview")
+    async def start_extension_preview(background_tasks: BackgroundTasks):
+        if syncer.settings.extension_ai_api_key and not extension_preview["running"]:
+            extension_preview.update(rows=[], running=True, completed=0, total=0, finished_at=None)
+            background_tasks.add_task(scan_kurt, syncer, extension_preview)
+        return RedirectResponse("extension-preview", status_code=303, background=background_tasks)
 
     @app.get("/extension-pricing", response_class=HTMLResponse)
     async def extension_pricing(request: Request, owner: str = EXTENSION_OWNERS[0]):
