@@ -3,7 +3,7 @@ from datetime import date, timedelta
 
 import httpx
 
-from .extension_followup import assess, conversation, followup_text, qualifies
+from .extension_followup import assess, conversation, followup_due_at, followup_text
 from .extension_pricing import TZ, blocked
 from .hostaway import HostawayError
 
@@ -17,6 +17,8 @@ LABELS = {
 
 
 async def review_reservation(syncer, client, row):
+    row["next_action"] = "Wait for the guest to mention an extension."
+    row["block_dates"] = "None proposed"
     rid = row["id"]
     now = syncer.now().astimezone(TZ)
     raw = await syncer.hostaway.reservation(rid)
@@ -47,30 +49,62 @@ async def review_reservation(syncer, client, row):
     if evidence and evidence[1] and status != "unclear":
         row["evidence"] = evidence[2]
     if status not in ("considering", "confirmed"):
+        row["next_action"] = {
+            "declined": "Keep the original checkout. No extension hold or follow-up is proposed.",
+            "booked": "Verify the extra nights in Hostaway before changing availability.",
+        }.get(status, "Wait for a clear extension update before proposing a hold or a message.")
         return
     proposed = result.get("proposed_checkout")
     if not proposed or date.fromisoformat(proposed) <= checkout:
         row["note"] += " · Dates unknown"
+        row["next_action"] = "Wait for the guest to clarify their dates before proposing a hold."
+        if followup_due_at(result, thread, checkout) is not None:
+            row["followup"] = (
+                "Hi, could you let us know which extra nights you might need, or when you expect "
+                "to know? That will help us check availability for you. Thank you!"
+            )
+            row["followup_timing"] = "Optional manual message. The automated follow-up requires specific held nights."
         return
+
     end = date.fromisoformat(proposed)
     last = end - timedelta(days=1)
-    row["note"] += f" · {end:%b %d, %Y} checkout"
-    row["span"] = f"{checkout:%b %d, %Y} through {last:%b %d, %Y} (nights)"
-    if not qualifies(result, thread, checkout, now):
+    estimate = "Estimated " if result.get("approximate_date") is True else ""
+    row["note"] += f" · {estimate}{end:%b %d, %Y} checkout"
+    row["block_dates"] = f"{checkout:%b %d, %Y} through {last:%b %d, %Y} (nights)"
+    row["next_action"] = "Propose holding the listed nights, subject to calendar availability."
+    if status == "confirmed":
+        row["next_action"] += " Wait for the extension booking to appear in Hostaway."
+        return
+    if result.get("host_followed_up") is True:
+        row["next_action"] += " Wait for a reply to the host’s follow-up."
+        return
+    if result.get("update_promised") is True:
+        row["next_action"] += " Wait for the update the guest promised or the deadline agreed in the conversation."
+        return
+    due = followup_due_at(result, thread, checkout)
+    if due is None:
+        row["next_action"] += " Wait until the conversation gives a clear basis for a follow-up."
         return
 
     tracked = syncer.db.query(
         "SELECT night FROM extension_rates WHERE reservation_id=? AND listing_id=? AND tracking=1 "
-        "AND night>=? ORDER BY night", (rid, row["listing_id"], checkout.isoformat()),
+        "AND night>=? AND night<? ORDER BY night",
+        (rid, row["listing_id"], checkout.isoformat(), end.isoformat()),
     )
-    if len(tracked) != (end - checkout).days:
-        return
-    nights = [(checkout + timedelta(days=i)).isoformat() for i in range((end - checkout).days)]
-    if [rate["night"] for rate in tracked] != nights:
-        return
-    days = await syncer.hostaway.pricing_calendar(row["listing_id"], nights[0], nights[-1])
-    if sorted(day["date"] for day in days if blocked(day)) == nights:
-        row["followup"] = followup_text(checkout, last)
+    nights = [rate["night"] for rate in tracked]
+    held = len(nights) == (end - checkout).days
+    if held:
+        days = await syncer.hostaway.pricing_calendar(row["listing_id"], nights[0], nights[-1])
+        held = sorted(day["date"] for day in days if blocked(day)) == nights
+
+    row["followup"] = followup_text(checkout, last)
+    stamp = due.astimezone(TZ).strftime("%b %d, %Y at %I:%M %p %Z")
+    row["followup_timing"] = (
+        f"Eligible since {stamp}." if now >= due else f"Earliest eligibility: {stamp}."
+    )
+    if not held:
+        row["followup_timing"] += " Conditional on verifying that these nights are held."
+    row["next_action"] += " Recheck the conversation and the hold before sending a follow-up."
 
 
 async def scan_kurt(syncer, state):
