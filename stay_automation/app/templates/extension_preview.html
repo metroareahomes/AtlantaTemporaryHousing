@@ -24,7 +24,8 @@
 <div>
 <h3>Calendar note preview</h3>
 <p>{{ row.note or 'Unavailable' }}</p>
-<p><strong>Dates to block</strong> {{ row.block_dates if not row.error else "Unavailable" }}</p>
+<p><strong>Extension hold</strong> {{ row.block_dates if not row.error else "Unavailable" }}</p>
+<p><strong>Turnover hold after booked checkout</strong> {{ row.turnover_dates or "Unavailable" }}</p>
 <p><strong>Next action</strong> {{ row.next_action if not row.error else "Retry the reservation review." }}</p>
 {% if row.evidence %}<blockquote>{{ row.evidence }}</blockquote>{% endif %}
 </div>
