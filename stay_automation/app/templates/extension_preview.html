@@ -1,15 +1,15 @@
 {% extends "base.html" %}{% set active = 'extension-preview' %}
 {% block body %}
-<div class="page-head"><h1>Kurt’s Extension Preview</h1></div>
+<div class="page-head"><h1>{{ extension_owner }}’s Extension Preview</h1></div>
 <section class="panel">
-<p>Review current and upcoming reservations across Kurt’s homes. This preview reads Hostaway conversations without changing the calendar or sending messages.</p>
+<p>Review current and upcoming reservations across {{ extension_owner }}’s homes. This preview reads Hostaway conversations without changing the calendar or sending messages.</p>
 {% if not configured %}
 <p>Add the OpenAI API key in the Stay Automation app’s Configuration tab to run a review.</p>
 {% elif scan.running %}
 <p role="status">Reviewed {{ scan.completed }} of {{ scan.total }} reservations.</p>
-<a href="extension-preview">Refresh results</a>
+<a href="extension-preview?owner={{ extension_owner }}">Refresh results</a>
 {% else %}
-<form action="extension-preview" method="post"><button>Review reservations</button></form>
+<form action="extension-preview?owner={{ extension_owner }}" method="post"><button>Review reservations</button></form>
 {% endif %}
 {% if scan.finished_at %}
 <p>Last review {{ scan.finished_at }} · {{ scan.completed }} reservations</p>
@@ -17,9 +17,9 @@
 </section>
 <section class="panel">
 <h2 id="live-calendar">Live extension settings</h2>
-<form action="extension-live-settings" method="post">
+<form action="extension-live-settings?owner={{ extension_owner }}" method="post">
 <p><label><input type="checkbox" name="calendar_enabled" {% if live_calendar %}checked{% endif %}>
-Apply extension and turnover holds to Kurt’s calendars</label></p>
+Apply extension and turnover holds to {{ extension_owner }}’s calendars</label></p>
 <fieldset>
 <legend>Calendar notes and automatic checkout check-ins and inquiry messages</legend>
 <p>Select the homes where the automation can add descriptive hold notes and send eligible checkout check-ins and messages when a new inquiry requires confirming the current guest’s plans.</p>
@@ -27,15 +27,15 @@ Apply extension and turnover holds to Kurt’s calendars</label></p>
 <p><label><input type="checkbox" name="properties" value="{{ property.hostaway_listing_id }}"
 {% if property.hostaway_listing_id in live_selected %}checked{% endif %}> {{ property.name }}</label></p>
 {% else %}
-<p>No active properties are tagged Kurt.</p>
+<p>No active properties are tagged {{ extension_owner }}.</p>
 {% endfor %}
 </fieldset>
 <button>Save live extension settings</button>
 </form>
 {% if calendar_refresh.running %}
-<p role="status">Calendar review requested. <a href="extension-preview#live-calendar">Refresh status</a></p>
+<p role="status">Calendar review requested. <a href="extension-preview?owner={{ extension_owner }}#live-calendar">Refresh status</a></p>
 {% else %}
-<form action="extension-calendar-update" method="post">
+<form action="extension-calendar-update?owner={{ extension_owner }}" method="post">
 <button {% if not live_calendar %}disabled{% endif %}>Update calendar now</button>
 </form>
 {% if not live_calendar %}<p>Enable and save calendar holds to run an update.</p>{% endif %}
@@ -76,7 +76,7 @@ Apply extension and turnover holds to Kurt’s calendars</label></p>
 {% endif %}
 {% if not row.error %}
 <h3>Dry-run an inquiry</h3>
-<form action="extension-preview-inquiry#reservation-{{ row.id }}" method="post">
+<form action="extension-preview-inquiry?owner={{ extension_owner }}#reservation-{{ row.id }}" method="post">
 <input type="hidden" name="reservation" value="{{ row.id }}">
 <label>Inquiry arrival <input type="date" name="arrival" required value="{{ inquiry_arrival if inquiry_reservation == row.id else '' }}"></label>
 <label>Inquiry checkout <input type="date" name="departure" required value="{{ inquiry_departure if inquiry_reservation == row.id else '' }}"></label>

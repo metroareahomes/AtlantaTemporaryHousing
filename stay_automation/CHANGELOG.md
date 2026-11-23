@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.59 — Mike’s extension automation
+
+- Add Mike’s extension preview, calendar and messaging controls, and inquiry workflow.
+
 ## 0.6.58 — Calendar write verification
 
 - Accept empty successful Hostaway calendar responses and report proposed, verified, and skipped nights.

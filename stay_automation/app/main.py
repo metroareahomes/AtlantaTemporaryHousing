@@ -123,6 +123,7 @@ def build():
             every(1, "extension_pricing", syncer.extension_pricing.tick, db),
             every(0.25, "extension_inquiries", lambda: run_inquiries(syncer), db),
             every(30, "extension_live", lambda: run_extension_live(syncer), db),
+            every(30, "extension_live_mike", lambda: run_extension_live(syncer, owner="Mike"), db),
             every(30, "extension_followups", lambda: preview_followups(syncer, locks.alert_service), db),
             every(5, "property_sheet", property_sheet.push, db),
             every(1, "staff_alert_delivery", retry_staff_alerts, db),

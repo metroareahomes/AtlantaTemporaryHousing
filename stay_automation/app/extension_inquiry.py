@@ -1,18 +1,19 @@
-"""Send the initial inquiry messages for explicitly enabled Kurt listings."""
+"""Send the initial inquiry messages for explicitly enabled listings."""
 from datetime import date, datetime, timedelta
 
 import httpx
 
 from .extension_followup import conversation
 from .extension_live import live_property, selected_properties
+from .extension_pricing import OWNERS
 from .extension_preview import WAITING_FOR_GUEST, review_reservation, simulate_inquiry
 from .hostaway import HostawayError
 
 
 def enabled(syncer, listing):
     return (bool(getattr(syncer.settings, "extension_ai_api_key", None))
-            and listing in selected_properties(syncer.db)
-            and live_property(syncer.db, listing))
+            and any(listing in selected_properties(syncer.db, owner) and live_property(syncer.db, listing, owner)
+                    for owner in OWNERS))
 
 
 def queue_inquiry(syncer, reservation, reservation_id):
