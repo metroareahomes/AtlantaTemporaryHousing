@@ -45,10 +45,30 @@ def calendar_plan(rows, today):
     return desired, releasable
 
 
-def hold_notes(marker):
-    return {marker, *(marker + " · " + label for label in (
-        "Turnover hold", "Guest extension hold", "Turnover after proposed extension"
-    ))}
+HOLD_LABELS = ("Turnover hold", "Guest extension hold", "Turnover after proposed extension")
+CALENDAR_NOTE_LIMIT = 255
+
+
+def is_hold_note(note, marker):
+    if note == marker:
+        return True
+    return any(
+        note in (f"{marker} · {label}", f"{label} {marker}")
+        or (note.startswith(f"{label} · ") and note.endswith(f" {marker}"))
+        for label in HOLD_LABELS
+    )
+
+
+def calendar_hold_note(marker, label, outlook):
+    # Keep the ownership marker intact and put the human-readable context first.
+    prefix = f"{label} · "
+    suffix = f" {marker}"
+    if not outlook:
+        return f"{label}{suffix}"
+    budget = CALENDAR_NOTE_LIMIT - len(prefix) - len(suffix)
+    if len(outlook) > budget:
+        outlook = outlook[:budget - 1].rstrip() + "…"
+    return f"{prefix}{outlook}{suffix}"
 
 
 def unreserved(day):
@@ -61,6 +81,7 @@ def unreserved(day):
 async def update_holds(syncer, listing, rows, today, notes_enabled, *, report=None, owner="Kurt"):
     db, hostaway = syncer.db, syncer.hostaway
     desired, releasable = calendar_plan(rows, today)
+    outlooks = {row["id"]: row.get("note", "") for row in rows if not row.get("error")}
     owned = {
         date.fromisoformat(item["night"]): item for item in db.query(
             "SELECT * FROM extension_live_holds WHERE listing_id=? AND night>=?",
@@ -87,14 +108,14 @@ async def update_holds(syncer, listing, rows, today, notes_enabled, *, report=No
             if target:
                 rid, label = target
                 marker = f"[Stay Automation hold {listing}/{iso}]"
-                owned_block = old and blocked(day) and note in hold_notes(old["marker"])
+                owned_block = old and blocked(day) and is_hold_note(note, old["marker"])
                 if not owned_block and (note or day.get("status") not in (None, "", "available", "open")
                                         or day.get("isAvailable") not in (1, "1", True)):
                     report["skipped"] += 1
                     continue
                 if owned_block and old["reservation_id"] != rid and old["reservation_id"] not in releasable:
                     continue
-                text = f"{marker} · {label}" if notes_enabled else marker
+                text = calendar_hold_note(marker, label, outlooks.get(rid)) if notes_enabled else marker
                 if owned_block and note == text and old["reservation_id"] == rid:
                     continue
                 db.execute(
@@ -103,7 +124,7 @@ async def update_holds(syncer, listing, rows, today, notes_enabled, *, report=No
                 )
                 payload = {"isAvailable": 0, "note": text}
             else:
-                if not blocked(day) or note not in hold_notes(old["marker"]):
+                if not blocked(day) or not is_hold_note(note, old["marker"]):
                     continue
                 payload = {"isAvailable": 1, "note": old["original_note"]}
             if not live_property(db, listing, owner) or not calendar_enabled_for(db, owner):

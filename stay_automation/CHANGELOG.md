@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.63 — Descriptive calendar hold notes
+
+- Show the guest’s extension outlook in Hostaway hold notes within the 255-character limit.
+
 ## 0.6.62 — Calendar hold verification
 
 - Continue verifying a property’s calendar holds after an individual night fails, and report failed nights.
