@@ -8,6 +8,8 @@ from .extension_live import unreserved
 from .hostaway import HostawayError
 
 HOLIDAY_BLOCK_NOTE = "[Stay Automation holiday checkout block]"
+HOLIDAY_CALENDAR_NOTE = "This date blocked courtesy of the Holiday Blocker Automation!  Happy Holidays!"
+CALENDAR_NOTE_LIMIT = 255
 TRUE_VALUES = (1, "1", True)
 FALSE_VALUES = (0, "0", False)
 DELETE_CHANGE = "DELETE FROM holiday_calendar_changes WHERE listing_id=? AND night=? AND field=?"
@@ -71,6 +73,25 @@ async def reconcile_change(syncer, key, wanted, existing, *, protect_checkout=Fa
                 or not (matches(day, applied) and day.get("status") == "blocked"
                         or matches(day, original) and day.get("status") in (None, "", "available", "open"))):
             return
+    elif field == "note":
+        owned_restrictions = db.query(
+            "SELECT field FROM holiday_calendar_changes WHERE listing_id=? AND night=? "
+            "AND field IN ('closedOnArrival','closedOnDeparture')",
+            (listing, night),
+        )
+        wanted = any(matches(day, {row["field"]: 1}) for row in owned_restrictions)
+        note = day.get("note") or ""
+        # Leave legacy notes intact until the old full-night block is retired.
+        if note.startswith(HOLIDAY_BLOCK_NOTE) or (
+                not existing and note.split("\n", 1)[0] == HOLIDAY_CALENDAR_NOTE
+        ):
+            return
+        original_note = existing["original_note"] if existing else note
+        holiday_note = HOLIDAY_CALENDAR_NOTE + ("\n" + original_note if original_note else "")
+        if len(holiday_note) > CALENDAR_NOTE_LIMIT or (not wanted and not existing):
+            return
+        original = {"note": original_note}
+        applied = {"note": holiday_note}
     else:
         original = {field: 0}
         applied = {field: 1}
@@ -108,7 +129,8 @@ async def reconcile_holidays(syncer):
             (row["listing_id"], row["night"], row["field"]): row
             for row in db.query("SELECT * FROM holiday_calendar_changes")
         }
-        for key in sorted(wanted | existing.keys()):
+        notes = {(listing, night, "note") for listing, night, field in wanted}
+        for key in sorted(wanted | existing.keys() | notes):
             listing, night, field = key
             has_checkout = (listing, night, "closedOnArrival") in wanted
             if field == "closedOnDeparture" and key in wanted and has_checkout:
