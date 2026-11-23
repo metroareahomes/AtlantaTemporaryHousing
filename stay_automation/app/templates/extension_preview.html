@@ -78,6 +78,7 @@ Apply extension and turnover holds to {{ extension_owner }}’s calendars</label
 </blockquote>
 {% endif %}
 <p><strong>Next action</strong> {{ row.next_action if not row.error else "Retry the reservation review." }}</p>
+{% if row.review_detail %}<p>{{ row.review_detail }}</p>{% endif %}
 {% if row.evidence %}<p><strong>Guest message supporting this note</strong></p><blockquote>{{ row.evidence }}</blockquote>{% endif %}
 </div>
 <div>
