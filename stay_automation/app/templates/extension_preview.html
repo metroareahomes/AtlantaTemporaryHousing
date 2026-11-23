@@ -22,17 +22,31 @@
 {% if row.error %}<p>{{ row.error }}</p>{% endif %}
 <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,16rem),1fr));gap:1rem;overflow-wrap:anywhere">
 <div>
-<h3>Calendar note preview</h3>
-<p>{{ row.note or 'Unavailable' }}</p>
-<p><strong>Extension hold</strong> {{ row.block_dates if not row.error else "Unavailable" }}</p>
-<p><strong>Turnover hold after booked checkout</strong> {{ row.turnover_dates or "Unavailable" }}</p>
+<h3>Proposed Hostaway calendar note</h3>
+{% if row.error %}
+<p>Calendar note unavailable. Retry the reservation review.</p>
+{% else %}
+<blockquote>
+<p>{{ row.note }}. Booked checkout {{ row.departure_date }}.</p>
+<p>Extension hold: {{ row.block_dates }}.</p>
+<p>Turnover hold after booked checkout: {{ row.turnover_dates }}.</p>
+{% if row.extended_turnover_dates %}
+<p>Turnover hold if the extension proceeds: {{ row.extended_turnover_dates }}.</p>
+{% endif %}
+</blockquote>
+{% endif %}
 <p><strong>Next action</strong> {{ row.next_action if not row.error else "Retry the reservation review." }}</p>
-{% if row.evidence %}<blockquote>{{ row.evidence }}</blockquote>{% endif %}
+{% if row.evidence %}<p><strong>Guest message supporting this note</strong></p><blockquote>{{ row.evidence }}</blockquote>{% endif %}
 </div>
 <div>
 <h3>Proposed guest follow-up</h3>
 <p>{{ row.followup or ('Unavailable' if row.error else 'No message planned') }}</p>
 {% if row.followup_timing %}<p>{{ row.followup_timing }}</p>{% endif %}
+{% if row.inquiry_action %}
+<h3>If an inquiry comes in for dates after booked checkout</h3>
+<p>{{ row.inquiry_action }}</p>
+<p>{{ row.inquiry_message or "No message to the current guest proposed." }}</p>
+{% endif %}
 <h3>Latest sent message</h3>
 {% if row.last_sent %}
 <p>{{ row.last_sent_at }}</p>
