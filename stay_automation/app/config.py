@@ -21,6 +21,7 @@ class Settings:
     lock_check_minutes: int = 30
     default_checkin_hour: int = 15
     default_checkout_hour: int = 10
+    extension_ai_api_key: str = ""
 
 
 def _load_dotenv(path: Path) -> None:
@@ -44,6 +45,7 @@ def load_settings() -> Settings:
             ha_token=supervisor_token,
             db_path="/data/stay.db",
             is_addon=True,
+            extension_ai_api_key=str(options.get("extension_ai_api_key", "")),
         )
 
     _load_dotenv(Path(".env"))
@@ -58,4 +60,5 @@ def load_settings() -> Settings:
         ha_token=ha_token,
         db_path=os.environ.get("DB_PATH", "data/stay.db"),
         is_addon=False,
+        extension_ai_api_key=os.environ.get("EXTENSION_AI_API_KEY", ""),
     )
