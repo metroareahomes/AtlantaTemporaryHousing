@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.45 — Kurt’s Extension Preview
+
+- Add a read-only dashboard for proposed calendar notes and guest follow-ups across Kurt’s homes.
+
 ## 0.6.44 — Extension follow-up previews
 
 - Preview guest extension follow-ups through staff alerts when an OpenAI API key is configured.

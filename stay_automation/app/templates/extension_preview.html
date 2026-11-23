@@ -1,0 +1,44 @@
+{% extends "base.html" %}{% set active = 'extension-preview' %}
+{% block body %}
+<div class="page-head"><h1>Kurt’s Extension Preview</h1></div>
+<section class="panel">
+<p>Review current and upcoming reservations across Kurt’s homes. This preview reads Hostaway conversations without changing the calendar or sending messages.</p>
+{% if not configured %}
+<p>Add the OpenAI API key in the Stay Automation app’s Configuration tab to run a review.</p>
+{% elif scan.running %}
+<p role="status">Reviewed {{ scan.completed }} of {{ scan.total }} reservations.</p>
+<a href="extension-preview">Refresh results</a>
+{% else %}
+<form action="extension-preview" method="post"><button>Review reservations</button></form>
+{% endif %}
+{% if scan.finished_at %}
+<p>Last review {{ scan.finished_at }} · {{ scan.completed }} reservations</p>
+{% endif %}
+</section>
+{% for row in scan.rows %}
+<section class="panel">
+<h2>{{ row.property }} · {{ row.guest_name or 'Guest' }}</h2>
+<p>Reservation {{ row.id }} · {{ row.arrival_date }} to {{ row.departure_date }}</p>
+{% if row.error %}<p>{{ row.error }}</p>{% endif %}
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,16rem),1fr));gap:1rem;overflow-wrap:anywhere">
+<div>
+<h3>Calendar note preview</h3>
+<p>{{ row.note or 'Unavailable' }}</p>
+{% if row.span %}<p>{{ row.span }}</p>{% endif %}
+{% if row.evidence %}<blockquote>{{ row.evidence }}</blockquote>{% endif %}
+</div>
+<div>
+<h3>Proposed guest follow-up</h3>
+<p>{{ row.followup or ('Unavailable' if row.error else 'No follow-up due') }}</p>
+<h3>Latest sent message</h3>
+{% if row.last_sent %}
+<p>{{ row.last_sent_at }}</p>
+<p style="white-space:pre-wrap">{{ row.last_sent }}</p>
+{% else %}
+<p>{{ 'Unavailable' if row.error else 'No outgoing message found' }}</p>
+{% endif %}
+</div>
+</div>
+</section>
+{% endfor %}
+{% endblock %}
