@@ -8,7 +8,7 @@ Hostaway's own lock automation stays on: it creates the guest code and usually w
 A code already in the lock under Hostaway's name counts as present, so we only add our copy when it is missing.
 Hostaway's codes are never touched; if one outlives its guest, staff are told.
 
-Staff access codes and HA-BACKUP are managed from the database and pushed to every automated lock.
+Staff access codes and HA-BACKUP are managed from the database and pushed to eligible automated locks.
 """
 import asyncio
 from .alerts import AlertService
@@ -249,11 +249,14 @@ class LockManager:
     def cfg(self) -> dict[str, int]:
         return {k: self.db.get_int(k, v) for k, v in DEFAULTS.items()}
 
-    def staff_codes(self, *, active_only: bool = True) -> dict[str, str]:
-        sql = "SELECT name, code FROM staff"
-        if active_only:
-            sql += " WHERE active = 1"
-        return {row["name"]: row["code"] for row in self.db.query(sql)}
+    def staff_codes(self, *, active_only: bool = True, owner: str | None = None) -> dict[str, str]:
+        return {
+            row["name"]: row["code"] for row in self.db.query(
+                "SELECT name, code FROM staff WHERE (?=0 OR active=1) "
+                "AND (? IS NULL OR owner_scope='' OR owner_scope=?)",
+                (active_only, owner, owner),
+            )
+        }
 
     def managed_names(self) -> set[str]:
         """Names we are allowed to delete: every staff row (active or not) so deactivated staff leave the lock."""
@@ -284,7 +287,6 @@ class LockManager:
 
     async def reconcile(self, lock: dict[str, Any], now: datetime) -> bool:
         cfg = self.cfg()
-        managed = self.managed_names()
         # Claim the lock until a retry would be due. A reservation change during the slow lock calls clears
         # next_check_at; the conditional write at the end then leaves it cleared, so the next tick looks again.
         claim = _utc(now + timedelta(minutes=cfg["retry_minutes"]))
@@ -294,7 +296,10 @@ class LockManager:
         actual = await self._read(lock)
         if actual is None:
             return await self._failed(lock, now, reservations, claim, self._why("could not read the lock"), None)
-        desired = self._desired(lock, reservations, now, actual, cfg)
+        owner = (self.db.one("SELECT owner_scope FROM properties WHERE id=?", (lock["property_id"],))
+                 or {}).get("owner_scope", "")
+        managed = set(self.staff_codes(active_only=False, owner=owner))
+        desired = self._desired(lock, reservations, now, actual, cfg, owner=owner)
 
         first = plan(desired, actual, managed)
         if BACKUP_NAME in first.elsewhere:
@@ -345,9 +350,9 @@ class LockManager:
             "SELECT expires_at FROM preview_codes WHERE property_id = ?", (lock["property_id"],))]
         return next_check(reservations, now, cfg, expiries)
 
-    def _desired(self, lock, reservations, now, actual, cfg) -> dict[str, str]:
+    def _desired(self, lock, reservations, now, actual, cfg, *, owner="") -> dict[str, str]:
         backup = lock["backup_code"] if self.db.get_bool("backup_codes_enabled") else None
-        staff = self.staff_codes() if lock["automated"] else None
+        staff = self.staff_codes(owner=owner) if lock["automated"] else None
         if lock["automated"]:
             return desired_codes(reservations, now, cfg["add_hour"], cfg["early_lead_hours"], backup, staff, actual,
                                  self.preview_codes(lock["property_id"], now), cfg["final_check_minutes"])
@@ -357,7 +362,7 @@ class LockManager:
         keep = {n: c for n, c in desired_codes(reservations, now, cfg["add_hour"], cfg["early_lead_hours"],
                                                actual=actual, final_minutes=cfg["final_check_minutes"]).items()
                 if n in actual}
-        keep.update({n: actual[n] for n in self.staff_codes() if n in actual})
+        keep.update({n: actual[n] for n in self.staff_codes(owner=owner) if n in actual})
         if BACKUP_NAME in actual:
             keep[BACKUP_NAME] = actual[BACKUP_NAME]
         keep.update({n: c for n, c in self.preview_codes(lock["property_id"], now).items() if n in actual})
