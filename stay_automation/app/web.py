@@ -589,10 +589,12 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, 
         return _done(destination, "Property settings saved")
 
     @app.get("/staff", response_class=HTMLResponse)
-    async def staff(request: Request):
+    async def staff(request: Request, owner: str = ""):
+        owner = owner if owner in EXTENSION_OWNERS else ""
         return page(
             request, "staff.html",
-            staff=db.query("SELECT * FROM staff ORDER BY name"),
+            selected_owner=owner, owner_options=EXTENSION_OWNERS,
+            staff=db.query("SELECT * FROM staff WHERE (?='' OR owner_scope=?) ORDER BY name", (owner, owner)),
             recipients=db.query("SELECT * FROM alert_recipients ORDER BY name"),
             alert_categories=CATEGORIES, alert_owners=OWNERS,
             owner_counts={r['owner_scope'] or 'Unconfirmed': r['n'] for r in db.query("SELECT owner_scope, COUNT(*) AS n FROM properties WHERE active=1 GROUP BY owner_scope")},
@@ -701,6 +703,9 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, 
     @app.post("/staff-save")
     async def staff_save(request: Request):
         form = await request.form()
+        owner = str(form.get("owner", ""))
+        if owner and owner not in EXTENSION_OWNERS:
+            raise HTTPException(400, "Choose Mike or Kurt for staff lock access")
 
         def check(name: str, code: str) -> None:
             if name.startswith("HA-"):
@@ -710,7 +715,18 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, 
 
         # Validate everything first so a typo can never half-save (or silently drop someone's lock code).
         updates, seen, active_codes = [], set(), set()
-        for row in db.query("SELECT id, name, code FROM staff"):
+        rows = db.query("SELECT id, name, code, active, owner_scope FROM staff")
+        editable = [
+            row for row in rows
+            if (not owner or row["owner_scope"] == owner) and f"name_{row['id']}" in form
+        ]
+        editable_ids = {row["id"] for row in editable}
+        for row in rows:
+            if row["id"] not in editable_ids:
+                seen.add(row["name"])
+                if row["active"]:
+                    active_codes.add(row["code"])
+        for row in editable:
             sid = row["id"]
             name = str(form.get(f"name_{sid}", "")).strip()
             code = str(form.get(f"code_{sid}", "")).strip()
@@ -732,11 +748,13 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, 
                 # Renamed: the old name is still on the locks. Keep it as an inactive row (added after the
                 # rename frees the name) so the locks remove it; it disappears from this page once no lock
                 # holds it any more.
-                updates.append(("INSERT OR IGNORE INTO staff(name, code, active) VALUES(?, ?, 0)",
-                                (row["name"], row["code"])))
+                updates.append(("INSERT OR IGNORE INTO staff(name, code, active, owner_scope) VALUES(?, ?, 0, ?)",
+                                (row["name"], row["code"], row["owner_scope"])))
         new_name = str(form.get("name_new", "")).strip()
         new_code = str(form.get("code_new", "")).strip()
         if new_name or new_code:
+            if not owner:
+                raise HTTPException(400, "Choose Mike or Kurt before adding staff")
             if not new_name:
                 raise HTTPException(400, "New staff needs a name")
             check(new_name, new_code)
@@ -746,8 +764,8 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, 
             new_active = 1 if form.get("active_new") else 0
             if new_active and new_code in active_codes:
                 raise HTTPException(400, f"Code {new_code} is used by more than one active person")
-            updates.append(("INSERT INTO staff(name, code, active) VALUES(?, ?, ?)",
-                            (new_name, new_code, new_active)))
+            updates.append(("INSERT INTO staff(name, code, active, owner_scope) VALUES(?, ?, ?, ?)",
+                            (new_name, new_code, new_active, owner)))
         try:
             for sql, args in updates:
                 db.execute(sql, args)
@@ -767,7 +785,7 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, 
         db.execute("UPDATE locks SET next_check_at = NULL WHERE property_id IN "
                    "(SELECT id FROM properties WHERE lock_automation = 1)")
         db.log("staff.saved", "Staff codes saved")
-        return _done("staff", "Staff codes saved")
+        return _done("staff?" + urlencode({"owner": owner}) if owner else "staff", "Staff codes saved")
 
     @app.post("/recipients-save")
     async def recipients_save(request: Request):
