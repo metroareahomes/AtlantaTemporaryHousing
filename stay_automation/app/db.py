@@ -257,6 +257,9 @@ CREATE TABLE IF NOT EXISTS thermostats (
 
 # Columns added after the first release; applied to existing databases on start.
 MIGRATIONS = {
+    "staff": {
+        "owner_scope": "TEXT NOT NULL DEFAULT ''",
+    },
     "alert_recipients": {
         "email": "TEXT NOT NULL DEFAULT ''",
         "owners": "TEXT NOT NULL DEFAULT 'Mike,Kurt'",
