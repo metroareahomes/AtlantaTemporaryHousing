@@ -3,6 +3,7 @@ import asyncio
 import logging
 import re
 from typing import Any, Callable
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -116,6 +117,49 @@ class HostawayClient:
         if not isinstance(raw, dict) or str(raw.get("id")) != str(listing_id):
             raise HostawayError("Pricing listing identity mismatch")
         return raw
+
+    async def listing_preview(self, listing_id: int) -> dict[str, Any]:
+        """Export the allowlisted guest-facing fields for a private preview."""
+        raw = await self.listing_details(listing_id)
+        description = raw.get("description")
+        sensitive = re.compile(
+            r"\b(?:access|door|lock(?:box)?|keypad|gate|entry|wi[ -]?fi|guest|reservation|check[ -]?in)"
+            r"\s+(?:pin|passcode|password|code|name|email|phone|id)\b"
+            r"|\b(?:pin|passcode|password|api[ _-]?key|key code)\s*(?:is\b|[:=])",
+            re.I,
+        )
+        description = "\n".join(
+            "[redacted]" if sensitive.search(line) else line
+            for line in description.splitlines()
+        ) if isinstance(description, str) else ""
+
+        amenity_ids = dict.fromkeys(str(item["amenityId"]) for item in raw.get("listingAmenities") or []
+                                   if isinstance(item, dict) and "amenityId" in item)
+        amenities = []
+        if amenity_ids:
+            catalog = (await self._request("GET", "/amenities")).get("result") or []
+            names = {str(item["id"]): item["name"] for item in catalog
+                     if isinstance(item, dict) and "id" in item and isinstance(item.get("name"), str)}
+            amenities = list(dict.fromkeys(names[key] for key in amenity_ids if key in names))
+
+        photos = []
+        for item in raw.get("listingImages") or []:
+            if not isinstance(item, dict) or not isinstance(item.get("url"), str):
+                continue
+            try:
+                url = urlsplit(item["url"])
+            except ValueError:
+                continue
+            if url.scheme != "https" or not url.hostname or url.username or url.password or url.query:
+                continue
+            try:
+                order = int(item.get("sortOrder", 0))
+            except (ValueError, TypeError, OverflowError):
+                order = 0
+            photos.append((order, url._replace(fragment="").geturl()))
+        photos.sort(key=lambda photo: photo[0])
+        return {"description": description, "amenities": amenities,
+                "photo_urls": [url for _, url in photos]}
 
     async def pricing_listing(self, listing_id: int) -> dict[str, Any]:
         raw = await self.listing_details(listing_id)
