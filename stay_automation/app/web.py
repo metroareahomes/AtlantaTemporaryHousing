@@ -16,7 +16,7 @@ from fastapi import BackgroundTasks, FastAPI, Form, HTTPException, Request
 from fastapi.exception_handlers import http_exception_handler
 from starlette.datastructures import FormData
 from starlette.exceptions import HTTPException as StarletteHTTPException
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -494,6 +494,20 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, 
                     gaps=gaps, automation=automation, selected_owner=owner, owner_options=EXTENSION_OWNERS,
                     open_locks=[l for l in locks if not l["property_id"]],
                     open_thermostats=[t for t in thermostats if not t["property_id"]])
+
+    @app.get("/listing-preview/{property_id}", response_class=JSONResponse)
+    async def download_listing_preview(property_id: int):
+        prop = db.one("SELECT hostaway_listing_id FROM properties WHERE id=?", (property_id,))
+        if not prop or not prop["hostaway_listing_id"]:
+            raise HTTPException(404, "No Hostaway listing linked to this property")
+        try:
+            preview = await syncer.hostaway.listing_preview(prop["hostaway_listing_id"])
+        except (HostawayError, httpx.HTTPError, ValueError):
+            raise HTTPException(502, "Hostaway listing preview could not be retrieved") from None
+        return JSONResponse(preview, headers={
+            "Content-Disposition": f'attachment; filename="listing-preview-{property_id}.json"',
+            "Cache-Control": "no-store",
+        })
 
     @app.post("/properties-save")
     async def properties_save(request: Request):
