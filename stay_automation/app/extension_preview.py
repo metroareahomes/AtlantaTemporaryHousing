@@ -4,7 +4,7 @@ from datetime import date, datetime, time, timedelta
 
 import httpx
 
-from .extension_followup import assess, conversation, followup_due_at, followup_text, next_us_thanksgiving, relative_weekdays
+from .extension_followup import assess, assess_cached, conversation, followup_due_at, followup_text, next_us_thanksgiving, relative_weekdays
 from .extension_pricing import TZ, blocked
 from .hostaway import HostawayError
 
@@ -242,7 +242,10 @@ async def review_reservation(syncer, client, row):
     if outgoing:
         row["last_sent_at"] = outgoing[0].astimezone(TZ).strftime("%b %d, %Y %I:%M %p %Z")
         row["last_sent"] = outgoing[1]
-    result = await assess(client, thread, checkout, [], outlook=True) if thread else {}
+    result = await assess_cached(
+        syncer, rid, client, thread, checkout, [], outlook=True,
+        reservation_context=(row["listing_id"], arrival.isoformat(), raw["status"]), assessor=assess,
+    ) if thread else {}
     status = result.get("status", "unclear")
     guest_id = result.get("guest_message_id")
     evidence = thread.get(guest_id) if type(guest_id) is int else None

@@ -28,6 +28,7 @@ class Syncer:
         self.db = db
         self.extension_pricing = ExtensionPricing(self)
         self.extension_calendar_lock = asyncio.Lock()
+        self.extension_assessment_lock = asyncio.Lock()
         self.settings = settings
         self.hostaway = hostaway
         self.ha = ha
