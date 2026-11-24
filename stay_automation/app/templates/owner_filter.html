@@ -1,0 +1,7 @@
+<nav class="toolbar" aria-label="Property owner">
+  <span class="sub">Owner</span>
+  {% for option in [''] + (owner_options|list) %}
+  <a class="chip {{ 'on' if selected_owner == option }}" {% if selected_owner == option %}aria-current="true"{% endif %}
+     href="?owner={{ option|urlencode }}{% if show is defined %}&amp;show={{ show }}&amp;sort={{ sort }}&amp;q={{ q|urlencode }}{% endif %}">{{ option or 'All' }}</a>
+  {% endfor %}
+</nav>
