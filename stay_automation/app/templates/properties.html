@@ -1,11 +1,14 @@
 {% extends "base.html" %}{% set active = 'properties' %}
 {% block body %}
 <form method="post" action="properties-save" class="narrow" id="save-properties" data-save-label="Save properties">
+<input type="hidden" name="owner" value="{{ selected_owner }}">
 <div class="page-head">
   <h1>Properties</h1>
   <p>Lock automation is on for {{ automation.locks }} of {{ automation.homes }} homes.
     Thermostat automation is on for {{ automation.therms }} of {{ automation.homes }}.</p>
 </div>
+
+{% include "owner_filter.html" %}
 
 {% if gaps or open_locks or open_thermostats %}
 <section class="panel attention">
@@ -62,7 +65,7 @@
     </td>
   </tr>
   {% else %}
-  <tr><td colspan="6" class="empty">No properties yet. Press "Sync now".</td></tr>
+  <tr><td colspan="6" class="empty">{% if selected_owner %}No properties match this owner.{% else %}No properties yet. Press "Sync now".{% endif %}</td></tr>
   {% endfor %}
   </tbody>
 </table>
@@ -71,6 +74,7 @@
 </section>
 
 <section class="panel">
+{% if not selected_owner %}
 <h2>Unassigned devices</h2>
 <p class="sub">These are in Home Assistant and not tied to a home yet.</p>
 {% if open_locks or open_thermostats %}
@@ -107,6 +111,7 @@
 <p class="sub">Every lock and thermostat is assigned.</p>
 {% endif %}
 
+{% endif %}
 <details class="fold">
   <summary>Assigned locks and thermostats</summary>
   <p class="sub">Correct a match here. Your choice sticks.</p>
