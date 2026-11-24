@@ -20,8 +20,8 @@
     <div class="bar-left">
       <div class="brand">Stays</div>
       <nav aria-label="Main navigation">
-        <a href="." class="{{ 'on' if active == 'status' }}" {{ 'aria-current=page' if active == 'status' }}>Status</a>
-        <a href="properties" class="{{ 'on' if active == 'properties' }}" {{ 'aria-current=page' if active == 'properties' }}>Properties</a>
+        <a href=".{% if selected_owner %}?owner={{ selected_owner|urlencode }}{% endif %}" class="{{ 'on' if active == 'status' }}" {{ 'aria-current=page' if active == 'status' }}>Status</a>
+        <a href="properties{% if selected_owner %}?owner={{ selected_owner|urlencode }}{% endif %}" class="{{ 'on' if active == 'properties' }}" {{ 'aria-current=page' if active == 'properties' }}>Properties</a>
         <a href="staff" class="{{ 'on' if active == 'staff' }}" {{ 'aria-current=page' if active == 'staff' }}>Staff &amp; access</a>
         <details class="menu {{ 'on' if active in ['setup', 'events'] }}">
           <summary>Setup</summary>
