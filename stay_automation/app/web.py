@@ -101,10 +101,12 @@ def _ago(iso: str | None, now: datetime, stale_after: timedelta) -> tuple[str, b
     return ("1 day ago" if days == 1 else f"{days} days ago"), stale
 
 
-def _board_back(show: str, sort: str, q: str, notice: str = "") -> str:
+def _board_back(show: str, sort: str, q: str, notice: str = "", *, owner: str = "") -> str:
     show = show if show in BOARD_SHOWS else "attention"
     sort = "name" if sort == "name" else "attention"
     args = {"show": show, "sort": sort, "q": q}
+    if owner in EXTENSION_OWNERS:
+        args["owner"] = owner
     if notice:
         args["notice"] = notice
     return ".?" + urlencode(args)
@@ -256,7 +258,7 @@ def missing_code_warning_due(reservation: dict[str, Any] | None, now: datetime,
     return now >= scheduled + timedelta(minutes=grace_minutes)
 
 
-def dashboard_rows(syncer: Syncer, query: str = "") -> list[dict[str, Any]]:
+def dashboard_rows(syncer: Syncer, query: str = "", *, owner: str = "") -> list[dict[str, Any]]:
     now = syncer.now()
     tz = syncer.tz
     locks_by_property: dict[int, list[dict]] = {}
@@ -274,7 +276,10 @@ def dashboard_rows(syncer: Syncer, query: str = "") -> list[dict[str, Any]]:
     cfg = {k: syncer.db.get_int(k, v) for k, v in CLIMATE_DEFAULTS.items()}
 
     rows = []
-    for prop in syncer.db.query("SELECT * FROM properties WHERE active = 1 ORDER BY name"):
+    for prop in syncer.db.query(
+        "SELECT * FROM properties WHERE active=1 AND (?='' OR owner_scope=?) ORDER BY name",
+        (owner, owner),
+    ):
         if query and query.lower() not in prop["name"].lower():
             continue
         reservations = syncer.reservations_for(prop["id"])
@@ -417,12 +422,14 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, 
         }, status_code=response_status)
 
     @app.get("/", response_class=HTMLResponse)
-    async def status(request: Request, q: str = "", show: str = "attention", sort: str = "attention"):
+    async def status(request: Request, q: str = "", show: str = "attention", sort: str = "attention",
+                     owner: str = ""):
         ref = urlsplit(request.headers.get('referer', ''))
         public = urlsplit(db.get_setting('public_url', '') or '')
         if public.netloc and ref.netloc == public.netloc and '/hassio/ingress/' in ref.path and parse_qs(ref.query).get('stay_page') == ['properties']:
             return RedirectResponse('properties', status_code=302)
-        rows = dashboard_rows(syncer, q)
+        owner = owner if owner in EXTENSION_OWNERS else ""
+        rows = dashboard_rows(syncer, q, owner=owner)
         counts = {k: sum(1 for r in rows if r["status"] == k) for k in STATUS_LABELS}
         problems = sum(1 for r in rows if r["problems"])
         total = len(rows)
@@ -440,17 +447,22 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, 
         if sort == "name":
             rows.sort(key=lambda r: street_key(r["name"]))
         return page(request, "status.html", rows=rows, q=q, counts=counts, problems=problems, total=total,
-                    show=show, sort=sort)
+                    show=show, sort=sort, selected_owner=owner, owner_options=EXTENSION_OWNERS)
 
     @app.get("/properties", response_class=HTMLResponse)
-    async def properties(request: Request):
-        props = db.query("SELECT * FROM properties ORDER BY name")
+    async def properties(request: Request, owner: str = ""):
+        owner = owner if owner in EXTENSION_OWNERS else ""
+        props = db.query("SELECT * FROM properties WHERE (?='' OR owner_scope=?) ORDER BY name", (owner, owner))
+        property_ids = {p["id"] for p in props}
         locks = db.query("SELECT * FROM locks ORDER BY name")
+        thermostats = db.query("SELECT * FROM thermostats ORDER BY name")
+        if owner:
+            locks = [lock for lock in locks if lock["property_id"] in property_ids]
+            thermostats = [t for t in thermostats if t["property_id"] in property_ids]
         by_property: dict[int, list[dict]] = {}
         for lock in locks:
             if lock["property_id"]:
                 by_property.setdefault(lock["property_id"], []).append(lock)
-        thermostats = db.query("SELECT * FROM thermostats ORDER BY name")
         therm_by_property: dict[int, list[dict]] = {}
         for t in thermostats:
             if t["property_id"]:
@@ -476,9 +488,10 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, 
                     gaps.append({"id": prop["id"], "name": prop["name"], "why": f"{t['name']} offline"})
         automation = db.one(
             "SELECT COUNT(*) AS homes, COALESCE(SUM(lock_automation), 0) AS locks, "
-            "COALESCE(SUM(thermostat_automation), 0) AS therms FROM properties WHERE active = 1")
+            "COALESCE(SUM(thermostat_automation), 0) AS therms FROM properties "
+            "WHERE active=1 AND (?='' OR owner_scope=?)", (owner, owner))
         return page(request, "properties.html", properties=props, locks=locks, thermostats=thermostats,
-                    gaps=gaps, automation=automation,
+                    gaps=gaps, automation=automation, selected_owner=owner, owner_options=EXTENSION_OWNERS,
                     open_locks=[l for l in locks if not l["property_id"]],
                     open_thermostats=[t for t in thermostats if not t["property_id"]])
 
@@ -571,7 +584,9 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, 
             db.execute(f"UPDATE locks SET next_check_at = NULL WHERE property_id IN ({', '.join('?' for _ in touched)})",
                        tuple(touched))
         db.log("properties.saved", "Property settings saved")
-        return _done("properties", "Property settings saved")
+        owner = form.get("owner")
+        destination = "properties?" + urlencode({"owner": owner}) if owner in EXTENSION_OWNERS else "properties"
+        return _done(destination, "Property settings saved")
 
     @app.get("/staff", response_class=HTMLResponse)
     async def staff(request: Request):
@@ -622,7 +637,8 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, 
 
     @app.post("/code-override")
     async def code_override(reservation_id: int = Form(...), code: str = Form(""),
-                            show: str = Form("attention"), sort: str = Form("attention"), q: str = Form("")):
+                            show: str = Form("attention"), sort: str = Form("attention"), q: str = Form(""),
+                            owner: str = Form("")):
         """Staff change the code a guest uses (the guest asked for a different one). Blank goes back to Hostaway's."""
         row = db.one("SELECT r.*, p.id AS pid, p.name AS pname FROM reservations r "
                      "JOIN properties p ON p.hostaway_listing_id = r.listing_id WHERE r.id = ?", (reservation_id,))
@@ -647,7 +663,7 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, 
                f"Guest code for {row['guest_name'] or reservation_id} "
                f"{'changed on the dashboard' if code else 'back to the Hostaway code'}",
                property_id=row["pid"], reservation_id=reservation_id)
-        return _done(_board_back(show, sort, q), "Guest code saved" if code else "Guest code back to the Hostaway code")
+        return _done(_board_back(show, sort, q, owner=owner), "Guest code saved" if code else "Guest code back to the Hostaway code")
 
     @app.post("/preview-add")
     async def preview_add(property_id: int = Form(...), label: str = Form(""), code: str = Form(""),
@@ -857,10 +873,10 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, 
 
     @app.post("/lock-refresh")
     async def lock_refresh(property_id: int = Form(...), show: str = Form("attention"),
-                           sort: str = Form("attention"), q: str = Form("")):
+                           sort: str = Form("attention"), q: str = Form(""), owner: str = Form("")):
         locks = db.query("SELECT * FROM locks WHERE property_id = ?", (property_id,))
         if not locks:
-            return _done(_board_back(show, sort, q), "No locks found for this property.")
+            return _done(_board_back(show, sort, q, owner=owner), "No locks found for this property.")
         states_checked = codes_checked = True
         for lock in locks:
             state_checked = await syncer.refresh_lock_state(lock)
@@ -879,7 +895,7 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, 
             notice = "Codes checked; current lock state could not be confirmed. Previous availability retained."
         else:
             notice = "Lock state and codes checked"
-        return _done(_board_back(show, sort, q), notice)
+        return _done(_board_back(show, sort, q, owner=owner), notice)
 
     previews = {owner: {"rows": [], "running": False, "completed": 0, "total": 0}
                 for owner in EXTENSION_OWNERS}
