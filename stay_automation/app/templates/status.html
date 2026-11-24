@@ -3,28 +3,31 @@
 <div id="board">
 <div class="page-head"><h1>{% if show == 'attention' %}Needs attention{% else %}Homes{% endif %}</h1></div>
 
+{% include "owner_filter.html" %}
+
 <div class="kpis">
-  <a class="kpi bad {{ 'zero' if not problems }} {{ 'on' if show == 'attention' }}" href="?show=attention&sort={{ sort }}&q={{ q|urlencode }}">
+  <a class="kpi bad {{ 'zero' if not problems }} {{ 'on' if show == 'attention' }}" href="?show=attention&sort={{ sort }}&q={{ q|urlencode }}{% if selected_owner %}&owner={{ selected_owner|urlencode }}{% endif %}">
     <div class="n">{{ problems }}</div><div class="l">Need attention</div></a>
-  <a class="kpi {{ 'on' if show == 'arriving' }}" href="?show=arriving&sort={{ sort }}&q={{ q|urlencode }}">
+  <a class="kpi {{ 'on' if show == 'arriving' }}" href="?show=arriving&sort={{ sort }}&q={{ q|urlencode }}{% if selected_owner %}&owner={{ selected_owner|urlencode }}{% endif %}">
     <div class="n">{{ counts.arriving_today + counts.turnover_today }}</div><div class="l">Arriving today</div></a>
-  <a class="kpi {{ 'on' if show == 'departing' }}" href="?show=departing&sort={{ sort }}&q={{ q|urlencode }}">
+  <a class="kpi {{ 'on' if show == 'departing' }}" href="?show=departing&sort={{ sort }}&q={{ q|urlencode }}{% if selected_owner %}&owner={{ selected_owner|urlencode }}{% endif %}">
     <div class="n">{{ counts.departing_today + counts.turnover_today }}</div><div class="l">Departing today</div></a>
-  <a class="kpi {{ 'on' if show == 'occupied' }}" href="?show=occupied&sort={{ sort }}&q={{ q|urlencode }}">
+  <a class="kpi {{ 'on' if show == 'occupied' }}" href="?show=occupied&sort={{ sort }}&q={{ q|urlencode }}{% if selected_owner %}&owner={{ selected_owner|urlencode }}{% endif %}">
     <div class="n">{{ counts.occupied }}</div><div class="l">Occupied</div></a>
-  <a class="kpi {{ 'on' if show == 'vacant' }}" href="?show=vacant&sort={{ sort }}&q={{ q|urlencode }}">
+  <a class="kpi {{ 'on' if show == 'vacant' }}" href="?show=vacant&sort={{ sort }}&q={{ q|urlencode }}{% if selected_owner %}&owner={{ selected_owner|urlencode }}{% endif %}">
     <div class="n">{{ counts.vacant }}</div><div class="l">Vacant</div></a>
-  <a class="kpi {{ 'on' if show == 'all' }}" href="?show=all&sort={{ sort }}&q={{ q|urlencode }}">
+  <a class="kpi {{ 'on' if show == 'all' }}" href="?show=all&sort={{ sort }}&q={{ q|urlencode }}{% if selected_owner %}&owner={{ selected_owner|urlencode }}{% endif %}">
     <div class="n">{{ total }}</div><div class="l">All homes</div></a>
 </div>
 
 <div class="toolbar">
   <span class="sub">Sort</span>
-  <a class="chip {{ 'on' if sort == 'attention' }}" href="?show={{ show }}&sort=attention&q={{ q|urlencode }}">Problems first</a>
-  <a class="chip {{ 'on' if sort == 'name' }}" href="?show={{ show }}&sort=name&q={{ q|urlencode }}">Street A–Z</a>
+  <a class="chip {{ 'on' if sort == 'attention' }}" href="?show={{ show }}&sort=attention&q={{ q|urlencode }}{% if selected_owner %}&owner={{ selected_owner|urlencode }}{% endif %}">Problems first</a>
+  <a class="chip {{ 'on' if sort == 'name' }}" href="?show={{ show }}&sort=name&q={{ q|urlencode }}{% if selected_owner %}&owner={{ selected_owner|urlencode }}{% endif %}">Street A–Z</a>
   <span class="spacer"></span>
   <form method="get" action="." class="inline search">
     <input type="hidden" name="show" value="{{ show }}"><input type="hidden" name="sort" value="{{ sort }}">
+    <input type="hidden" name="owner" value="{{ selected_owner }}">
     <input name="q" value="{{ q }}" placeholder="Search property" type="search">
   </form>
 </div>
@@ -47,6 +50,7 @@
         <input type="hidden" name="show" value="{{ show }}">
         <input type="hidden" name="sort" value="{{ sort }}">
         <input type="hidden" name="q" value="{{ q }}">
+        <input type="hidden" name="owner" value="{{ selected_owner }}">
         <button>Check lock</button>
       </form>
       {% endif %}
@@ -81,6 +85,7 @@
           <input type="hidden" name="show" value="{{ show }}">
           <input type="hidden" name="sort" value="{{ sort }}">
           <input type="hidden" name="q" value="{{ q }}">
+          <input type="hidden" name="owner" value="{{ selected_owner }}">
           <input name="code" value="{{ r.door_code }}" inputmode="numeric" maxlength="4" aria-label="New guest code">
           <button class="primary">Save</button></form>
         <div class="sub">Blank saves Hostaway's code.</div>
@@ -105,11 +110,12 @@
       <input type="hidden" name="show" value="{{ show }}">
       <input type="hidden" name="sort" value="{{ sort }}">
       <input type="hidden" name="q" value="{{ q }}">
+      <input type="hidden" name="owner" value="{{ selected_owner }}">
       <button title="Read codes from the lock now">Check lock</button></form>{% endif %}
     </div>
   </div>
   {% else %}
-  <p class="empty">{% if show != 'all' or q %}No homes match this filter.{% else %}No properties yet. Press "Sync now".{% endif %}</p>
+  <p class="empty">{% if show != 'all' or q or selected_owner %}No homes match this filter.{% else %}No properties yet. Press "Sync now".{% endif %}</p>
   {% endfor %}
 </div>
 {% endif %}
