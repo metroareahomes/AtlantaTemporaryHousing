@@ -20,7 +20,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from .extension_live import calendar_enabled_for, live_property, owner_setting, run_extension_live, selected_properties
+from .extension_live import HOLD_FIELDS, calendar_enabled_for, hold_settings, live_property, owner_setting, run_extension_live, selected_properties
 from .extension_preview import interpret_inquiry_reply, local_scenario_time, scan_extensions, simulate_inquiry
 from .extension_pricing import OWNERS as EXTENSION_OWNERS, SETTINGS_KEY as EXTENSION_SETTINGS_KEY
 from .extension_pricing import read_settings as extension_rules, validate_settings as validate_extension_rules
@@ -962,6 +962,8 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, 
             "calendar_refresh": refreshes[owner],
             "extension_owner": owner,
             "live_calendar": calendar_enabled_for(db, owner),
+            "hold_fields": HOLD_FIELDS,
+            "hold_rules": hold_settings(db, owner),
             "live_selected": selected_properties(db, owner),
             "live_properties": db.query(
                 "SELECT name, hostaway_listing_id FROM properties "
@@ -970,10 +972,23 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, 
         }
 
     @app.post("/extension-live-settings")
-    async def save_extension_live_settings(calendar_enabled: bool = Form(False),
+    async def save_extension_live_settings(request: Request, calendar_enabled: bool = Form(False),
                                            properties: list[int] = Form(default=[]), owner: str = "Kurt"):
         validate_owner(owner)
+        form = await request.form()
+        rules = hold_settings(db, owner)
+        for key, label, maximum in HOLD_FIELDS:
+            if key not in form:
+                continue
+            value = str(form[key]).strip()
+            if not value:
+                rules.pop(key, None)
+            elif value.isascii() and value.isdecimal() and len(value) <= 3 and int(value) <= maximum:
+                rules[key] = int(value)
+            else:
+                raise HTTPException(422, f"{label} must be blank or a whole number from 0 to {maximum}.")
         db.set_settings({
+            owner_setting("extension_hold_rules", owner): json.dumps(rules),
             owner_setting("extension_live_calendar", owner): "1" if calendar_enabled else "0",
             owner_setting("extension_live_properties", owner): json.dumps(sorted({
                 listing for listing in properties if live_property(db, listing, owner)
