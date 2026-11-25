@@ -22,6 +22,61 @@ def selected_properties(db, owner="Kurt"):
     return set(json.loads(db.get_setting(owner_setting("extension_live_properties", owner), "[]")))
 
 
+HOLD_FIELDS = (
+    ("turnover_short", "1–3 nights: turnover nights", 30),
+    ("turnover_medium", "4–14 nights: turnover nights", 30),
+    ("turnover_long", "15+ nights: turnover nights", 30),
+    ("turnover_long_friday", "15+ nights, Friday checkout: turnover nights", 30),
+    ("turnover_long_saturday", "15+ nights, Saturday checkout: turnover nights", 30),
+)
+
+
+def hold_settings(db, owner):
+    return json.loads(db.get_setting(owner_setting("extension_hold_rules", owner), "{}"))
+
+
+def stay_band(nights):
+    if nights <= 3:
+        return "short"
+    return "medium" if nights <= 14 else "long"
+
+
+def turnover_override(arrival, checkout, rules):
+    band = stay_band((checkout - arrival).days)
+    key = f"turnover_{band}"
+    if band == "long":
+        suffix = {4: "_friday", 5: "_saturday"}.get(checkout.weekday(), "")
+        count = rules.get(key + suffix, rules.get(key))
+    else:
+        count = rules.get(key)
+    if count is None:
+        return None
+    start = 1 if band == "long" and checkout.weekday() == 4 else 0
+    return [checkout + timedelta(days=start + offset) for offset in range(count)]
+
+
+def apply_hold_rules(row, rules):
+    """Return the live plan and which kinds of existing holds the policy may trim."""
+    if not rules or "booked_turnover" not in row or not row.get("arrival_date"):
+        return row, set()
+    arrival = date.fromisoformat(row["arrival_date"])
+    checkout = date.fromisoformat(row["departure_date"])
+    plan, trim = row.copy(), set()
+    booked = turnover_override(arrival, checkout, rules)
+    if booked is not None:
+        plan["booked_turnover"] = booked
+        trim.add("Turnover hold")
+    end = row.get("hold_end")
+    if row.get("error") or not end:
+        return plan, trim
+    if row.get("extended_turnover_dates") is not None:
+        projected = turnover_override(arrival, end, rules)
+        if projected is not None:
+            plan["projected_turnover"] = projected
+            trim.add("Turnover after proposed extension")
+    return plan, trim
+
+
 def calendar_plan(rows, today):
     desired, releasable = {}, set()
     for row in rows:
@@ -79,9 +134,20 @@ def unreserved(day):
     )
 
 
+def owns_hold(day, record, daily_marker, listing):
+    note = day.get("note") or ""
+    return blocked(day) and any(is_hold_note(note, marker) for marker in (
+        record["marker"], daily_marker, f"[Stay Automation hold {listing}/stay-{record['reservation_id']}]",
+    ))
+
+
 async def update_holds(syncer, listing, rows, today, notes_enabled, *, report=None, owner="Kurt"):
     db, hostaway = syncer.db, syncer.hostaway
-    desired, releasable = calendar_plan(rows, today)
+    rules = hold_settings(db, owner)
+    adjusted = [apply_hold_rules(row, rules) for row in rows]
+    desired, _ = calendar_plan([plan for plan, _ in adjusted], today)
+    original, releasable = calendar_plan(rows, today)
+    trimmable = {plan["id"]: labels for plan, labels in adjusted}
     outlooks = {row["id"]: row.get("note", "") for row in rows if not row.get("error")}
     owned = {
         date.fromisoformat(item["night"]): item for item in db.query(
@@ -99,8 +165,15 @@ async def update_holds(syncer, listing, rows, today, notes_enabled, *, report=No
         iso = night.isoformat()
         old = owned.get(night)
         target = desired.get(night)
-        if not target and (not old or old["reservation_id"] not in releasable):
+        if not target and not old:
             continue
+        if not target and old["reservation_id"] not in releasable:
+            previous = original.get(night)
+            label = old["hold_label"]
+            if not label and previous and previous[0] == old["reservation_id"]:
+                label = previous[1]
+            if label not in trimmable.get(old["reservation_id"], ()):
+                continue
         try:
             day, = await hostaway.pricing_calendar(listing, iso, iso)
             if not unreserved(day):
@@ -108,10 +181,7 @@ async def update_holds(syncer, listing, rows, today, notes_enabled, *, report=No
                 continue
             note = day.get("note") or ""
             daily_marker = f"[Stay Automation hold {listing}/{iso}]"
-            owned_block = old and blocked(day) and any(
-                is_hold_note(note, marker)
-                for marker in (old["marker"], daily_marker, f"[Stay Automation hold {listing}/stay-{old['reservation_id']}]")
-            )
+            owned_block = old and owns_hold(day, old, daily_marker, listing)
             if target:
                 rid, label = target
                 marker = f"[Stay Automation hold {listing}/stay-{rid}]" if notes_enabled else daily_marker
@@ -123,10 +193,14 @@ async def update_holds(syncer, listing, rows, today, notes_enabled, *, report=No
                     continue
                 text = calendar_hold_note(marker, label, outlooks.get(rid)) if notes_enabled else marker
                 if owned_block and note == text and old["reservation_id"] == rid:
+                    if old["hold_label"] != label:
+                        db.execute("UPDATE extension_live_holds SET hold_label=? WHERE listing_id=? AND night=?",
+                                   (label, listing, iso))
                     continue
                 db.execute(
-                    "INSERT OR REPLACE INTO extension_live_holds VALUES(?,?,?,?,?)",
-                    (listing, iso, rid, marker, old["original_note"] if owned_block else note),
+                    "INSERT OR REPLACE INTO extension_live_holds "
+                    "(listing_id, night, reservation_id, marker, original_note, hold_label) VALUES(?,?,?,?,?,?)",
+                    (listing, iso, rid, marker, old["original_note"] if owned_block else note, label),
                 )
                 payload = {"isAvailable": 0, "note": text}
             else:
@@ -151,6 +225,12 @@ async def update_holds(syncer, listing, rows, today, notes_enabled, *, report=No
         if not live_property(db, listing, owner) or not calendar_enabled_for(db, owner):
             return
         try:
+            if payload["isAvailable"]:
+                iso = first.isoformat()
+                current, = await hostaway.pricing_calendar(listing, iso, iso)
+                if not owns_hold(current, owned[first], f"[Stay Automation hold {listing}/{iso}]", listing):
+                    report["skipped"] += 1
+                    continue
             await hostaway.apply_calendar_intervals(listing, [
                 {"startDate": first.isoformat(), "endDate": last.isoformat()} | payload
             ])

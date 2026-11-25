@@ -145,7 +145,7 @@ def test_mike_settings_are_independent_and_listing_scoped(syncer):
     from fastapi.testclient import TestClient
 
     from app.extension_inquiry import enabled
-    from app.extension_live import calendar_enabled_for, selected_properties
+    from app.extension_live import calendar_enabled_for, hold_settings, selected_properties
     from app.web import create_app
 
     for listing, owner in [(101, "Kurt"), (102, "Mike")]:
@@ -157,9 +157,14 @@ def test_mike_settings_are_independent_and_listing_scoped(syncer):
     client = TestClient(create_app(syncer))
     assert not calendar_enabled_for(syncer.db, "Mike")
     response = client.post("/extension-live-settings?owner=Mike",
-                           data={"calendar_enabled": "true", "properties": ["101", "102"]})
+                           data={"calendar_enabled": "true", "properties": ["101", "102"],
+                                 "turnover_long": "1"})
     assert response.status_code == 200
     assert "Mike home" in response.text and "Kurt home" not in response.text
+    assert hold_settings(syncer.db, "Mike") == {"turnover_long": 1}
+    assert hold_settings(syncer.db, "Kurt") == {}
+    assert client.post("/extension-live-settings?owner=Mike",
+                       data={"turnover_long": "-1"}).status_code == 422
     assert selected_properties(syncer.db, "Mike") == {102}
     assert selected_properties(syncer.db, "Kurt") == set()
     assert calendar_enabled_for(syncer.db, "Mike")
@@ -200,3 +205,53 @@ def test_extension_preview_property_filter_scopes_review_and_cards(syncer, monke
     assert scopes == [("Kurt", 0), ("Mike", 103)]
     assert 'id="reservation-103"' in response.text
     assert 'id="reservation-101"' not in response.text
+
+
+
+def test_lower_turnover_limit_releases_legacy_holds_but_preserves_extension(syncer):
+    syncer.db.execute(
+        "INSERT INTO properties(hostaway_listing_id,name,owner_scope) VALUES(102,'Mike home','Mike')"
+    )
+    syncer.db.set_settings({
+        "extension_live_calendar_mike": "1",
+        "extension_hold_rules_mike": '{"turnover_long": 0}',
+    })
+    today = date(2026, 12, 1)
+    nights = [date(2026, 12, day) for day in range(1, 7)]
+    days = {}
+    for night in nights:
+        iso = night.isoformat()
+        marker = f"[Stay Automation hold 102/{iso}]"
+        days[iso] = {"status": "blocked", "isAvailable": 0, "note": marker}
+        syncer.db.execute(
+            "INSERT INTO extension_live_holds (listing_id, night, reservation_id, marker, original_note)"
+            " VALUES (102, ?, 17, ?, '')",
+            (iso, marker),
+        )
+    days["2026-12-01"]["note"] = "Owner hold"
+    days["2026-12-06"]["countPendingUnits"] = 1
+
+    async def read(listing, first, last):
+        assert listing == 102
+        return [days[first].copy()]
+
+    async def write(listing, intervals):
+        change, = intervals
+        assert change["startDate"] == change["endDate"]
+        days[change["startDate"]].update(status="available", isAvailable=1, note=change["note"])
+
+    manager = SimpleNamespace(db=syncer.db, hostaway=SimpleNamespace(
+        pricing_calendar=read, apply_calendar_intervals=write,
+    ))
+    row = {
+        "id": 17, "arrival_date": "2026-11-01", "departure_date": today.isoformat(),
+        "booked_turnover": nights[:2], "projected_turnover": nights[4:],
+        "hold_end": nights[4], "extended_turnover_dates": "Dec 5–6",
+        "extension_status": "considering",
+    }
+    run(update_holds(manager, 102, [row], today, False, owner="Mike"))
+    assert {night for night, day in days.items() if day["isAvailable"]} == {
+        "2026-12-05",
+    }
+    assert days["2026-12-01"]["note"] == "Owner hold"
+    assert days["2026-12-06"]["countPendingUnits"] == 1
