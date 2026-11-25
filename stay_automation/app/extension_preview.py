@@ -230,6 +230,7 @@ async def review_reservation(syncer, client, row):
         raise ValueError("Reservation ended")
     row["departure_date"] = checkout.isoformat()
     arrival = date.fromisoformat(raw.get("arrivalDate") or row["arrival_date"])
+    row["arrival_date"] = arrival.isoformat()
     row["short_stay"] = 1 <= (checkout - arrival).days <= 3
     row["booked_turnover"] = turnover_nights(arrival, checkout)
     row["turnover_dates"] = ", ".join(day.strftime("%a, %b %d") for day in row["booked_turnover"]) or "None"
