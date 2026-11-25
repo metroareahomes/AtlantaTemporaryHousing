@@ -36,6 +36,14 @@
 <p><label><input type="checkbox" name="calendar_enabled" {% if live_calendar %}checked{% endif %}>
 Apply extension and turnover holds to {{ extension_owner }}’s calendars</label></p>
 <fieldset>
+<legend>Turnover nights</legend>
+<p>Set the turnover nights after booked or proposed checkout. Leave fields blank to use the existing rules, or enter 0 to skip a turnover hold. Click Update calendar now after saving to apply the limits immediately. The calendar review can release excess dates previously held by Stay Automation. Reservation previews show the proposed dates before these limits apply.</p>
+{% for key, label, maximum in hold_fields %}
+<p><label for="{{ key }}">{{ label }}</label>
+<input id="{{ key }}" name="{{ key }}" type="number" min="0" max="{{ maximum }}" step="1" value="{{ hold_rules.get(key, '') }}"></p>
+{% endfor %}
+</fieldset>
+<fieldset>
 <legend>Calendar notes and automatic checkout check-ins and inquiry messages</legend>
 <p>Select the homes where the automation can add descriptive hold notes and send eligible checkout check-ins and messages when a new inquiry requires confirming the current guest’s plans.</p>
 {% for property in live_properties %}
