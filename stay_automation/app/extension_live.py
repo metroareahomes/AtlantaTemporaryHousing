@@ -28,6 +28,7 @@ HOLD_FIELDS = (
     ("turnover_long", "15+ nights: turnover nights", 30),
     ("turnover_long_friday", "15+ nights, Friday checkout: turnover nights", 30),
     ("turnover_long_saturday", "15+ nights, Saturday checkout: turnover nights", 30),
+    ("turnover_30_plus", "30+ nights: turnover nights", 30),
 )
 
 
@@ -42,13 +43,16 @@ def stay_band(nights):
 
 
 def turnover_override(arrival, checkout, rules):
-    band = stay_band((checkout - arrival).days)
+    nights = (checkout - arrival).days
+    band = stay_band(nights)
     key = f"turnover_{band}"
     if band == "long":
         suffix = {4: "_friday", 5: "_saturday"}.get(checkout.weekday(), "")
         count = rules.get(key + suffix, rules.get(key))
     else:
         count = rules.get(key)
+    if nights >= 30:
+        count = rules.get("turnover_30_plus", count)
     if count is None:
         return None
     start = 1 if band == "long" and checkout.weekday() == 4 else 0
