@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS extension_live_holds (
     reservation_id INTEGER NOT NULL,
     marker TEXT NOT NULL,
     original_note TEXT NOT NULL,
+    hold_label TEXT,
     PRIMARY KEY (listing_id, night)
 );
 CREATE TABLE IF NOT EXISTS extension_live_messages (
@@ -267,6 +268,7 @@ CREATE TABLE IF NOT EXISTS thermostats (
 
 # Columns added after the first release; applied to existing databases on start.
 MIGRATIONS = {
+    "extension_live_holds": {"hold_label": "TEXT"},
     "staff": {
         "owner_scope": "TEXT NOT NULL DEFAULT ''",
     },
