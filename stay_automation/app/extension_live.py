@@ -5,7 +5,7 @@ from itertools import groupby
 
 from httpx import HTTPError
 
-from .extension_preview import scan_extensions, scan_kurt
+from .extension_preview import scan_extensions, scan_kurt, turnover_nights
 from .extension_pricing import blocked
 from .hostaway import HostawayError
 
@@ -57,6 +57,29 @@ def turnover_override(arrival, checkout, rules):
         return None
     start = 1 if band == "long" and checkout.weekday() == 4 else 0
     return [checkout + timedelta(days=start + offset) for offset in range(count)]
+
+
+def displayed_turnover_nights(rules):
+    # Use the same calculation as the live calendar for each relevant checkout day.
+    thursday = date(2026, 1, 1)
+    friday, saturday = (thursday + timedelta(days=i) for i in (1, 2))
+
+    def count(length, checkout):
+        arrival = checkout - timedelta(days=length)
+        override = turnover_override(arrival, checkout, rules)
+        return len(turnover_nights(arrival, checkout) if override is None else override)
+
+    return {
+        "turnover_short": str(count(3, thursday)),
+        "turnover_medium": str(count(14, thursday)),
+        "turnover_long": f"{count(15, thursday)} (Sun–Thu)",
+        "turnover_long_friday": str(count(15, friday)),
+        "turnover_long_saturday": str(count(15, saturday)),
+        "turnover_30_plus": (
+            str(rules["turnover_30_plus"]) if "turnover_30_plus" in rules else
+            f"{count(30, thursday)} (Sun–Thu), {count(30, friday)} (Fri), {count(30, saturday)} (Sat)"
+        ),
+    }
 
 
 def apply_hold_rules(row, rules):
