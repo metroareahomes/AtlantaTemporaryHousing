@@ -20,7 +20,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from .extension_live import HOLD_FIELDS, calendar_enabled_for, hold_settings, live_property, owner_setting, run_extension_live, selected_properties
+from .extension_live import HOLD_FIELDS, calendar_enabled_for, displayed_turnover_nights, hold_settings, live_property, owner_setting, run_extension_live, selected_properties
 from .extension_preview import interpret_inquiry_reply, local_scenario_time, scan_extensions, simulate_inquiry
 from .extension_pricing import OWNERS as EXTENSION_OWNERS, SETTINGS_KEY as EXTENSION_SETTINGS_KEY
 from .extension_pricing import read_settings as extension_rules, validate_settings as validate_extension_rules
@@ -958,12 +958,14 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, 
         return RedirectResponse(f"extension-preview?owner={owner}#live-calendar", status_code=303, background=background_tasks)
 
     def extension_live_controls(owner):
+        rules = hold_settings(db, owner)
         return {
             "calendar_refresh": refreshes[owner],
             "extension_owner": owner,
             "live_calendar": calendar_enabled_for(db, owner),
             "hold_fields": HOLD_FIELDS,
-            "hold_rules": hold_settings(db, owner),
+            "hold_rules": rules,
+            "effective_turnover": displayed_turnover_nights(rules),
             "live_selected": selected_properties(db, owner),
             "live_properties": db.query(
                 "SELECT name, hostaway_listing_id FROM properties "
