@@ -1,8 +1,8 @@
 from dataclasses import replace
-from datetime import date
+from datetime import date, timedelta
 from types import SimpleNamespace
 
-from app.extension_live import calendar_plan, update_holds
+from app.extension_live import calendar_plan, turnover_override, update_holds
 from test_sync import run, syncer
 
 
@@ -255,3 +255,14 @@ def test_lower_turnover_limit_releases_legacy_holds_but_preserves_extension(sync
     }
     assert days["2026-12-01"]["note"] == "Owner hold"
     assert days["2026-12-06"]["countPendingUnits"] == 1
+
+
+
+def test_30_night_override_preserves_friday_start_and_existing_fallback():
+    friday = date(2026, 12, 4)
+    rules = {"turnover_long_friday": 2, "turnover_30_plus": 0}
+    weekend = [date(2026, 12, 5), date(2026, 12, 6)]
+    assert turnover_override(friday - timedelta(days=29), friday, rules) == weekend
+    assert turnover_override(friday - timedelta(days=30), friday, rules) == []
+    del rules["turnover_30_plus"]
+    assert turnover_override(friday - timedelta(days=30), friday, rules) == weekend
