@@ -7,19 +7,20 @@
 {% if special_day == "Monday" %}
 <h2>How the Monday Special works</h2>
 <ul>
-<li>Sunday at noon Eastern, apply the discount to the upcoming Monday, Tuesday and Wednesday rates. The home must be vacant all three nights.</li>
-<li>Set a three-night minimum for arrivals on Monday, Tuesday and Wednesday.</li>
+<li>Sunday at noon Eastern, start the special for the upcoming Monday through Wednesday if all three nights are vacant.</li>
+<li>Set a three-night minimum for Monday arrivals. Tuesday and Wednesday keep their PriceLabs rates and minimum stays.</li>
 <li>Monday at 2:15 AM Eastern, reread Hostaway rates after the 2 AM PriceLabs sync and refresh the discount. A rate still carrying the Sunday discount uses its original price as the baseline.</li>
-<li>Monday at 5 PM Eastern, stop the special and restore the prices and minimums it set when those values still match the automation’s last write. Later changes from PriceLabs or staff are preserved.</li>
+<li>Monday at 5 PM Eastern, stop the special and restore the Monday price and minimum stay when those values still match the automation’s last write. Later changes from PriceLabs or staff are preserved.</li>
 </ul>
 {% else %}
 <h2>How the Thursday Special works</h2>
 <ul>
-<li>On Thursday at the selected Eastern time, discount the current Hostaway rates for Thursday, Friday and Saturday. The home must be vacant all three nights.</li>
-<li>Set a three-night minimum for Thursday arrivals. Friday and Saturday retain their existing minimums.</li>
+<li>At the selected time on Thursday, start the special for Thursday through Saturday if all three nights are vacant.</li>
+<li>Set a three-night minimum for Thursday arrivals. Friday and Saturday keep their PriceLabs rates and minimum stays.</li>
 <li>The scheduled run applies once per owner. PriceLabs can update the rates on its next sync.</li>
 </ul>
 {% endif %}
+<p>We calculate the discount using the total Hostaway rate for all three nights and deduct the entire savings from {{ special_day }}. For example, 20% off a $600 three-night total saves $120 on {{ special_day }}. The three-night arrival minimum ties that savings to a booking that fills all three nights.</p>
 <p>Preview reviews the rates and minimums before applying. Select homes by checkbox, a first-night rate threshold, or both. Checked homes bypass the threshold.</p>
 {% if applied %}<p role="status">Verified in Hostaway: {{ applied }}. {{ special_day }} minimum: 3 nights.</p>{% endif %}
 {% if bulk_report %}<ul>{% for report in bulk_report %}<li>{{ report }}</li>{% endfor %}</ul>{% endif %}
@@ -65,7 +66,7 @@
 {% if not result.properties %}<p>No homes matched.</p>{% endif %}
 {% for prop in result.properties %}
 <h3>{{ prop.name }}</h3>
-{% if prop.ineligible %}<p>Skipped: all three nights must be confirmed vacant.</p>{% endif %}
+{% if prop.ineligible %}<p>Skipped. {{ prop.reason }}.</p>{% endif %}
 <div style="overflow-x:auto">
 <table><thead><tr><th>Night</th><th>Current rate</th><th>Proposed rate</th><th>Current minimum</th><th>Proposed minimum</th><th>Result</th></tr></thead>
 <tbody>{% for row in prop.rows %}
