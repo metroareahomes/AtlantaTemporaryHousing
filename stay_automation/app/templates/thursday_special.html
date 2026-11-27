@@ -2,7 +2,6 @@
 {% block body %}
 <div class="page-head"><h1>The {{ special_day }} Special{% if special_owner %} · {{ special_owner }}{% endif %}</h1>
 <nav aria-label="{{ special_day }} Special owners"><a href="{{ special_path }}?owner=Mike">Mike’s homes</a> <a href="{{ special_path }}?owner=Kurt">Kurt’s homes</a></nav></div>
-{% if special_day == "Thursday" %}<p><a href="thursday-bookings">{{ special_day }} booking times report</a></p>{% endif %}
 <section class="panel">
 {% if special_day == "Monday" %}
 <h2>How the Monday Special works</h2>

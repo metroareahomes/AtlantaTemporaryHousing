@@ -32,21 +32,29 @@
             <a href="events" class="{{ 'on' if active == 'events' }}" {{ 'aria-current=page' if active == 'events' }}>Activity log</a>
           </div>
         </details>
-        <details class="menu {{ 'on' if active in ['monday-special', 'thursday-special', 'thursday-bookings', 'extension-pricing'] }}">
+        <details class="menu {{ 'on' if active in ['monday-special', 'thursday-special', 'extension-pricing'] }}">
           <summary>Pricing</summary>
           <div class="menu-panel">
             <a href="monday-special" {{ 'aria-current=page' if active == 'monday-special' }}>The Monday Special</a>
             <a href="thursday-special" {{ 'aria-current=page' if active == 'thursday-special' }}>The Thursday Special</a>
-            <a href="thursday-bookings" {{ 'aria-current=page' if active == 'thursday-bookings' }}>Thursday Booking Times</a>
             <a href="extension-pricing" {{ 'aria-current=page' if active == 'extension-pricing' }}>Guest Extension Pricing</a>
           </div>
         </details>
-        <details class="menu {{ 'on' if active == 'extension-preview' }}">
+        <details class="menu {{ 'on' if active in ['extension-preview', 'turnover-rules'] }}">
           <summary>Bookings &amp; extensions</summary>
           <div class="menu-panel">
-            <a href="extension-preview" {{ 'aria-current=page' if active == 'extension-preview' and extension_owner == 'Kurt' }}>Kurt’s Extension Preview</a>
-            <a href="extension-preview?owner=Mike" {{ 'aria-current=page' if active == 'extension-preview' and extension_owner == 'Mike' }}>Mike’s Extension Preview</a>
-            <a href="https://atlanta-temporary-housing-extension-pilot.onrender.com/owner-settings" target="_blank" rel="noopener noreferrer">Booking &amp; Extension Owner Settings</a>
+            <a href="extension-preview" {{ 'aria-current=page' if active == 'extension-preview' and extension_owner == 'Kurt' }}>Who’s extending? - Kurt</a>
+            <a href="extension-preview?owner=Mike" {{ 'aria-current=page' if active == 'extension-preview' and extension_owner == 'Mike' }}>Who’s extending? - Mike</a>
+            <a href="turnover-rules?owner=Kurt" {{ 'aria-current=page' if active == 'turnover-rules' and extension_owner == 'Kurt' }}>Turnover rules - Kurt</a>
+            <a href="turnover-rules?owner=Mike" {{ 'aria-current=page' if active == 'turnover-rules' and extension_owner == 'Mike' }}>Turnover rules - Mike</a>
+          </div>
+        </details>
+        <details class="menu">
+          <summary>Direct booking</summary>
+          <div class="menu-panel">
+            <a href="https://atlanta-temporary-housing-extension-pilot.onrender.com/extend/kurt" target="_blank" rel="noopener noreferrer">Extending direct</a>
+            <a href="https://atlanta-temporary-housing-map.beamingcacao18.chatgpt.site/" target="_blank" rel="noopener noreferrer">Web direct</a>
+            <a href="https://atlanta-temporary-housing-extension-pilot.onrender.com/owner-settings" target="_blank" rel="noopener noreferrer">Owner settings</a>
           </div>
         </details>
         <details class="menu">

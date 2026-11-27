@@ -169,6 +169,16 @@ def test_mike_settings_are_independent_and_listing_scoped(syncer):
     assert selected_properties(syncer.db, "Kurt") == set()
     assert calendar_enabled_for(syncer.db, "Mike")
     assert not calendar_enabled_for(syncer.db, "Kurt")
+    turnover = client.get("/turnover-rules?owner=Mike")
+    assert "Turnover rules - Mike" in turnover.text
+    assert 'name="turnover_long"' in turnover.text
+    assert 'name="turnover_long"' not in response.text
+    assert client.post("/turnover-rules?owner=Mike", data={"turnover_long": "-1"}).status_code == 422
+    assert client.post("/turnover-rules?owner=Mike", data={"turnover_long": "0"}).status_code == 200
+    assert hold_settings(syncer.db, "Mike") == {"turnover_long": 0}
+    assert hold_settings(syncer.db, "Kurt") == {}
+    assert selected_properties(db=syncer.db, owner="Mike") == {102}
+    assert calendar_enabled_for(syncer.db, "Mike")
     assert enabled(syncer, 102)
     assert not enabled(syncer, 101)
 

@@ -958,14 +958,10 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, 
         return RedirectResponse(f"extension-preview?owner={owner}#live-calendar", status_code=303, background=background_tasks)
 
     def extension_live_controls(owner):
-        rules = hold_settings(db, owner)
         return {
             "calendar_refresh": refreshes[owner],
             "extension_owner": owner,
             "live_calendar": calendar_enabled_for(db, owner),
-            "hold_fields": HOLD_FIELDS,
-            "hold_rules": rules,
-            "effective_turnover": displayed_turnover_nights(rules),
             "live_selected": selected_properties(db, owner),
             "live_properties": db.query(
                 "SELECT name, hostaway_listing_id FROM properties "
@@ -973,11 +969,7 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, 
             ),
         }
 
-    @app.post("/extension-live-settings")
-    async def save_extension_live_settings(request: Request, calendar_enabled: bool = Form(False),
-                                           properties: list[int] = Form(default=[]), owner: str = "Kurt"):
-        validate_owner(owner)
-        form = await request.form()
+    def submitted_hold_rules(owner, form):
         rules = hold_settings(db, owner)
         for key, label, maximum in HOLD_FIELDS:
             if key not in form:
@@ -989,6 +981,28 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, 
                 rules[key] = int(value)
             else:
                 raise HTTPException(422, f"{label} must be blank or a whole number from 0 to {maximum}.")
+        return rules
+
+    @app.get("/turnover-rules", response_class=HTMLResponse)
+    async def show_turnover_rules(request: Request, owner: str = "Kurt"):
+        validate_owner(owner)
+        rules = hold_settings(db, owner)
+        return page(request, "turnover_rules.html", extension_owner=owner, hold_fields=HOLD_FIELDS,
+                    hold_rules=rules, effective_turnover=displayed_turnover_nights(rules))
+
+    @app.post("/turnover-rules")
+    async def save_turnover_rules(request: Request, owner: str = "Kurt"):
+        validate_owner(owner)
+        rules = submitted_hold_rules(owner, await request.form())
+        db.set_setting(owner_setting("extension_hold_rules", owner), json.dumps(rules))
+        return RedirectResponse(f"turnover-rules?owner={owner}&notice=Turnover+rules+saved", status_code=303)
+
+    @app.post("/extension-live-settings")
+    async def save_extension_live_settings(request: Request, calendar_enabled: bool = Form(False),
+                                           properties: list[int] = Form(default=[]), owner: str = "Kurt"):
+        validate_owner(owner)
+        form = await request.form()
+        rules = submitted_hold_rules(owner, form)
         db.set_settings({
             owner_setting("extension_hold_rules", owner): json.dumps(rules),
             owner_setting("extension_live_calendar", owner): "1" if calendar_enabled else "0",

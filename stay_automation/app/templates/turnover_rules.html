@@ -1,0 +1,19 @@
+{% extends "base.html" %}{% set active = 'turnover-rules' %}
+{% block body %}
+<div class="page-head"><h1>Turnover rules - {{ extension_owner }}</h1></div>
+<section class="panel">
+<form action="turnover-rules?owner={{ extension_owner }}" method="post">
+<fieldset>
+<legend>Turnover rules</legend>
+<p>Set the turnover nights after booked or proposed checkout. Leave fields blank to use the existing rules, or enter 0 to skip a turnover hold. The 30+ night setting overrides the 15+ night settings, including the Friday and Saturday counts. After saving, use Update calendar now in Live extension settings to apply the limits immediately. The calendar review can release excess dates previously held by Stay Automation. Reservation previews show the proposed dates before these limits apply.</p>
+{% for key, label, maximum in hold_fields %}
+<p><label for="{{ key }}">{{ label }}</label>
+<input id="{{ key }}" name="{{ key }}" type="number" min="0" max="{{ maximum }}" step="1" value="{{ hold_rules.get(key, '') }}" aria-describedby="{{ key }}-current">
+<small id="{{ key }}-current">Current nights: {{ effective_turnover[key] }}{% if key not in hold_rules %} · Inherited{% endif %}</small></p>
+{% endfor %}
+</fieldset>
+<button>Save turnover rules</button>
+</form>
+<p><a href="extension-preview?owner={{ extension_owner }}#live-calendar">Live extension settings</a></p>
+</section>
+{% endblock %}

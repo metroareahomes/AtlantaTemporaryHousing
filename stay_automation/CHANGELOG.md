@@ -1,3 +1,8 @@
+## 0.6.79
+
+- Rename the extension review links and move turnover rules to owner-specific pages.
+- Group direct booking links and remove the Thursday booking times report from navigation.
+
 ## 0.6.78
 
 - Group pricing, bookings and extensions, and guest messaging in the Stays menu.

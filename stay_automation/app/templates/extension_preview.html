@@ -1,6 +1,6 @@
 {% extends "base.html" %}{% set active = 'extension-preview' %}
 {% block body %}
-<div class="page-head"><h1>{{ extension_owner }}’s Extension Preview</h1></div>
+<div class="page-head"><h1>Who’s extending? - {{ extension_owner }}</h1></div>
 <section class="panel">
 <p>Review current and upcoming reservations across {{ extension_owner }}’s homes. This preview reads Hostaway conversations without changing the calendar or sending messages.</p>
 <form action="extension-preview" method="get">
@@ -35,15 +35,6 @@
 <form action="extension-live-settings?owner={{ extension_owner }}" method="post">
 <p><label><input type="checkbox" name="calendar_enabled" {% if live_calendar %}checked{% endif %}>
 Apply extension and turnover holds to {{ extension_owner }}’s calendars</label></p>
-<fieldset>
-<legend>Turnover nights</legend>
-<p>Set the turnover nights after booked or proposed checkout. Leave fields blank to use the existing rules, or enter 0 to skip a turnover hold. The 30+ night setting overrides the 15+ night settings, including the Friday and Saturday counts. Click Update calendar now after saving to apply the limits immediately. The calendar review can release excess dates previously held by Stay Automation. Reservation previews show the proposed dates before these limits apply.</p>
-{% for key, label, maximum in hold_fields %}
-<p><label for="{{ key }}">{{ label }}</label>
-<input id="{{ key }}" name="{{ key }}" type="number" min="0" max="{{ maximum }}" step="1" value="{{ hold_rules.get(key, '') }}" aria-describedby="{{ key }}-current">
-<small id="{{ key }}-current">Current nights: {{ effective_turnover[key] }}{% if key not in hold_rules %} · Inherited{% endif %}</small></p>
-{% endfor %}
-</fieldset>
 <fieldset>
 <legend>Calendar notes and automatic checkout check-ins and inquiry messages</legend>
 <p>Select the homes where the automation can add descriptive hold notes and send eligible checkout check-ins and messages when a new inquiry requires confirming the current guest’s plans.</p>
