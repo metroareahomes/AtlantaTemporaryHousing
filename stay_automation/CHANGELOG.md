@@ -1,3 +1,8 @@
+## 0.6.78
+
+- Group pricing, bookings and extensions, and guest messaging in the Stays menu.
+- Add links to Booking and Extension Owner Settings and Hostaway Complaint Analyzer.
+
 ## 0.6.77
 
 - Remove the Apply once button from the Monday and Thursday Special pages.

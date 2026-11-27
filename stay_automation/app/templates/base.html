@@ -32,14 +32,27 @@
             <a href="events" class="{{ 'on' if active == 'events' }}" {{ 'aria-current=page' if active == 'events' }}>Activity log</a>
           </div>
         </details>
-        <details class="menu {{ 'on' if active in ['thursday-special', 'thursday-bookings', 'extension-pricing', 'extension-preview'] }}">
+        <details class="menu {{ 'on' if active in ['monday-special', 'thursday-special', 'thursday-bookings', 'extension-pricing'] }}">
           <summary>Pricing</summary>
           <div class="menu-panel">
+            <a href="monday-special" {{ 'aria-current=page' if active == 'monday-special' }}>The Monday Special</a>
+            <a href="thursday-special" {{ 'aria-current=page' if active == 'thursday-special' }}>The Thursday Special</a>
+            <a href="thursday-bookings" {{ 'aria-current=page' if active == 'thursday-bookings' }}>Thursday Booking Times</a>
             <a href="extension-pricing" {{ 'aria-current=page' if active == 'extension-pricing' }}>Guest Extension Pricing</a>
+          </div>
+        </details>
+        <details class="menu {{ 'on' if active == 'extension-preview' }}">
+          <summary>Bookings &amp; extensions</summary>
+          <div class="menu-panel">
             <a href="extension-preview" {{ 'aria-current=page' if active == 'extension-preview' and extension_owner == 'Kurt' }}>Kurt’s Extension Preview</a>
             <a href="extension-preview?owner=Mike" {{ 'aria-current=page' if active == 'extension-preview' and extension_owner == 'Mike' }}>Mike’s Extension Preview</a>
-            <a href="thursday-special">The Thursday Special</a>
-            <a href="monday-special">The Monday Special</a>
+            <a href="https://atlanta-temporary-housing-extension-pilot.onrender.com/owner-settings" target="_blank" rel="noopener noreferrer">Booking &amp; Extension Owner Settings</a>
+          </div>
+        </details>
+        <details class="menu">
+          <summary>Guest messages</summary>
+          <div class="menu-panel">
+            <a href="https://hostaway-complaint-analyzer.onrender.com/" target="_blank" rel="noopener noreferrer">Hostaway Complaint Analyzer</a>
           </div>
         </details>
       </nav>

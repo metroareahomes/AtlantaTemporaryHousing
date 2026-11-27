@@ -54,11 +54,15 @@ def test_navigation_separates_daily_work_from_setup_and_pricing(syncer, active, 
     assert [(link["href"], link["text"]) for link in nav.links if link["nested"]] == [
         *((f"setup?section={key}", title) for key, title in SETUP_SECTIONS),
         ("events", "Activity log"),
+        ("monday-special", "The Monday Special"),
+        ("thursday-special", "The Thursday Special"),
+        ("thursday-bookings", "Thursday Booking Times"),
         ("extension-pricing", "Guest Extension Pricing"),
         ("extension-preview", "Kurt’s Extension Preview"),
         ("extension-preview?owner=Mike", "Mike’s Extension Preview"),
-        ("thursday-special", "The Thursday Special"),
-        ("monday-special", "The Monday Special"),
+        ("https://atlanta-temporary-housing-extension-pilot.onrender.com/owner-settings",
+         "Booking & Extension Owner Settings"),
+        ("https://hostaway-complaint-analyzer.onrender.com/", "Hostaway Complaint Analyzer"),
     ]
     assert [link["href"] for link in nav.links if link["nested"] and link["current"] == "page"] == (
         [href] if active in ("/setup?section=locks", "/events") else []
