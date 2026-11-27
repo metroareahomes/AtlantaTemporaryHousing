@@ -295,15 +295,15 @@ def test_thursday_special_combines_checked_homes_and_rate_matches(syncer, blocke
     assert '<h3>At threshold</h3>' not in response.text
     assert '<h3>Other owner</h3>' not in response.text
     if blocked_listing:
-        assert 'Skipped: all three nights must be confirmed vacant.' in response.text
+        assert 'Skipped. All three nights must have a valid rate and be confirmed vacant.' in response.text
         start = response.text.index('<h3>Wright</h3>' if blocked_listing == 301 else '<h3>Matching</h3>')
         end = response.text.index('</table>', start)
         assert '<td>3</td>' not in response.text[start:end]
         assert '<td>240.00</td>' not in response.text[start:end]
         return
-    assert '<td>180</td><td>144.00</td><td>1</td><td>3</td>' in response.text
-    assert '<td>300</td><td>240.00</td><td>1</td><td>—</td>' in response.text
-    assert '<td>350</td><td>280.00</td><td>1</td><td>—</td>' in response.text
+    assert '<td>180</td><td>14.00</td><td>1</td><td>3</td>' in response.text
+    assert '<td>300</td><td>—</td><td>1</td><td>—</td>' in response.text
+    assert '<td>350</td><td>—</td><td>1</td><td>—</td>' in response.text
     assert 'Arrival status unconfirmed' in response.text
     assert 'Hostaway reports arrivals closed' in response.text
     assert 'Inventory counts reported' in response.text
@@ -324,9 +324,9 @@ def test_live_wright_trial_checks_all_nights_and_applies_only_once(syncer, block
     async def calendar(lid, start, end):
         assert lid == 301
         return [
-            day(start, price=200 if calls else 250, minimumStay=3 if calls else 1),
-            day('2030-06-14', price=240 if calls else 300, minimumStay=2),
-            day(end, price=280 if calls else 350, countReservedUnits=int(blocked)),
+            day(start, price=70 if calls else 250, minimumStay=3 if calls else 1),
+            day('2030-06-14', price=300, minimumStay=2),
+            day(end, price=350, countReservedUnits=int(blocked)),
         ]
 
     async def write(lid, intervals):
@@ -342,14 +342,23 @@ def test_live_wright_trial_checks_all_nights_and_applies_only_once(syncer, block
             run(service.apply_wright_special(str(pid)))
         assert calls == []
         return
-    assert '$200.00' in run(service.apply_wright_special(str(pid)))
+    assert '$70.00' in run(service.apply_wright_special(str(pid)))
     assert calls == [[
-        {'startDate': '2030-06-13', 'endDate': '2030-06-13', 'price': 200, 'minimumStay': 3},
-        {'startDate': '2030-06-14', 'endDate': '2030-06-14', 'price': 240},
-        {'startDate': '2030-06-15', 'endDate': '2030-06-15', 'price': 280},
+        {'startDate': '2030-06-13', 'endDate': '2030-06-13', 'price': 70, 'minimumStay': 3},
     ]]
     with pytest.raises(ValueError, match='already attempted'):
         run(PricingSimulator(syncer).apply_wright_special(str(pid)))
+
+
+def test_special_skips_when_full_savings_exceed_first_night_rate():
+    thursday = FRIDAY - timedelta(days=1)
+    rows, error = PricingSimulator.special_rates([
+        day('2030-06-13', price=100),
+        day('2030-06-14', price=250),
+        day('2030-06-15', price=250),
+    ], LISTING, thursday, '20')
+    assert 'cannot fit on the first night' in error
+    assert all(not row['proposed'] and 'proposed_minimum_stay' not in row for row in rows)
 
 
 def test_bulk_special_rechecks_threshold_and_preserves_manual_selection(syncer):
@@ -373,8 +382,9 @@ def test_bulk_special_rechecks_threshold_and_preserves_manual_selection(syncer):
         reads[lid] += 1
         current = 180 if lid == 301 or reads[lid] > 2 else 250
         if lid in writes:
-            return [day(item['startDate'], price=item['price'],
-                        minimumStay=item.get('minimumStay', 1)) for item in writes[lid]]
+            item, = writes[lid]
+            return [day(start, price=item['price'], minimumStay=item['minimumStay']),
+                    day('2030-06-14'), day(end)]
         return [day(start, price=current), day('2030-06-14'), day(end)]
 
     async def write(lid, intervals):
@@ -392,7 +402,7 @@ def test_bulk_special_rechecks_threshold_and_preserves_manual_selection(syncer):
     assert writes == {}
     reports = run(service.apply_selected_special(form))
     assert set(writes) == {301}
-    assert writes[301][0]['price'] == 153
+    assert writes[301][0]['price'] == 78
     assert any('Verified in Hostaway' in report for report in reports)
     assert any('no longer meets the threshold' in report for report in reports)
 
@@ -451,3 +461,66 @@ def test_owner_pages_scope_selection_and_save_distinct_discounts(syncer):
         assert service.thursday_schedule(owner)['owner'] == owner
     assert service.thursday_schedule('Mike')['discount'] == '12'
     assert service.thursday_schedule('Kurt')['discount'] == '20'
+
+
+def test_monday_special_discounts_first_of_three_vacant_nights_and_is_independent(syncer):
+    from starlette.datastructures import FormData
+
+    syncer.db.execute(
+        "INSERT INTO properties(hostaway_listing_id,name,owner_scope) VALUES(301,'Test Home','Kurt')"
+    )
+    property_id = str(syncer.db.one('SELECT id FROM properties WHERE hostaway_listing_id=301')['id'])
+    monday = FRIDAY - timedelta(days=4)
+    syncer.now = lambda: monday - timedelta(days=1, hours=2)
+    service = PricingSimulator(syncer)
+    writes = []
+
+    async def listing(listing_id):
+        return dict(LISTING, id=listing_id)
+
+    live = {f'2030-06-{d}': day(f'2030-06-{d}', price=200, minimumStay=2) for d in (10, 11, 12)}
+
+    async def calendar(listing_id, start, end):
+        assert (start, end) == ('2030-06-10', '2030-06-12')
+        return list(live.values())
+
+    async def write(listing_id, intervals):
+        assert listing_id == 301
+        writes.append(intervals)
+        for item in intervals:
+            live[item['startDate']].update({key: value for key, value in item.items()
+                                           if key in ('price', 'minimumStay')})
+
+    syncer.hostaway.pricing_listing = listing
+    syncer.hostaway.pricing_calendar = calendar
+    syncer.hostaway.apply_calendar_intervals = write
+    form = FormData({
+        'special_owner': 'Kurt', 'special_property': property_id, 'special_discount': '20',
+        'special_time': '14:00', 'special_enabled': 'on',
+    })
+    preview = run(service.thursday_special(form, weekday=0))
+    assert preview['monday'] == '2030-06-10'
+    assert writes == []
+    assert service.thursday_schedule('Kurt', weekday=0) == {}
+    service.save_thursday_schedule(form, weekday=0)
+    assert service.thursday_schedule('Kurt') == {}
+    run(service.tick_thursday_schedule(weekday=0))
+    run(PricingSimulator(syncer).tick_thursday_schedule(weekday=0))
+    assert len(writes) == 1
+    assert [item.get('minimumStay') for item in writes[0]] == [3]
+    assert [item['startDate'] for item in writes[0]] == ['2030-06-10']
+    # PriceLabs reset Monday’s rate. Tuesday and Wednesday were left alone.
+    live['2030-06-10']['price'] = 250
+    syncer.now = lambda: monday.replace(hour=2, minute=14)
+    run(service.tick_thursday_schedule(weekday=0))
+    assert len(writes) == 1
+    syncer.now = lambda: monday.replace(hour=2, minute=15)
+    run(service.tick_thursday_schedule(weekday=0))
+    assert [item['price'] for item in writes[1]] == [120]
+    live['2030-06-12']['price'] = 275
+    syncer.now = lambda: monday.replace(hour=17)
+    run(service.tick_thursday_schedule(weekday=0))
+    assert [item['price'] for item in live.values()] == [250, 200, 275]
+    assert [item['minimumStay'] for item in live.values()] == [2, 2, 2]
+    run(service.tick_thursday_schedule(weekday=0))
+    assert len(writes) == 3

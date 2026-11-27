@@ -123,6 +123,7 @@ def build():
             every(LOCK_TICK_MINUTES, "lock_automation", locks.tick, db),
             every(CLIMATE_TICK_MINUTES, "thermostats", climate.tick, db),
             every(0.25, "thursday_special", pricing.tick_thursday_schedule, db),
+            every(0.25, "monday_special", lambda: pricing.tick_thursday_schedule(weekday=0), db),
             every(1, "extension_pricing", syncer.extension_pricing.tick, db),
             every(0.25, "extension_inquiries", lambda: run_inquiries(syncer), db),
             every(30, "extension_live", lambda: run_extension_live(syncer), db),

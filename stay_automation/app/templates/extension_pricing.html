@@ -8,6 +8,10 @@
 </nav>
 <section class="panel">
 <h2>{{ owner }}’s pricing rules</h2>
+<p>Guest Extension Pricing was added to Stay Automation on November 21, 2026 (version 0.6.41).</p>
+{% if config.enabled %}
+<p>{% if enabled_since %}Enabled for {{ owner }} on {{ enabled_since }} Eastern.{% else %}Enabled for {{ owner }}. The original activation time was not recorded.{% endif %}</p>
+{% else %}<p>Currently disabled for {{ owner }}.</p>{% endif %}
 <p>Adjust consecutive blocked nights starting on the guest’s booked checkout date. Open nights keep their current price until PriceLabs updates them.</p>
 <form method="post" action="extension-pricing-save" class="stack">
 <input type="hidden" name="owner" value="{{ owner }}">

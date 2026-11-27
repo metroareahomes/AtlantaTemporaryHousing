@@ -1,3 +1,8 @@
+## 0.6.76
+
+- Add the Monday Special, with an automatic refresh after PriceLabs updates.
+- Calculate both specials on the three-night total and apply the savings to the arrival night with a three-night minimum.
+
 # Changelog
 
 ## 0.6.63 — Descriptive calendar hold notes
