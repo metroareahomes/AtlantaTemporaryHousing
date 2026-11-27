@@ -9,12 +9,24 @@ from zoneinfo import ZoneInfo
 from starlette.datastructures import FormData
 
 TZ = ZoneInfo('America/New_York')
+MONDAY_START = '12:00'
+MONDAY_REFRESH = '02:15'
+MONDAY_END = '17:00'
 DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
 DEFAULTS = {'pricing_discount': '10', 'pricing_threshold': '200', 'pricing_window': '24',
             'pricing_property': '0', 'pricing_start_day': '4', 'pricing_start_time': '14:00',
             'pricing_check1_day': '5', 'pricing_check1_time': '06:00',
             'pricing_check2_day': '6', 'pricing_check2_time': '06:00',
             'pricing_end_day': '0', 'pricing_end_time': '00:01'}
+
+
+def monday_phase(local):
+    clock = local.strftime('%H:%M')
+    if local.weekday() == 6 and clock >= MONDAY_START:
+        return 'initial'
+    if local.weekday() == 0 and clock < MONDAY_END:
+        return 'refresh' if clock >= MONDAY_REFRESH else 'initial'
+    return None
 
 
 def money(value):
@@ -286,7 +298,7 @@ class PricingSimulator:
                 raise ValueError('A selected property is outside the chosen owner or no longer active')
             results = []
             errors = []
-            rule = {'discount': str(discount), 'minimums': [3, None, None], 'discount_all_dates': True}
+            rule = {'discount': str(discount), 'minimums': [3, None, None] if weekday == 3 else [3, 3, 3], 'discount_all_dates': True}
             at = datetime.combine(start_date, datetime.min.time(), TZ)
             for prop in properties:
                 checked = prop['id'] in selected
@@ -302,6 +314,14 @@ class PricingSimulator:
                     )
                     if not checked:
                         first_night_rate = next(day['price'] for day in calendar if day['date'] == start_date.isoformat())
+                        if weekday == 0:
+                            previous = json.loads(self.db.get_setting(
+                                f'pricing_monday_special_{listing_id}_{start_date.isoformat()}', '{}'
+                            ))
+                            if previous.get('status') == 'verified':
+                                last_price = previous['requested'][0]['price']
+                                if money(first_night_rate) == money(last_price):
+                                    first_night_rate = previous['before'][0]['current']
                         if money(first_night_rate) <= floor:
                             continue
                     listing = await self.s.hostaway.pricing_listing(listing_id)
@@ -324,7 +344,7 @@ class PricingSimulator:
 
     def save_thursday_schedule(self, form, *, weekday=3):
         special_day = "Thursday" if weekday == 3 else "Monday"
-        clock = form.get('special_time', '')
+        clock = form.get('special_time', '') if weekday == 3 else MONDAY_START
         if not re.fullmatch(r'(?:[01][0-9]|2[0-3]):[0-5][0-9]', clock):
             raise ValueError(f'Enter a {special_day} activation time')
         enabled = form.get('special_enabled') == 'on'
@@ -359,7 +379,10 @@ class PricingSimulator:
 
     async def tick_thursday_schedule(self, *, weekday=3):
         local = self.s.now().astimezone(TZ)
-        if local.weekday() != weekday:
+        if weekday == 0 and local.weekday() == 0 and local.strftime('%H:%M') >= MONDAY_END:
+            await self.restore_monday_special(local.date().isoformat())
+            return
+        if (weekday == 3 and local.weekday() != 3) or (weekday == 0 and not monday_phase(local)):
             return
         for owner in ('Mike', 'Kurt'):
             await self.run_due_thursday_schedule(local, owner, weekday=weekday)
@@ -367,9 +390,15 @@ class PricingSimulator:
     async def run_due_thursday_schedule(self, local, owner, *, weekday=3):
         special_day = "thursday" if weekday == 3 else "monday"
         config = self.thursday_schedule(owner, weekday=weekday)
-        if not config.get('enabled') or config['clock'] != local.strftime('%H:%M'):
+        phase = monday_phase(local) if weekday == 0 else None
+        if not config.get('enabled') or (weekday == 3 and config['clock'] != local.strftime('%H:%M')):
             return
-        run_date = local.date().isoformat()
+        if weekday == 0 and not phase:
+            return
+        date = local.date()
+        if weekday == 0 and local.weekday() == 6:
+            date += timedelta(days=1)
+        run_date = date.isoformat() if weekday == 3 else f'{date.isoformat()}:{phase}'
         if self._lock.locked() or self.db.get_setting(f'{special_day}_special_last_run:{owner}') == run_date:
             return
         self.db.set_setting(f'{special_day}_special_last_run:{owner}', run_date)
@@ -388,8 +417,11 @@ class PricingSimulator:
 
     async def apply_selected_special(self, form, *, weekday=3):
         special_day = "Thursday" if weekday == 3 else "Monday"
-        if self.s.now().astimezone(TZ).weekday() != weekday:
+        local = self.s.now().astimezone(TZ)
+        if weekday == 3 and local.weekday() != 3:
             raise ValueError(f'The {special_day} Special can be applied on {special_day} Eastern time')
+        if weekday == 0 and not monday_phase(local):
+            raise ValueError('The Monday Special runs from Sunday noon to Monday 5 PM Eastern')
         result = await self.thursday_special(form, applying=True, weekday=weekday)
         checked = set(form.getlist('special_property'))
         reports = [f"{name}: Calendar could not be verified" for name in result['errors']]
@@ -403,7 +435,8 @@ class PricingSimulator:
                     floor=None if prop['id'] in checked else money(form['special_floor']),
                     owner=form.get('special_owner', ''), expected_date=result[special_day.lower()], weekday=weekday,
                 )
-                reports.append(f"{prop['name']}: Verified in Hostaway — {rates}; {special_day} minimum 3 nights")
+                minimum = "Thursday" if weekday == 3 else "each night"
+                reports.append(f"{prop['name']}: Verified in Hostaway — {rates}; {minimum} minimum 3 nights")
             except ValueError as exc:
                 reports.append(f"{prop['name']}: {exc}")
         return reports or ['No homes qualified']
@@ -412,12 +445,14 @@ class PricingSimulator:
         if self._lock.locked():
             raise ValueError('A pricing action is already running')
         async with self._lock:
-            today = self.s.now().astimezone(TZ).date()
+            local = self.s.now().astimezone(TZ)
+            today = local.date()
+            phase = monday_phase(local) if weekday == 0 else None
             special_day = 'Thursday' if weekday == 3 else 'Monday'
-            if today.weekday() != weekday or (not bulk and weekday != 3):
-                if not bulk or weekday == 3:
-                    raise ValueError('The live Wright trial can be run on Thursday Eastern time')
-                raise ValueError('The Monday Special can be applied on Monday Eastern time')
+            if weekday == 3 and today.weekday() != 3:
+                raise ValueError('The live Wright trial can be run on Thursday Eastern time')
+            if weekday == 0 and (not bulk or not phase):
+                raise ValueError('The Monday Special runs from Sunday noon to Monday 5 PM Eastern')
             matches = [
                 prop for prop in self.db.query(
                     "SELECT id,name,address,hostaway_listing_id FROM properties "
@@ -434,21 +469,39 @@ class PricingSimulator:
             if len(matches) != 1 or str(matches[0]['id']) != property_id:
                 raise ValueError('The selected listing could not be verified')
             listing_id = matches[0]['hostaway_listing_id']
-            start = today.isoformat()
+            target = today + timedelta(days=1) if weekday == 0 and today.weekday() == 6 else today
+            start = target.isoformat()
             if expected_date is not None and start != expected_date:
                 raise ValueError(f'The target {special_day} has changed')
-            dates = [(today + timedelta(days=offset)).isoformat() for offset in range(3)]
+            dates = [(target + timedelta(days=offset)).isoformat() for offset in range(3)]
             end = dates[-1]
             key_prefix = 'pricing_wright_trial' if weekday == 3 else 'pricing_monday_special'
             key = f'{key_prefix}_{listing_id}_{start}'
-            if self.db.get_setting(key):
-                raise ValueError('A write was already attempted for these dates. Check the Hostaway calendar.')
+            previous = json.loads(self.db.get_setting(key, '{}'))
+            if previous and (weekday == 3 or previous.get('phase') == phase or previous['status'] != 'verified'):
+                raise ValueError('A write was already attempted for this run. Check the Hostaway calendar.')
             try:
                 listing = await self.s.hostaway.pricing_listing(listing_id)
                 calendar = await self.s.hostaway.pricing_calendar(listing_id, start, end)
-                rule = {'discount': discount, 'minimums': [3, None, None], 'discount_all_dates': True}
-                at = datetime.combine(today, datetime.min.time(), TZ)
-                rows = plan(calendar, listing, at, DEFAULTS, rule)
+                rule = {'discount': discount, 'minimums': [3, None, None] if weekday == 3 else [3, 3, 3], 'discount_all_dates': True}
+                baseline = calendar
+                if previous:
+                    before = {row['date']: row for row in previous['before']}
+                    applied = {item['startDate']: item for item in previous['requested']}
+                    baseline = []
+                    for day in calendar:
+                        date = day['date']
+                        item = applied.get(date)
+                        original = before.get(date)
+                        day = dict(day)
+                        if item and original:
+                            if money(day['price']) == money(item['price']):
+                                day['price'] = original['current']
+                            if str(day.get('minimumStay')) == str(item['minimumStay']):
+                                day['minimumStay'] = original['minimum_stay']
+                        baseline.append(day)
+                at = datetime.combine(target, datetime.min.time(), TZ)
+                rows = plan(baseline, listing, at, DEFAULTS, rule)
             except Exception:
                 raise ValueError('Could not verify the calendar. No updates were sent.') from None
             if floor is not None and not any(
@@ -459,17 +512,20 @@ class PricingSimulator:
                 vacancy_issue(day) for day in calendar
             ) or any(not row['proposed'] for row in rows):
                 raise ValueError('All three nights must have a valid rate and be confirmed vacant')
-            if self.s.now().astimezone(TZ).date() != today:
+            current = self.s.now().astimezone(TZ)
+            if current.date() != today or (weekday == 0 and monday_phase(current) != phase):
                 raise ValueError('The Eastern calendar date changed. No updates were sent.')
             intervals = []
             for row in sorted(rows, key=lambda row: row['date']):
                 date = row['date']
                 item = {'startDate': date, 'endDate': date, 'price': float(row['proposed'])}
-                if date == start:
+                if date == start or weekday == 0:
                     item['minimumStay'] = 3
                 intervals.append(item)
             # Persist the intent before sending. A timeout can mean the write succeeded.
             record = {'status': 'attempted', 'before': rows, 'requested': intervals}
+            if weekday == 0:
+                record.update(phase=phase, listing_id=listing_id, start=start, end=end)
             self.db.set_setting(key, json.dumps(record))
             try:
                 await self.s.hostaway.apply_calendar_intervals(listing_id, intervals)
@@ -486,3 +542,51 @@ class PricingSimulator:
             record['status'] = 'verified'
             self.db.set_setting(key, json.dumps(record))
             return ', '.join(f"{item['startDate']} at ${item['price']:.2f}" for item in intervals)
+
+
+    async def restore_monday_special(self, start):
+        if self._lock.locked():
+            return
+        async with self._lock:
+            records = self.db.query(
+                "SELECT key,value FROM settings WHERE key LIKE 'pricing_monday_special_%' AND key LIKE ?",
+                (f'%_{start}',),
+            )
+            for entry in records:
+                record = json.loads(entry['value'])
+                if record.get('status') not in ('verified', 'attempted'):
+                    continue
+                try:
+                    listing_id = record['listing_id']
+                    calendar = await self.s.hostaway.pricing_calendar(listing_id, start, record['end'])
+                    current = {row['date']: row for row in calendar}
+                    original = {row['date']: row for row in record['before']}
+                    updates = []
+                    for item in record['requested']:
+                        date = item['startDate']
+                        day = current[date]
+                        before = original[date]
+                        changes = {}
+                        if money(day['price']) == money(item['price']):
+                            changes['price'] = float(money(before['current']))
+                        minimum = before['minimum_stay']
+                        if str(day.get('minimumStay')) == '3' and str(minimum).isdigit() and int(minimum) != 3:
+                            changes['minimumStay'] = int(minimum)
+                        if changes:
+                            updates.append({'startDate': date, 'endDate': date, **changes})
+                    if updates:
+                        await self.s.hostaway.apply_calendar_intervals(listing_id, updates)
+                        after = {day['date']: day for day in await self.s.hostaway.pricing_calendar(
+                            listing_id, start, record['end']
+                        )}
+                        for item in updates:
+                            day = after[item['startDate']]
+                            if ('price' in item and money(day['price']) != money(item['price'])) or (
+                                'minimumStay' in item and str(day['minimumStay']) != str(item['minimumStay'])
+                            ):
+                                raise ValueError('Restore not verified')
+                    record['status'] = 'closed'
+                    self.db.set_setting(entry['key'], json.dumps(record))
+                    self.db.log('pricing.monday_special', f'Listing {listing_id}: Monday Special ended.')
+                except Exception:
+                    self.db.log('pricing.monday_special', 'Could not verify Monday Special cleanup; will retry.')

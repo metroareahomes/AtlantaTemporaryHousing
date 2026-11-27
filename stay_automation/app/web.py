@@ -1091,8 +1091,13 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, 
         if owner not in EXTENSION_OWNERS:
             raise HTTPException(404)
         rows, totals = extension_report_rows(db, owner)
+        config = extension_rules(db)[owner]
+        enabled_at = config.get("enabled_at")
+        enabled_since = (datetime.fromisoformat(enabled_at).astimezone(PRICING_TZ)
+                         .strftime("%b %d, %Y at %I:%M %p").replace(" 0", " ")
+                         if enabled_at else "")
         return page(request, "extension_pricing.html", owner=owner, owners=EXTENSION_OWNERS,
-                    config=extension_rules(db)[owner], report_rows=rows, report_totals=totals)
+                    config=config, enabled_since=enabled_since, report_rows=rows, report_totals=totals)
 
     @app.post("/extension-pricing-save")
     async def extension_pricing_save(request: Request):
@@ -1105,6 +1110,12 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, 
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
         rules = extension_rules(db)
+        previous = rules[owner]
+        if config["enabled"]:
+            if not previous["enabled"]:
+                config["enabled_at"] = syncer.now().isoformat()
+            elif previous.get("enabled_at"):
+                config["enabled_at"] = previous["enabled_at"]
         rules[owner] = config
         db.set_setting(EXTENSION_SETTINGS_KEY, json.dumps({"owners": rules}))
         return _done(f"extension-pricing?owner={owner}", "Pricing rules saved")

@@ -4,8 +4,23 @@
 <nav aria-label="{{ special_day }} Special owners"><a href="{{ special_path }}?owner=Mike">Mike’s homes</a> <a href="{{ special_path }}?owner=Kurt">Kurt’s homes</a></nav></div>
 {% if special_day == "Thursday" %}<p><a href="thursday-bookings">{{ special_day }} booking times report</a></p>{% endif %}
 <section class="panel">
-<p>Preview a discount on each calendar rate for {{ nights }}. {{ special_day }} arrivals get a three-night minimum. The following two nights keep their existing minimums.</p>
-<p>Apply runs once on {{ special_day }} for the homes you select by checkbox or rate. PriceLabs can update the calendar on its next sync.</p>
+{% if special_day == "Monday" %}
+<h2>How the Monday Special works</h2>
+<ul>
+<li>Sunday at noon Eastern, apply the discount to the upcoming Monday, Tuesday and Wednesday rates. The home must be vacant all three nights.</li>
+<li>Set a three-night minimum for arrivals on Monday, Tuesday and Wednesday.</li>
+<li>Monday at 2:15 AM Eastern, reread Hostaway rates after the 2 AM PriceLabs sync and refresh the discount. A rate still carrying the Sunday discount uses its original price as the baseline.</li>
+<li>Monday at 5 PM Eastern, stop the special and restore the prices and minimums it set when those values still match the automation’s last write. Later changes from PriceLabs or staff are preserved.</li>
+</ul>
+{% else %}
+<h2>How the Thursday Special works</h2>
+<ul>
+<li>On Thursday at the selected Eastern time, discount the current Hostaway rates for Thursday, Friday and Saturday. The home must be vacant all three nights.</li>
+<li>Set a three-night minimum for Thursday arrivals. Friday and Saturday retain their existing minimums.</li>
+<li>The scheduled run applies once per owner. PriceLabs can update the rates on its next sync.</li>
+</ul>
+{% endif %}
+<p>Preview reviews the rates and minimums before applying. Select homes by checkbox, a first-night rate threshold, or both. Checked homes bypass the threshold.</p>
 {% if applied %}<p role="status">Verified in Hostaway: {{ applied }}. {{ special_day }} minimum: 3 nights.</p>{% endif %}
 {% if bulk_report %}<ul>{% for report in bulk_report %}<li>{{ report }}</li>{% endfor %}</ul>{% endif %}
 {% if error %}<p role="alert">{{ error }}</p>{% endif %}
@@ -31,9 +46,14 @@
 <button name="special_action" value="apply_selected">Apply once to qualifying homes in Hostaway</button>
 {% if special_owner %}<fieldset>
 <legend>{{ special_day }} schedule</legend>
-<label><input type="checkbox" name="special_enabled" {{ 'checked' if schedule.enabled }}> Run automatically each {{ special_day }}</label>
+<label><input type="checkbox" name="special_enabled" {{ 'checked' if schedule.enabled }}> Run automatically each week</label>
+{% if special_day == "Thursday" %}
 <label>Activation time (Eastern) <input type="time" name="special_time" value="{{ schedule.clock|default('14:00') }}"></label>
-<p>Saving uses the discount, owner, checked homes and price threshold above. If the app misses the selected minute, that week’s run is skipped.</p>
+<p>If the app misses the selected minute, that week’s run is skipped.</p>
+{% else %}
+<p>Runs Sunday at noon and refreshes Monday at 2:15 AM. The special ends Monday at 5 PM. All times are Eastern.</p>
+{% endif %}
+<p>Saving uses the discount, owner, checked homes and price threshold above.</p>
 <button name="special_action" value="save_schedule">Save {{ special_day }} schedule</button>
 </fieldset>{% endif %}
 </form>

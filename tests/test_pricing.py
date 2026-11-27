@@ -460,23 +460,26 @@ def test_monday_special_writes_three_vacant_nights_and_is_independent(syncer):
         "INSERT INTO properties(hostaway_listing_id,name,owner_scope) VALUES(301,'Test Home','Kurt')"
     )
     property_id = str(syncer.db.one('SELECT id FROM properties WHERE hostaway_listing_id=301')['id'])
-    syncer.now = lambda: FRIDAY - timedelta(days=4)
+    monday = FRIDAY - timedelta(days=4)
+    syncer.now = lambda: monday - timedelta(days=1, hours=2)
     service = PricingSimulator(syncer)
     writes = []
 
     async def listing(listing_id):
         return dict(LISTING, id=listing_id)
 
+    live = {f'2030-06-{d}': day(f'2030-06-{d}', price=200, minimumStay=2) for d in (10, 11, 12)}
+
     async def calendar(listing_id, start, end):
         assert (start, end) == ('2030-06-10', '2030-06-12')
-        if writes:
-            return [day(item['startDate'], price=item['price'],
-                        minimumStay=item.get('minimumStay', 1)) for item in writes[0]]
-        return [day(start), day('2030-06-11'), day(end)]
+        return list(live.values())
 
     async def write(listing_id, intervals):
         assert listing_id == 301
         writes.append(intervals)
+        for item in intervals:
+            live[item['startDate']].update({key: value for key, value in item.items()
+                                           if key in ('price', 'minimumStay')})
 
     syncer.hostaway.pricing_listing = listing
     syncer.hostaway.pricing_calendar = calendar
@@ -494,5 +497,20 @@ def test_monday_special_writes_three_vacant_nights_and_is_independent(syncer):
     run(service.tick_thursday_schedule(weekday=0))
     run(PricingSimulator(syncer).tick_thursday_schedule(weekday=0))
     assert len(writes) == 1
-    assert [item.get('minimumStay') for item in writes[0]] == [3, None, None]
+    assert [item.get('minimumStay') for item in writes[0]] == [3, 3, 3]
     assert [item['startDate'] for item in writes[0]] == ['2030-06-10', '2030-06-11', '2030-06-12']
+    # PriceLabs reset Monday only. Tuesday and Wednesday still show Sunday’s discount.
+    live['2030-06-10']['price'] = 250
+    syncer.now = lambda: monday.replace(hour=2, minute=14)
+    run(service.tick_thursday_schedule(weekday=0))
+    assert len(writes) == 1
+    syncer.now = lambda: monday.replace(hour=2, minute=15)
+    run(service.tick_thursday_schedule(weekday=0))
+    assert [item['price'] for item in writes[1]] == [200, 160, 160]
+    live['2030-06-12']['price'] = 275
+    syncer.now = lambda: monday.replace(hour=17)
+    run(service.tick_thursday_schedule(weekday=0))
+    assert [item['price'] for item in live.values()] == [250, 200, 275]
+    assert [item['minimumStay'] for item in live.values()] == [2, 2, 2]
+    run(service.tick_thursday_schedule(weekday=0))
+    assert len(writes) == 3

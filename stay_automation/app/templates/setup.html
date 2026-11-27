@@ -123,14 +123,13 @@ Changes are staggered, with at least the selected gap between thermostat command
 {% endif %}
 {% if setup_section in ("pricing", "all") %}
 <section class="panel">
-<h2>The Thursday Special</h2>
-<p>Preview discounts for Thursday, Friday and Saturday, with a three-night minimum for Thursday arrivals.</p>
-<a href="thursday-special">Open The Thursday Special</a>
-</section>
-<section class="panel">
-<h2>The Monday Special</h2>
-<p>Preview discounts for Monday, Tuesday and Wednesday, with a three-night minimum for Monday arrivals.</p>
+<h2>Weekly pricing specials</h2>
+<h3>The Monday Special</h3>
+<p>Starts Sunday at noon, refreshes Monday at 2:15 AM after PriceLabs, and ends Monday at 5 PM Eastern. Discounts Monday through Wednesday and sets a three-night minimum for arrivals on all three nights.</p>
 <a href="monday-special">Open The Monday Special</a>
+<h3>The Thursday Special</h3>
+<p>Runs once on Thursday at the selected Eastern time. Discounts Thursday through Saturday when all three nights are vacant and sets a three-night minimum for Thursday arrivals only.</p>
+<a href="thursday-special">Open The Thursday Special</a>
 </section>
 {% endif %}
 {% if setup_section in ("alerts", "all") %}
