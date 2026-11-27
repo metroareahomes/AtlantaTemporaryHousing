@@ -58,6 +58,7 @@ def test_navigation_separates_daily_work_from_setup_and_pricing(syncer, active, 
         ("extension-preview", "Kurt’s Extension Preview"),
         ("extension-preview?owner=Mike", "Mike’s Extension Preview"),
         ("thursday-special", "The Thursday Special"),
+        ("monday-special", "The Monday Special"),
     ]
     assert [link["href"] for link in nav.links if link["nested"] and link["current"] == "page"] == (
         [href] if active in ("/setup?section=locks", "/events") else []

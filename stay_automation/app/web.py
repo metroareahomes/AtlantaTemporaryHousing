@@ -1213,7 +1213,13 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, 
 
     @app.get("/thursday-special", response_class=HTMLResponse)
     @app.post("/thursday-special", response_class=HTMLResponse)
-    async def thursday_special(request: Request):
+    @app.get("/monday-special", response_class=HTMLResponse)
+    @app.post("/monday-special", response_class=HTMLResponse)
+    async def weekday_special(request: Request):
+        monday = request.url.path.endswith('/monday-special')
+        weekday = 0 if monday else 3
+        special_day = 'Monday' if monday else 'Thursday'
+        special_path = special_day.lower() + '-special'
         form = await request.form()
         owner = request.query_params.get('owner', '')
         if owner and owner not in OWNERS:
@@ -1226,21 +1232,21 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, 
             try:
                 if form.get('special_action') == 'save_schedule':
                     if not owner:
-                        raise ValueError('Open an owner page to save a Thursday schedule')
-                    pricing.save_thursday_schedule(form)
-                    return _done(f'thursday-special?owner={owner}', 'Thursday schedule saved')
-                if form.get('special_action') == 'apply_wright' and owner != 'Mike':
+                        raise ValueError(f'Open an owner page to save a {special_day} schedule')
+                    pricing.save_thursday_schedule(form, weekday=weekday)
+                    return _done(f'{special_path}?owner={owner}', f'{special_day} schedule saved')
+                if form.get('special_action') == 'apply_wright' and not monday and owner != 'Mike':
                     choices = form.getlist('special_property')
                     if len(choices) != 1 or form.get('special_floor', '').strip() or form.get('special_discount') != '20':
                         raise ValueError('Check Wright only, enter 20% and leave the threshold blank')
                     applied = await pricing.apply_wright_special(choices[0])
                 elif form.get('special_action') == 'apply_selected':
-                    bulk_report = await pricing.apply_selected_special(form)
+                    bulk_report = await pricing.apply_selected_special(form, weekday=weekday)
                 else:
-                    result = await pricing.thursday_special(form)
+                    result = await pricing.thursday_special(form, weekday=weekday)
             except ValueError as exc:
                 error = str(exc)
-        schedule = pricing.thursday_schedule(owner)
+        schedule = pricing.thursday_schedule(owner, weekday=weekday)
         if request.method == 'GET' and schedule:
             form = FormData([
                 ('special_owner', schedule['owner']), ('special_discount', schedule['discount']),
@@ -1253,7 +1259,9 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, 
             (owner, owner),
         )
         return page(request, 'thursday_special.html', properties=properties, owners=OWNERS,
-                    special=form, result=result, error=error, applied=applied, bulk_report=bulk_report, schedule=schedule, special_owner=owner)
+                    special=form, result=result, error=error, applied=applied, bulk_report=bulk_report, schedule=schedule, special_owner=owner,
+                    special_day=special_day, special_path=special_path,
+                    nights="Monday, Tuesday and Wednesday" if monday else "Thursday, Friday and Saturday")
 
     @app.post("/pricing-settings-save")
     async def pricing_settings_save(request: Request):

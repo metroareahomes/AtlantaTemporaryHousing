@@ -246,8 +246,9 @@ class PricingSimulator:
             self.db.log('pricing.simulated', f'Pricing simulation saved: {len(rows)} dates reviewed; no prices changed.', property_id=prop['id'])
             return rid
 
-    async def thursday_special(self, form, *, applying=False):
-        """Preview the current or coming Thursday without changing the calendar."""
+    async def thursday_special(self, form, *, applying=False, weekday=3):
+        """Preview the current or coming special without changing the calendar."""
+        special_day = "Thursday" if weekday == 3 else "Monday"
         owner = form.get('special_owner', '')
         if owner not in ('', 'Kurt', 'Mike'):
             raise ValueError('Choose a valid owner')
@@ -264,7 +265,7 @@ class PricingSimulator:
         except (ValueError, InvalidOperation):
             raise ValueError('Enter a discount above 0 and up to 90%, and a valid optional price threshold') from None
         if not selected and floor is None:
-            raise ValueError('Check at least one home or enter a Thursday price threshold')
+            raise ValueError(f'Check at least one home or enter a {special_day} price threshold')
         if self._lock.locked():
             raise ValueError('A pricing preview is already running')
         async with self._lock:
@@ -274,8 +275,8 @@ class PricingSimulator:
                     raise ValueError('Wait 30 seconds before another pricing read')
                 self._last_attempt = now
             today = now.astimezone(TZ).date()
-            thursday = today + timedelta(days=(3 - today.weekday()) % 7)
-            saturday = thursday + timedelta(days=2)
+            start_date = today + timedelta(days=(weekday - today.weekday()) % 7)
+            end_date = start_date + timedelta(days=2)
             properties = self.db.query(
                 'SELECT id,name,address,hostaway_listing_id FROM properties WHERE active=1 '
                 "AND hostaway_listing_id IS NOT NULL AND (? = '' OR owner_scope = ?) ORDER BY name, id",
@@ -286,7 +287,7 @@ class PricingSimulator:
             results = []
             errors = []
             rule = {'discount': str(discount), 'minimums': [3, None, None], 'discount_all_dates': True}
-            at = datetime.combine(thursday, datetime.min.time(), TZ)
+            at = datetime.combine(start_date, datetime.min.time(), TZ)
             for prop in properties:
                 checked = prop['id'] in selected
                 if not checked and floor is None:
@@ -297,33 +298,35 @@ class PricingSimulator:
                     name += f" ({prop['address']})"
                 try:
                     calendar = await self.s.hostaway.pricing_calendar(
-                        listing_id, thursday.isoformat(), saturday.isoformat()
+                        listing_id, start_date.isoformat(), end_date.isoformat()
                     )
                     if not checked:
-                        thursday_rate = next(day['price'] for day in calendar if day['date'] == thursday.isoformat())
-                        if money(thursday_rate) <= floor:
+                        first_night_rate = next(day['price'] for day in calendar if day['date'] == start_date.isoformat())
+                        if money(first_night_rate) <= floor:
                             continue
                     listing = await self.s.hostaway.pricing_listing(listing_id)
                     rows = plan(calendar, listing, at, DEFAULTS, rule)
-                    expected_dates = {(thursday + timedelta(days=offset)).isoformat() for offset in range(3)}
+                    expected_dates = {(start_date + timedelta(days=offset)).isoformat() for offset in range(3)}
                     if {row['date'] for row in rows} != expected_dates or any(vacancy_issue(day) for day in calendar):
                         for row in rows:
                             row['proposed'] = ''
                             row.pop('proposed_minimum_stay', None)
                             if row['reason'].startswith('One-time preview'):
-                                row['reason'] = 'Skipped because the full weekend is not vacant'
+                                row['reason'] = ('Skipped because the full weekend is not vacant' if weekday == 3
+                                                 else 'Skipped because all three nights are not vacant')
                         results.append({'name': name, 'rows': rows, 'ineligible': True})
                         continue
                 except Exception:
                     errors.append(name)
                     continue
                 results.append({'id': str(prop['id']), 'name': name, 'rows': rows})
-            return {'thursday': thursday.isoformat(), 'properties': results, 'errors': errors}
+            return {special_day.lower(): start_date.isoformat(), 'properties': results, 'errors': errors}
 
-    def save_thursday_schedule(self, form):
+    def save_thursday_schedule(self, form, *, weekday=3):
+        special_day = "Thursday" if weekday == 3 else "Monday"
         clock = form.get('special_time', '')
         if not re.fullmatch(r'(?:[01][0-9]|2[0-3]):[0-5][0-9]', clock):
-            raise ValueError('Enter a Thursday activation time')
+            raise ValueError(f'Enter a {special_day} activation time')
         enabled = form.get('special_enabled') == 'on'
         owner = form.get('special_owner', '')
         selected = form.getlist('special_property')
@@ -336,54 +339,58 @@ class PricingSimulator:
             if floor:
                 money(floor)
         except (ValueError, InvalidOperation):
-            raise ValueError('Enter a valid discount and optional Thursday rate threshold') from None
+            raise ValueError(f'Enter a valid discount and optional {special_day} rate threshold') from None
         if owner not in ('', 'Kurt', 'Mike') or any(
             not re.fullmatch(r'[1-9][0-9]{0,12}', item) for item in selected
         ):
             raise ValueError('Choose a valid owner and properties')
         if enabled and not (selected or floor):
-            raise ValueError('Check a home or enter a Thursday rate threshold before enabling')
+            raise ValueError(f'Check a home or enter a {special_day} rate threshold before enabling')
         config = {
             'clock': clock, 'enabled': enabled, 'owner': owner,
             'selected': selected, 'discount': discount, 'floor': floor,
         }
-        self.db.set_setting(f'thursday_special_schedule:{owner}', json.dumps(config))
+        self.db.set_setting(f'{special_day.lower()}_special_schedule:{owner}', json.dumps(config))
         return config
 
-    def thursday_schedule(self, owner):
-        return json.loads(self.db.get_setting(f'thursday_special_schedule:{owner}', '{}'))
+    def thursday_schedule(self, owner, *, weekday=3):
+        special_day = "thursday" if weekday == 3 else "monday"
+        return json.loads(self.db.get_setting(f'{special_day}_special_schedule:{owner}', '{}'))
 
-    async def tick_thursday_schedule(self):
+    async def tick_thursday_schedule(self, *, weekday=3):
         local = self.s.now().astimezone(TZ)
-        if local.weekday() != 3:
+        if local.weekday() != weekday:
             return
         for owner in ('Mike', 'Kurt'):
-            await self.run_due_thursday_schedule(local, owner)
+            await self.run_due_thursday_schedule(local, owner, weekday=weekday)
 
-    async def run_due_thursday_schedule(self, local, owner):
-        config = self.thursday_schedule(owner)
+    async def run_due_thursday_schedule(self, local, owner, *, weekday=3):
+        special_day = "thursday" if weekday == 3 else "monday"
+        config = self.thursday_schedule(owner, weekday=weekday)
         if not config.get('enabled') or config['clock'] != local.strftime('%H:%M'):
             return
         run_date = local.date().isoformat()
-        if self._lock.locked() or self.db.get_setting(f'thursday_special_last_run:{owner}') == run_date:
+        if self._lock.locked() or self.db.get_setting(f'{special_day}_special_last_run:{owner}') == run_date:
             return
-        self.db.set_setting(f'thursday_special_last_run:{owner}', run_date)
+        self.db.set_setting(f'{special_day}_special_last_run:{owner}', run_date)
         form = FormData([
             ('special_owner', config['owner']), ('special_discount', config['discount']),
             ('special_floor', config['floor']),
             *(('special_property', item) for item in config['selected']),
         ])
         try:
-            reports = await self.apply_selected_special(form)
+            reports = await (self.apply_selected_special(form) if weekday == 3
+                             else self.apply_selected_special(form, weekday=weekday))
         except ValueError as exc:
             reports = [str(exc)]
         for report in reports:
-            self.db.log('pricing.thursday_special', report)
+            self.db.log(f'pricing.{special_day}_special', report)
 
-    async def apply_selected_special(self, form):
-        if self.s.now().astimezone(TZ).weekday() != 3:
-            raise ValueError('The Thursday Special can be applied on Thursday Eastern time')
-        result = await self.thursday_special(form, applying=True)
+    async def apply_selected_special(self, form, *, weekday=3):
+        special_day = "Thursday" if weekday == 3 else "Monday"
+        if self.s.now().astimezone(TZ).weekday() != weekday:
+            raise ValueError(f'The {special_day} Special can be applied on {special_day} Eastern time')
+        result = await self.thursday_special(form, applying=True, weekday=weekday)
         checked = set(form.getlist('special_property'))
         reports = [f"{name}: Calendar could not be verified" for name in result['errors']]
         for prop in result['properties']:
@@ -394,20 +401,23 @@ class PricingSimulator:
                 rates = await self.apply_wright_special(
                     prop['id'], bulk=True, discount=form['special_discount'].strip(),
                     floor=None if prop['id'] in checked else money(form['special_floor']),
-                    owner=form.get('special_owner', ''), expected_date=result['thursday'],
+                    owner=form.get('special_owner', ''), expected_date=result[special_day.lower()], weekday=weekday,
                 )
-                reports.append(f"{prop['name']}: Verified in Hostaway — {rates}; Thursday minimum 3 nights")
+                reports.append(f"{prop['name']}: Verified in Hostaway — {rates}; {special_day} minimum 3 nights")
             except ValueError as exc:
                 reports.append(f"{prop['name']}: {exc}")
         return reports or ['No homes qualified']
 
-    async def apply_wright_special(self, property_id, *, bulk=False, discount='20', floor=None, owner='', expected_date=None):
+    async def apply_wright_special(self, property_id, *, bulk=False, discount='20', floor=None, owner='', expected_date=None, weekday=3):
         if self._lock.locked():
             raise ValueError('A pricing action is already running')
         async with self._lock:
             today = self.s.now().astimezone(TZ).date()
-            if today.weekday() != 3:
-                raise ValueError('The live Wright trial can be run on Thursday Eastern time')
+            special_day = 'Thursday' if weekday == 3 else 'Monday'
+            if today.weekday() != weekday or (not bulk and weekday != 3):
+                if not bulk or weekday == 3:
+                    raise ValueError('The live Wright trial can be run on Thursday Eastern time')
+                raise ValueError('The Monday Special can be applied on Monday Eastern time')
             matches = [
                 prop for prop in self.db.query(
                     "SELECT id,name,address,hostaway_listing_id FROM properties "
@@ -426,10 +436,11 @@ class PricingSimulator:
             listing_id = matches[0]['hostaway_listing_id']
             start = today.isoformat()
             if expected_date is not None and start != expected_date:
-                raise ValueError('The target Thursday has changed')
+                raise ValueError(f'The target {special_day} has changed')
             dates = [(today + timedelta(days=offset)).isoformat() for offset in range(3)]
             end = dates[-1]
-            key = f'pricing_wright_trial_{listing_id}_{start}'
+            key_prefix = 'pricing_wright_trial' if weekday == 3 else 'pricing_monday_special'
+            key = f'{key_prefix}_{listing_id}_{start}'
             if self.db.get_setting(key):
                 raise ValueError('A write was already attempted for these dates. Check the Hostaway calendar.')
             try:
@@ -443,7 +454,7 @@ class PricingSimulator:
             if floor is not None and not any(
                 row['date'] == start and row['current'] and money(row['current']) > floor for row in rows
             ):
-                raise ValueError('Thursday rate no longer meets the threshold')
+                raise ValueError(f'{special_day} rate no longer meets the threshold')
             if sorted(row['date'] for row in rows) != dates or any(
                 vacancy_issue(day) for day in calendar
             ) or any(not row['proposed'] for row in rows):

@@ -451,3 +451,48 @@ def test_owner_pages_scope_selection_and_save_distinct_discounts(syncer):
         assert service.thursday_schedule(owner)['owner'] == owner
     assert service.thursday_schedule('Mike')['discount'] == '12'
     assert service.thursday_schedule('Kurt')['discount'] == '20'
+
+
+def test_monday_special_writes_three_vacant_nights_and_is_independent(syncer):
+    from starlette.datastructures import FormData
+
+    syncer.db.execute(
+        "INSERT INTO properties(hostaway_listing_id,name,owner_scope) VALUES(301,'Test Home','Kurt')"
+    )
+    property_id = str(syncer.db.one('SELECT id FROM properties WHERE hostaway_listing_id=301')['id'])
+    syncer.now = lambda: FRIDAY - timedelta(days=4)
+    service = PricingSimulator(syncer)
+    writes = []
+
+    async def listing(listing_id):
+        return dict(LISTING, id=listing_id)
+
+    async def calendar(listing_id, start, end):
+        assert (start, end) == ('2030-06-10', '2030-06-12')
+        if writes:
+            return [day(item['startDate'], price=item['price'],
+                        minimumStay=item.get('minimumStay', 1)) for item in writes[0]]
+        return [day(start), day('2030-06-11'), day(end)]
+
+    async def write(listing_id, intervals):
+        assert listing_id == 301
+        writes.append(intervals)
+
+    syncer.hostaway.pricing_listing = listing
+    syncer.hostaway.pricing_calendar = calendar
+    syncer.hostaway.apply_calendar_intervals = write
+    form = FormData({
+        'special_owner': 'Kurt', 'special_property': property_id, 'special_discount': '20',
+        'special_time': '14:00', 'special_enabled': 'on',
+    })
+    preview = run(service.thursday_special(form, weekday=0))
+    assert preview['monday'] == '2030-06-10'
+    assert writes == []
+    assert service.thursday_schedule('Kurt', weekday=0) == {}
+    service.save_thursday_schedule(form, weekday=0)
+    assert service.thursday_schedule('Kurt') == {}
+    run(service.tick_thursday_schedule(weekday=0))
+    run(PricingSimulator(syncer).tick_thursday_schedule(weekday=0))
+    assert len(writes) == 1
+    assert [item.get('minimumStay') for item in writes[0]] == [3, None, None]
+    assert [item['startDate'] for item in writes[0]] == ['2030-06-10', '2030-06-11', '2030-06-12']
