@@ -1,3 +1,7 @@
+## 0.6.77
+
+- Remove the Apply once button from the Monday and Thursday Special pages.
+
 ## 0.6.76
 
 - Add the Monday Special, with an automatic refresh after PriceLabs updates.
