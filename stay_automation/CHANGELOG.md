@@ -1,3 +1,7 @@
+## 0.6.80
+
+- Add one-click access to Owner Settings and Pilot Settings for authorized Home Assistant accounts.
+
 ## 0.6.79
 
 - Rename the extension review links and move turnover rules to owner-specific pages.

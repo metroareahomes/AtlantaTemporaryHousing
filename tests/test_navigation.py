@@ -63,7 +63,8 @@ def test_navigation_separates_daily_work_from_setup_and_pricing(syncer, active, 
         ("turnover-rules?owner=Mike", "Turnover rules - Mike"),
         ("https://atlanta-temporary-housing-extension-pilot.onrender.com/extend/kurt", "Extending direct"),
         ("https://atlanta-temporary-housing-map.beamingcacao18.chatgpt.site/", "Web direct"),
-        ("https://atlanta-temporary-housing-extension-pilot.onrender.com/owner-settings", "Owner settings"),
+        ("staff-signin/owner", "Owner settings"),
+        ("staff-signin/pilot", "Pilot settings"),
         ("https://hostaway-complaint-analyzer.onrender.com/", "Hostaway Complaint Analyzer"),
     ]
     assert [link["href"] for link in nav.links if link["nested"] and link["current"] == "page"] == (

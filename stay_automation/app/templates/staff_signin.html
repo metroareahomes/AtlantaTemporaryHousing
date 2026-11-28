@@ -1,0 +1,11 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Staff sign-in</title></head>
+<body>
+<form id="staff-signin" action="{{ render_origin }}/staff-signin" method="post">
+  <input type="hidden" name="assertion" value="{{ assertion }}">
+  <button>Continue to settings</button>
+</form>
+<script nonce="{{ script_nonce }}">document.getElementById('staff-signin').submit();</script>
+</body>
+</html>

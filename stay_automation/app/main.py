@@ -162,4 +162,4 @@ def _then(*jobs: Callable[[], Awaitable[object]]) -> Callable[[], Awaitable[None
 
 
 if __name__ == "__main__":
-    uvicorn.run(build(), host="0.0.0.0", port=8099)
+    uvicorn.run(build(), host="0.0.0.0", port=8099, proxy_headers=False)

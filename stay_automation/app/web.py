@@ -36,6 +36,7 @@ from .hostaway import HostawayError
 from .locks import DEFAULT_GUEST_MESSAGE, DEFAULTS, LockManager, _utc, add_time, new_backup_code
 from .reservations import code_status, property_state, within
 from .sync import Syncer
+from . import staff_signin
 from .setup_help import SETUP_FIELDS
 from .pricing import manual_settings, PricingSimulator, DEFAULTS as PRICING_DEFAULTS, TZ as PRICING_TZ, read_config as pricing_config, validate as validate_pricing
 from .property_sheet import PropertySheet, valid_endpoint
@@ -420,6 +421,30 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, 
             "setup_sections": SETUP_SECTIONS,
             **ctx,
         }, status_code=response_status)
+
+    @app.get("/staff-signin/key", response_class=HTMLResponse)
+    async def staff_signin_key(request: Request):
+        if not staff_signin.staff_username(request):
+            raise HTTPException(403, "This page requires an authorized Home Assistant account.")
+        return HTMLResponse(
+            "<h1>Staff sign-in public key</h1><pre>" + staff_signin.public_key(db) + "</pre>",
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @app.get("/staff-signin/{destination}", response_class=HTMLResponse)
+    async def open_staff_settings(request: Request, destination: str):
+        username = staff_signin.staff_username(request)
+        if not username or destination not in staff_signin.DESTINATIONS:
+            raise HTTPException(403, "This page requires an authorized Home Assistant account.")
+        nonce = secrets.token_urlsafe(24)
+        response = page(request, "staff_signin.html", render_origin=staff_signin.RENDER_ORIGIN,
+                        assertion=staff_signin.assertion(db, username, destination), script_nonce=nonce)
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Referrer-Policy"] = "strict-origin"
+        response.headers["Content-Security-Policy"] = (
+            f"default-src 'none'; script-src 'nonce-{nonce}'; form-action {staff_signin.RENDER_ORIGIN}"
+        )
+        return response
 
     @app.get("/", response_class=HTMLResponse)
     async def status(request: Request, q: str = "", show: str = "attention", sort: str = "attention",
