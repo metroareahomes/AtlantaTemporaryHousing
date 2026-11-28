@@ -440,7 +440,7 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, 
         response = page(request, "staff_signin.html", render_origin=staff_signin.RENDER_ORIGIN,
                         assertion=staff_signin.assertion(db, username, destination), script_nonce=nonce)
         response.headers["Cache-Control"] = "no-store"
-        response.headers["Referrer-Policy"] = "strict-origin"
+        response.headers["Referrer-Policy"] = "no-referrer"
         response.headers["Content-Security-Policy"] = (
             f"default-src 'none'; script-src 'nonce-{nonce}'; form-action {staff_signin.RENDER_ORIGIN}"
         )

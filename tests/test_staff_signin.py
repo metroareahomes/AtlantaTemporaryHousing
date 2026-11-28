@@ -15,3 +15,17 @@ def test_staff_signin_rejects_untrusted_peer_and_unlisted_accounts(syncer):
     ingress.headers["x-remote-user-name"] = "other@example.com"
     assert staff_username(ingress) is None
     assert syncer.db.get_setting("staff_signin_private_key") is None
+
+
+def test_staff_signin_starts_in_ingress_and_posts_to_render_at_top_level(syncer, monkeypatch):
+    from app import staff_signin
+
+    monkeypatch.setattr(staff_signin, "staff_username", lambda request: "metroareahomes@gmail.com")
+    client = TestClient(create_app(syncer))
+    menu = client.get("/").text
+    for destination in ("owner", "pilot"):
+        assert f'href="staff-signin/{destination}">' in menu
+        response = client.get(f"/staff-signin/{destination}")
+        assert response.status_code == 200
+        assert f'action="{staff_signin.RENDER_ORIGIN}/staff-signin" method="post" target="_top"' in response.text
+        assert response.headers["referrer-policy"] == "no-referrer"
