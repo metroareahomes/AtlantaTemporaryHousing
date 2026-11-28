@@ -23,9 +23,9 @@ def test_staff_signin_starts_in_ingress_and_posts_to_render_at_top_level(syncer,
     monkeypatch.setattr(staff_signin, "staff_username", lambda request: "metroareahomes@gmail.com")
     client = TestClient(create_app(syncer))
     menu = client.get("/").text
-    for destination in ("owner", "pilot"):
-        assert f'href="staff-signin/{destination}">' in menu
-        response = client.get(f"/staff-signin/{destination}")
-        assert response.status_code == 200
-        assert f'action="{staff_signin.RENDER_ORIGIN}/staff-signin" method="post" target="_top"' in response.text
-        assert response.headers["referrer-policy"] == "no-referrer"
+    assert 'href="staff-signin/pilot"' not in menu
+    assert f'href="staff-signin/owner">' in menu
+    response = client.get(f"/staff-signin/owner")
+    assert response.status_code == 200
+    assert f'action="{staff_signin.RENDER_ORIGIN}/staff-signin" method="post" target="_top"' in response.text
+    assert response.headers["referrer-policy"] == "no-referrer"

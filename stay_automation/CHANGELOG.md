@@ -1,3 +1,7 @@
+## 0.6.85
+
+- Remove the Pilot Settings shortcut for the old booking preview.
+
 ## 0.6.84
 
 - Start staff sign-in inside Home Assistant ingress before handing off to Render, including from the mobile app.
