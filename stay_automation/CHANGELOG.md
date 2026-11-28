@@ -1,3 +1,7 @@
+## 0.6.86
+
+- Point Extending direct to the branded guest extension address.
+
 ## 0.6.85
 
 - Remove the Pilot Settings shortcut for the old booking preview.
