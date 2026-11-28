@@ -1,3 +1,7 @@
+## 0.6.83
+
+- Default extension pricing to save at 1:30 a.m. Eastern and rewrite at 2:30 a.m. Eastern. Show each owner’s configured times in the guide.
+
 ## 0.6.82
 
 - Allow extension markups on consecutive open or eligible blocked nights, starting at checkout and capped at seven nights.

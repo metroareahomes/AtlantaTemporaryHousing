@@ -1135,8 +1135,11 @@ def create_app(syncer: Syncer, locks: LockManager | None = None, lifespan=None, 
         enabled_since = (datetime.fromisoformat(enabled_at).astimezone(PRICING_TZ)
                          .strftime("%b %d, %Y at %I:%M %p").replace(" 0", " ")
                          if enabled_at else "")
+        schedule = {key: datetime.strptime(config[key], "%H:%M").strftime("%I:%M %p").lstrip("0")
+                    for key in ("save", "restore")}
         return page(request, "extension_pricing.html", owner=owner, owners=EXTENSION_OWNERS,
-                    config=config, enabled_since=enabled_since, report_rows=rows, report_totals=totals)
+                    config=config, schedule=schedule, enabled_since=enabled_since,
+                    report_rows=rows, report_totals=totals)
 
     @app.post("/extension-pricing-save")
     async def extension_pricing_save(request: Request):

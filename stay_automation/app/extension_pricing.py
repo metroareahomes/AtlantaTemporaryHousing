@@ -14,7 +14,7 @@ OWNERS = ("Mike", "Kurt")
 TZ = ZoneInfo("America/New_York")
 
 DEFAULTS = {
-    "enabled": False, "percent": "0", "save": "00:45", "restore": "04:00",
+    "enabled": False, "percent": "0", "save": "01:30", "restore": "02:30",
     "min_nights": None, "max_nights": None, "use_stay_average": False,
 }
 SETTINGS_KEY = "extension_pricing"

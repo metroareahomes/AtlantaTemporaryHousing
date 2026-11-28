@@ -21,7 +21,7 @@
 <p>Stay Automation saves the original and adjusted rates for each tracked night, so repeat requests or overnight rewrites use the saved rate and avoid compounding the adjustment.</p>
 
 <h3>What happens overnight</h3>
-<p>The default save time is 12:45 a.m. Eastern. Stay Automation saves the tracked rates before the 2:00 a.m. PriceLabs sync, pauses pricing writes during the sync window, then rewrites the saved rates on nights that are still eligible at the configured rewrite time, which defaults to 4:00 a.m. When a tracked night becomes reserved, pending, or otherwise ineligible, Stay Automation stops rewriting that night and later nights in the same extension.</p>
+<p>For {{ owner }}, saving starts at {{ schedule.save }} Eastern, before the 2:00 a.m. PriceLabs sync. Pricing writes pause from the sync until {{ schedule.restore }} Eastern, when Stay Automation starts rewriting saved rates for nights that are still eligible. When a tracked night becomes reserved, pending, or otherwise ineligible, Stay Automation stops rewriting that night and later nights in the same extension.</p>
 
 <h3>How to read the booking report</h3>
 <p>A night earns credit when the requesting guest books it while a verified markup is in effect, before the next 2:00 a.m. Eastern PriceLabs sync. Hostaway must match the original reservation or the same guest on the same booking channel.</p>
