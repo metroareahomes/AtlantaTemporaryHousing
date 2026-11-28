@@ -7,6 +7,33 @@
 {% endfor %}
 </nav>
 <section class="panel">
+<details>
+<summary><strong>How Guest Extension Pricing works</strong></summary>
+<h3>When rates change</h3>
+<p>When a guest sends a Hostaway message that matches an extension request, Stay Automation checks the reservation and the listing’s owner tag. Pricing must be enabled for that owner. If you set a minimum or maximum booked length, those limits apply to the guest’s existing reservation.</p>
+<p>The automation starts on the booked checkout date and adjusts consecutive blocked nights until it reaches a night that is open, reserved, pending, or otherwise ineligible. It changes rates only. Calendar holds, guest quotes, and checkout are handled separately.</p>
+
+<h3>How the nightly rate is calculated</h3>
+<ul>
+<li><strong>Calendar rate.</strong> Apply the adjustment to each blocked night’s Hostaway rate. A 10% markup raises a $200 night to $220. A 10% discount lowers it to $180.</li>
+<li><strong>Booked stay average.</strong> Divide the original accommodation charge by the number of booked nights, then add any markup. A $1,500 accommodation charge over 10 nights averages $150. With a 10% markup, the target is $165. A blocked night already priced at $180 stays at $180.</li>
+</ul>
+<p>Stay Automation saves the original and adjusted rates for each tracked night, so repeat requests or overnight rewrites use the saved rate and avoid compounding the adjustment.</p>
+
+<h3>What happens overnight</h3>
+<p>The default save time is 12:45 a.m. Eastern. Stay Automation saves the tracked rates before the 2:00 a.m. PriceLabs sync, pauses pricing writes during the sync window, then rewrites the saved rates on nights still blocked at the configured rewrite time, which defaults to 4:00 a.m. When a tracked night opens up or is booked, Stay Automation stops rewriting it. An open night keeps its current rate until the next PriceLabs update.</p>
+
+<h3>How to read the booking report</h3>
+<p>A night earns credit when the requesting guest books it while a verified markup is in effect, before the next 2:00 a.m. Eastern PriceLabs sync. Hostaway must match the original reservation or the same guest on the same booking channel.</p>
+<ul>
+<li><strong>Rent at saved rate</strong> is the saved nightly rate for that booked night.</li>
+<li><strong>Increase at stay average</strong> shows how far the original stay average was above the original calendar rate, before the markup, when an average was recorded.</li>
+<li><strong>Net increase after markup</strong> is the saved nightly rate minus the original calendar rate.</li>
+</ul>
+<p>For example, if the original calendar rate is $140, the stay average is $150, and the final rate is $165, the report shows $165 in rent at the saved rate, a $10 increase at the stay average, and a $25 net increase after markup. The figures use saved rates and are grouped by currency.</p>
+</details>
+</section>
+<section class="panel">
 <h2>{{ owner }}’s pricing rules</h2>
 <p>Guest Extension Pricing was added to Stay Automation on November 21, 2026 (version 0.6.41).</p>
 {% if config.enabled %}

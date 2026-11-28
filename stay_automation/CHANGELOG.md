@@ -1,3 +1,7 @@
+## 0.6.81
+
+- Explain Guest Extension Pricing triggers, rate calculations, overnight updates, and booking report figures on the pricing page.
+
 ## 0.6.80
 
 - Add one-click access to Owner Settings and Pilot Settings for authorized Home Assistant accounts.
