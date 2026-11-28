@@ -377,3 +377,40 @@ def test_extension_pricing_uses_stay_automation_rules_and_webhook(syncer):
     }}
     assert run(syncer.handle_webhook(payload)) == []
     assert syncer.db.one("SELECT reservation_id FROM extension_messages WHERE id=5") == {"reservation_id": 9}
+
+
+@pytest.mark.parametrize("barrier, expected_count", [(None, 7), ("reserved", 5), ("pending", 5)])
+def test_open_night_markups_stop_at_first_barrier_or_seven_nights(barrier, expected_count):
+    from app.db import DB
+    from app.extension_pricing import ExtensionPricing
+    checkout = date(2030, 6, 12)
+    dates = [(checkout + timedelta(days=i)).isoformat() for i in range(9)]
+    calendar = {night: {"date": night, "status": "available", "price": 200} for night in dates}
+    calendar[dates[1]]["status"] = "blocked"
+    if barrier:
+        calendar[dates[5]]["status"] = barrier
+
+    class Hostaway:
+        async def reservation(self, _):
+            return {"status": "new", "listingMapId": 100, "departureDate": dates[0]}
+
+        async def listing_details(self, _):
+            return {"listingTags": ["Mike"]}
+
+        async def pricing_calendar(self, _, first, last):
+            return [dict(day) for night, day in calendar.items() if first <= night <= last]
+
+    db = DB(":memory:")
+    manager = ExtensionPricing(SimpleNamespace(db=db, hostaway=Hostaway()))
+    config = dict(DEFAULTS, enabled=True, percent="10")
+    run(manager.start_extension(9, checkout, {"Mike": config}))
+    assert db.query("SELECT night,rate FROM extension_rates ORDER BY night") == [
+        {"night": night, "rate": "220.00"} for night in dates[:expected_count]
+    ]
+
+    calendar[dates[2]]["status"] = "pending"
+    row, = db.query("SELECT * FROM extension_rates WHERE night=?", (dates[2],))
+    assert run(manager.apply_rate(row, calendar[dates[2]], dates[0], "04:00", config)) is False
+    assert db.query("SELECT night FROM extension_rates WHERE tracking=1 ORDER BY night") == [
+        {"night": night} for night in dates[:2]
+    ]

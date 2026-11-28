@@ -1,3 +1,8 @@
+## 0.6.82
+
+- Allow extension markups on consecutive open or eligible blocked nights, starting at checkout and capped at seven nights.
+- Stop at reserved, pending, or otherwise ineligible nights.
+
 ## 0.6.81
 
 - Explain Guest Extension Pricing triggers, rate calculations, overnight updates, and booking report figures on the pricing page.

@@ -59,6 +59,7 @@ CREATE TABLE IF NOT EXISTS extension_rates (
     use_stay_average INTEGER NOT NULL DEFAULT 0,
     stay_average_rate TEXT,
     owner TEXT,
+    checkout_night TEXT,
     PRIMARY KEY (listing_id, night)
 );
 CREATE TABLE IF NOT EXISTS extension_price_windows (
@@ -268,6 +269,7 @@ CREATE TABLE IF NOT EXISTS thermostats (
 
 # Columns added after the first release; applied to existing databases on start.
 MIGRATIONS = {
+    "extension_rates": {"checkout_night": "TEXT"},
     "extension_live_holds": {"hold_label": "TEXT"},
     "staff": {
         "owner_scope": "TEXT NOT NULL DEFAULT ''",

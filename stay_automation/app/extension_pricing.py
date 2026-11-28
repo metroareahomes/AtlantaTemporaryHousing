@@ -1,4 +1,4 @@
-"""Reapply extension rates to the contiguous Hostaway block after checkout."""
+"""Reapply extension rates to eligible Hostaway nights after checkout."""
 import html
 import json
 import re
@@ -8,6 +8,7 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from zoneinfo import ZoneInfo
 
 from .extension_report import guest_key, record_booking, record_price_window, reconcile_bookings
+from .pricing import vacancy_issue
 
 OWNERS = ("Mike", "Kurt")
 TZ = ZoneInfo("America/New_York")
@@ -18,6 +19,7 @@ DEFAULTS = {
 }
 SETTINGS_KEY = "extension_pricing"
 SYNC_TIME = "02:00"
+MAX_EXTENSION_NIGHTS = 7
 
 EXTENSION = re.compile(
     r"\b(?:extend(?:ing)? (?:our|my|the|this) (?:stay|booking|reservation|trip)"
@@ -136,6 +138,15 @@ def blocked(day):
     )
 
 
+def eligible(day, markup):
+    if not (blocked(day) or (markup and vacancy_issue(day) is None)):
+        return False
+    try:
+        return money(day.get("price")) > 0
+    except (InvalidOperation, TypeError, ValueError):
+        return False
+
+
 class ExtensionPricing:
     def __init__(self, syncer):
         self.s = syncer
@@ -222,16 +233,21 @@ class ExtensionPricing:
                 Decimal(".01"), rounding=ROUND_HALF_UP,
             )
             stay_average = stay_average.quantize(Decimal(".01"), rounding=ROUND_HALF_UP)
-        while True:
-            last = first + timedelta(days=4)
+        checkout = first.isoformat()
+        final = first + timedelta(days=MAX_EXTENSION_NIGHTS - 1)
+        markup = use_stay_average or percent > 0
+        while first <= final:
+            last = min(first + timedelta(days=4), final)
             calendar = await self.s.hostaway.pricing_calendar(listing_id, first.isoformat(), last.isoformat())
-            for day in sorted(calendar, key=lambda item: item["date"]):
-                if not blocked(day):
+            days = {day["date"]: day for day in calendar}
+            for offset in range((last - first).days + 1):
+                day = days.get((first + timedelta(days=offset)).isoformat())
+                if day is None or not eligible(day, markup):
                     return
+                base = money(day["price"])
                 if self.db.query("SELECT 1 FROM extension_rates WHERE listing_id=? AND night=?",
                                  (listing_id, day["date"])):
                     continue
-                base = money(day["price"])
                 if average_target is not None:
                     if average_target <= base:
                         continue
@@ -241,20 +257,25 @@ class ExtensionPricing:
                 if rate <= 0 or rate == base:
                     continue
                 self.db.execute(
-                    "INSERT OR IGNORE INTO extension_rates(listing_id,night,rate,base_rate,reservation_id,guest_key,use_stay_average,stay_average_rate,owner) "
-                    "VALUES (?,?,?,?,?,?,?,?,?)",
+                    "INSERT OR IGNORE INTO extension_rates(listing_id,night,rate,base_rate,reservation_id,guest_key,use_stay_average,stay_average_rate,owner,checkout_night) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?)",
                     (listing_id, day["date"], str(rate), str(base), reservation_id, guest_key(reservation),
-                     use_stay_average, str(stay_average) if stay_average is not None else None, owner),
+                     use_stay_average, str(stay_average) if stay_average is not None else None, owner, checkout),
                 )
             first = last + timedelta(days=1)
+
+    def stop_tracking(self, row):
+        self.db.execute(
+            "UPDATE extension_rates SET tracking=0 WHERE listing_id=? AND reservation_id IS ? AND night>=?",
+            (row["listing_id"], row["reservation_id"], row["night"]),
+        )
 
     async def apply_rate(self, row, day, service_date, clock, config):
         listing_id, night = row["listing_id"], row["night"]
         key = (listing_id, night)
-        if not blocked(day):
-            if day.get("status") in ("available", "reserved", "pending"):
-                self.db.execute("UPDATE extension_rates SET tracking=0 WHERE listing_id=? AND night=?", key)
-            return
+        if not eligible(day, row["base_rate"] is not None and money(row["rate"]) > money(row["base_rate"])):
+            self.stop_tracking(row)
+            return False
 
         if config["save"] <= clock < SYNC_TIME and row["captured_on"] != service_date:
             self.db.execute(
@@ -317,15 +338,47 @@ class ExtensionPricing:
                     continue
                 self.db.execute("UPDATE extension_messages SET processed=1 WHERE id=?", (item["id"],))
 
-        for row in self.db.query("SELECT * FROM extension_rates WHERE tracking=1 ORDER BY listing_id,night"):
+        stopped = set()
+        checked = {}
+        rows = self.db.query(
+            "SELECT tracked.*, COALESCE(checkout_night, "
+            "(SELECT MIN(night) FROM extension_rates AS first WHERE first.listing_id=tracked.listing_id "
+            "AND first.reservation_id IS tracked.reservation_id)) AS pricing_start "
+            "FROM extension_rates AS tracked WHERE tracking=1 ORDER BY listing_id,night"
+        )
+        for row in rows:
+            group = (row["listing_id"], row["reservation_id"])
+            if group in stopped:
+                continue
             config = rules.get(row["owner"])
             if not config or not config["enabled"]:
                 continue
             night = row["night"]
             try:
+                start = date.fromisoformat(row["pricing_start"])
+                target = date.fromisoformat(night)
+                if (target - start).days >= MAX_EXTENSION_NIGHTS:
+                    self.stop_tracking(row)
+                    stopped.add(group)
+                    continue
+                first = checked.get(group, max(start, today))
+                markup = row["base_rate"] is not None and money(row["rate"]) > money(row["base_rate"])
+                while first < target:
+                    last = min(first + timedelta(days=4), target - timedelta(days=1))
+                    gap = await self.s.hostaway.pricing_calendar(row["listing_id"], first.isoformat(), last.isoformat())
+                    if any(not eligible(day, markup) for day in gap):
+                        self.stop_tracking(row)
+                        stopped.add(group)
+                        break
+                    first = last + timedelta(days=1)
+                if group in stopped:
+                    continue
                 day, = await self.s.hostaway.pricing_calendar(row["listing_id"], night, night)
-                await self.apply_rate(row, day, service_date, clock, config)
+                if await self.apply_rate(row, day, service_date, clock, config) is False:
+                    stopped.add(group)
+                checked[group] = target + timedelta(days=1)
             except Exception:
+                stopped.add(group)
                 self.db.log("pricing.extension_failed", f"Could not verify extension price for "
                             f"listing {row['listing_id']} on {night}; will retry", level="warning")
         reconcile_bookings(self.db, self.s.now())

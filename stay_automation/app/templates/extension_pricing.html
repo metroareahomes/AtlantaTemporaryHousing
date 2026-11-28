@@ -11,17 +11,17 @@
 <summary><strong>How Guest Extension Pricing works</strong></summary>
 <h3>When rates change</h3>
 <p>When a guest sends a Hostaway message that matches an extension request, Stay Automation checks the reservation and the listing’s owner tag. Pricing must be enabled for that owner. If you set a minimum or maximum booked length, those limits apply to the guest’s existing reservation.</p>
-<p>The automation starts on the booked checkout date and adjusts consecutive blocked nights until it reaches a night that is open, reserved, pending, or otherwise ineligible. It changes rates only. Calendar holds, guest quotes, and checkout are handled separately.</p>
+<p>Starting on the booked checkout date, the automation can mark up consecutive open or eligible blocked nights, up to seven nights. It stops at the first reserved, pending, or otherwise ineligible night, even when more nights are open beyond it. Calendar-rate discounts apply only to consecutive eligible blocked nights, within the same seven-night limit. It changes rates only. Calendar holds, guest quotes, and checkout are handled separately.</p>
 
 <h3>How the nightly rate is calculated</h3>
 <ul>
-<li><strong>Calendar rate.</strong> Apply the adjustment to each blocked night’s Hostaway rate. A 10% markup raises a $200 night to $220. A 10% discount lowers it to $180.</li>
-<li><strong>Booked stay average.</strong> Divide the original accommodation charge by the number of booked nights, then add any markup. A $1,500 accommodation charge over 10 nights averages $150. With a 10% markup, the target is $165. A blocked night already priced at $180 stays at $180.</li>
+<li><strong>Calendar rate.</strong> Apply the adjustment to each eligible night’s Hostaway rate. A 10% markup raises a $200 night to $220. A 10% discount lowers it to $180.</li>
+<li><strong>Booked stay average.</strong> Divide the original accommodation charge by the number of booked nights, then add any markup. A $1,500 accommodation charge over 10 nights averages $150. With a 10% markup, the target is $165. A night already priced at $180 stays at $180.</li>
 </ul>
 <p>Stay Automation saves the original and adjusted rates for each tracked night, so repeat requests or overnight rewrites use the saved rate and avoid compounding the adjustment.</p>
 
 <h3>What happens overnight</h3>
-<p>The default save time is 12:45 a.m. Eastern. Stay Automation saves the tracked rates before the 2:00 a.m. PriceLabs sync, pauses pricing writes during the sync window, then rewrites the saved rates on nights still blocked at the configured rewrite time, which defaults to 4:00 a.m. When a tracked night opens up or is booked, Stay Automation stops rewriting it. An open night keeps its current rate until the next PriceLabs update.</p>
+<p>The default save time is 12:45 a.m. Eastern. Stay Automation saves the tracked rates before the 2:00 a.m. PriceLabs sync, pauses pricing writes during the sync window, then rewrites the saved rates on nights that are still eligible at the configured rewrite time, which defaults to 4:00 a.m. When a tracked night becomes reserved, pending, or otherwise ineligible, Stay Automation stops rewriting that night and later nights in the same extension.</p>
 
 <h3>How to read the booking report</h3>
 <p>A night earns credit when the requesting guest books it while a verified markup is in effect, before the next 2:00 a.m. Eastern PriceLabs sync. Hostaway must match the original reservation or the same guest on the same booking channel.</p>
@@ -39,13 +39,13 @@
 {% if config.enabled %}
 <p>{% if enabled_since %}Enabled for {{ owner }} on {{ enabled_since }} Eastern.{% else %}Enabled for {{ owner }}. The original activation time was not recorded.{% endif %}</p>
 {% else %}<p>Currently disabled for {{ owner }}.</p>{% endif %}
-<p>Adjust consecutive blocked nights starting on the guest’s booked checkout date. Open nights keep their current price until PriceLabs updates them.</p>
+<p>Mark up eligible open or blocked nights starting on checkout, for up to seven consecutive nights.</p>
 <form method="post" action="extension-pricing-save" class="stack">
 <input type="hidden" name="owner" value="{{ owner }}">
 <label><input type="checkbox" name="extension_enabled" {% if config.enabled %}checked{% endif %}> Enable extension pricing</label>
 <label><input type="checkbox" name="extension_use_stay_average" {% if config.use_stay_average %}checked{% endif %}> Base extension prices on the booked stay’s average nightly rate</label>
 <label>Rate adjustment (%) <input type="number" step=".01" name="extension_percent" value="{{ config.percent }}"></label>
-<p>Use a positive percentage for a markup or a negative percentage for a discount on calendar rates. With the stay average selected, enter a markup or leave the percentage blank. Blocked nights already at or above the calculated rate keep their price.</p>
+<p>Use a positive percentage for a markup or a negative percentage for a discount on calendar rates. With the stay average selected, enter a markup or leave the percentage blank. With the stay average selected, nights already at or above the calculated rate keep their price.</p>
 <div class="grid">
 <label>Minimum booked nights <input type="number" min="1" name="extension_min_nights" value="{{ config.min_nights or '' }}"></label>
 <label>Maximum booked nights <input type="number" min="1" name="extension_max_nights" value="{{ config.max_nights or '' }}"></label>
